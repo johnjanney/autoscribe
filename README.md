@@ -148,12 +148,13 @@ with that in mind.
 ## WP-CLI
 
 ```bash
-wp autoscribe run <prompt-id>
+wp autoscribe run <prompt-id> [--status=<status>]
 ```
 
 Runs one prompt immediately, bypassing its schedule but not its budget cap, and
 reports the run ID, the post ID, the attachment ID, and the resulting post
-status. This is currently the only command.
+status. `--status` overrides the post status the prompt would otherwise use.
+This is currently the only command.
 
 ---
 
