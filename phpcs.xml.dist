@@ -1,0 +1,78 @@
+<?xml version="1.0"?>
+<ruleset name="AutoScribe">
+	<description>Coding standards for the AutoScribe plugin.</description>
+
+	<file>.</file>
+
+	<exclude-pattern>/vendor/*</exclude-pattern>
+	<exclude-pattern>/node_modules/*</exclude-pattern>
+
+	<arg name="extensions" value="php"/>
+	<arg name="colors"/>
+	<arg value="sp"/>
+
+	<!--
+	Parallel running is deliberately not enabled. Its progress counter reports
+	worker batches rather than files (33 files displayed as "7 / 7"), which makes
+	a clean run look like a run that silently skipped most of the codebase.
+	-->
+
+
+	<config name="minimum_wp_version" value="6.4"/>
+
+	<rule ref="WordPress"/>
+	<rule ref="WordPress-Docs"/>
+
+	<!--
+	The plugin autoloads through Composer PSR-4, which requires StudlyCaps file
+	names that mirror the class name (src/Plugin.php for AutoScribe\Plugin).
+	WordPress.Files.FileName predates Composer and demands lowercase, hyphenated
+	class-*.php names, which PSR-4 cannot resolve. The two conventions are
+	mutually exclusive, so the sniff is disabled rather than the file layout in
+	section 3.1 of the brief being abandoned. No other sniff is relaxed.
+	-->
+	<rule ref="WordPress.Files.FileName">
+		<severity>0</severity>
+	</rule>
+
+	<rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+		<properties>
+			<property name="prefixes" type="array">
+				<element value="autoscribe"/>
+				<element value="AutoScribe"/>
+			</property>
+		</properties>
+	</rule>
+
+	<rule ref="WordPress.WP.I18n">
+		<properties>
+			<property name="text_domain" type="array">
+				<element value="autoscribe"/>
+			</property>
+		</properties>
+	</rule>
+
+	<!--
+	Dropping the custom runs table on uninstall has no wpdb wrapper and cannot be
+	cached, so the direct-query sniff is unsatisfiable there. Scoped to that one
+	file; every other file is still held to it.
+	-->
+	<rule ref="WordPress.DB.DirectDatabaseQuery">
+		<exclude-pattern>/uninstall.php</exclude-pattern>
+	</rule>
+
+	<!--
+	The obfuscation sniff exists to catch base64-encoded malware. OpenAI returns
+	generated images as b64_json and Google returns them as inlineData.data, so
+	decoding base64 is the documented wire format, not a way of hiding code.
+	There is no alternative: the bytes arrive encoded. Scoped to the two image
+	adapters and their tests; base64 anywhere else in the plugin is still
+	flagged, and Key_Store uses hex rather than base64 so it stays covered.
+	-->
+	<rule ref="WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode">
+		<exclude-pattern>*/src/Providers/Image/*</exclude-pattern>
+	</rule>
+	<rule ref="WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode">
+		<exclude-pattern>*/tests/Providers/*</exclude-pattern>
+	</rule>
+</ruleset>

@@ -1,0 +1,12 @@
+/vendor/
+/node_modules/
+/build/
+*.zip
+
+debug.log
+.phpcs.xml.dist.cache
+.phpunit.result.cache
+
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
