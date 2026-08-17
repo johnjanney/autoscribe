@@ -266,6 +266,56 @@ final class Prompt {
 	}
 
 	/**
+	 * Returns the per-prompt monthly cap in cents, or 0 for no cap.
+	 *
+	 * @since 0.5.0
+	 *
+	 * @return int
+	 */
+	public function monthly_budget_cents(): int {
+		return max( 0, (int) $this->raw( 'monthly_budget_cents' ) );
+	}
+
+	/**
+	 * Returns how many past posts duplicate detection compares against.
+	 *
+	 * @since 0.5.0
+	 *
+	 * @return int
+	 */
+	public function dedupe_lookback(): int {
+		$value = (int) $this->raw( 'dedupe_lookback' );
+
+		return $value > 0 ? $value : 50;
+	}
+
+	/**
+	 * Returns the tag mode: fixed, ai, or none.
+	 *
+	 * @since 0.5.0
+	 *
+	 * @return string
+	 */
+	public function tag_mode(): string {
+		$mode = $this->string( 'tag_mode', 'none' );
+
+		return in_array( $mode, array( 'fixed', 'ai', 'none' ), true ) ? $mode : 'none';
+	}
+
+	/**
+	 * Returns the fixed tag list.
+	 *
+	 * @since 0.5.0
+	 *
+	 * @return string[]
+	 */
+	public function fixed_tags(): array {
+		$raw = $this->raw( 'fixed_tags' );
+
+		return is_array( $raw ) ? array_map( 'strval', $raw ) : array();
+	}
+
+	/**
 	 * Returns the configured schedule type.
 	 *
 	 * @since 0.4.0

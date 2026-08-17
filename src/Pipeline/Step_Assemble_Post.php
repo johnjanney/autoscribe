@@ -8,7 +8,9 @@
 namespace AutoScribe\Pipeline;
 
 use AutoScribe\Content\Article;
+use AutoScribe\Content\Taxonomy_Applier;
 use AutoScribe\Prompts\Prompt;
+use AutoScribe\SEO\SEO_Adapter_Factory;
 use AutoScribe\Security\Content_Sanitizer;
 use WP_Error;
 
@@ -52,14 +54,34 @@ final class Step_Assemble_Post {
 	private Content_Sanitizer $sanitizer;
 
 	/**
+	 * SEO adapter detection.
+	 *
+	 * @since 0.5.0
+	 * @var SEO_Adapter_Factory
+	 */
+	private SEO_Adapter_Factory $seo;
+
+	/**
+	 * Taxonomy assignment.
+	 *
+	 * @since 0.5.0
+	 * @var Taxonomy_Applier
+	 */
+	private Taxonomy_Applier $taxonomy;
+
+	/**
 	 * Builds the step.
 	 *
 	 * @since 0.3.0
 	 *
-	 * @param Content_Sanitizer $sanitizer Output sanitiser.
+	 * @param Content_Sanitizer   $sanitizer Output sanitiser.
+	 * @param SEO_Adapter_Factory $seo       SEO adapter detection.
+	 * @param Taxonomy_Applier    $taxonomy  Taxonomy assignment.
 	 */
-	public function __construct( Content_Sanitizer $sanitizer ) {
+	public function __construct( Content_Sanitizer $sanitizer, SEO_Adapter_Factory $seo, Taxonomy_Applier $taxonomy ) {
 		$this->sanitizer = $sanitizer;
+		$this->seo       = $seo;
+		$this->taxonomy  = $taxonomy;
 	}
 
 	/**
@@ -127,6 +149,22 @@ final class Step_Assemble_Post {
 			self::TOPIC_KEY_META,
 			$this->sanitizer->sanitize_topic_key( $article->topic_key() )
 		);
+
+		/*
+		 * SEO metadata is written while the post is still a draft, before the
+		 * pipeline transitions it to its final status. That ordering is what
+		 * makes the Yoast adapter work: Yoast rebuilds its indexable on save,
+		 * and the indexable is what it reads when rendering, so the metadata has
+		 * to be in place before that save rather than after it.
+		 */
+		$this->seo->detect()->apply(
+			$post_id,
+			$this->sanitizer->sanitize_seo_title( $article->seo_title() ),
+			$this->sanitizer->sanitize_meta_description( $article->meta_description() ),
+			sanitize_text_field( $article->focus_keyword() )
+		);
+
+		$this->taxonomy->apply( $post_id, $prompt, $article->suggested_tags() );
 
 		$run->record_post( $post_id );
 		$run->record_article(

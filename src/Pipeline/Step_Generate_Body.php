@@ -63,11 +63,12 @@ final class Step_Generate_Body {
 	 *
 	 * @since 0.3.0
 	 *
-	 * @param Prompt $prompt Prompt being run.
-	 * @param Run    $run    Run recording progress.
+	 * @param Prompt                                       $prompt Prompt being run.
+	 * @param Run                                          $run    Run recording progress.
+	 * @param array{title: string, topic_key: string}|null $topic  Topic agreed by the proposal step.
 	 * @return Article|WP_Error
 	 */
-	public function run( Prompt $prompt, Run $run ): Article|WP_Error {
+	public function run( Prompt $prompt, Run $run, ?array $topic = null ): Article|WP_Error {
 		$provider = $this->registry->text_provider( $prompt->text_provider() );
 
 		if ( null === $provider ) {
@@ -107,7 +108,7 @@ final class Step_Generate_Body {
 
 		$request = new Generation_Request(
 			$this->system_prompt( $prompt, null === $schema ),
-			$prompt->user_prompt(),
+			$this->user_prompt( $prompt, $topic ),
 			$this->max_output_tokens( $prompt ),
 			$schema,
 			$grounding
@@ -173,6 +174,32 @@ final class Step_Generate_Body {
 				__( 'Return one JSON object and nothing else. No prose, no Markdown fences. It must satisfy this JSON Schema: %s', 'autoscribe' ),
 				(string) wp_json_encode( Article_Validator::schema() )
 			)
+		);
+	}
+
+	/**
+	 * Builds the user prompt, pinning the topic the proposal step agreed.
+	 *
+	 * Without this the body call could wander to a different subject than the
+	 * one duplicate detection just cleared, which would defeat the whole point
+	 * of proposing the topic separately.
+	 *
+	 * @since 0.5.0
+	 *
+	 * @param Prompt                                       $prompt Prompt being run.
+	 * @param array{title: string, topic_key: string}|null $topic  Agreed topic, if any.
+	 * @return string
+	 */
+	private function user_prompt( Prompt $prompt, ?array $topic ): string {
+		if ( null === $topic ) {
+			return $prompt->user_prompt();
+		}
+
+		return $prompt->user_prompt() . "\n\n" . sprintf(
+			/* translators: 1: agreed article title, 2: agreed topic key. */
+			__( 'Write the article for this agreed topic. Use exactly this title and topic_key in your response. title: %1$s. topic_key: %2$s', 'autoscribe' ),
+			$topic['title'],
+			$topic['topic_key']
 		);
 	}
 
