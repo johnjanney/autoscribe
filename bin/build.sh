@@ -31,7 +31,11 @@ fi
 
 echo "Building ${SLUG} ${VERSION}"
 
-rm -rf "$BUILD_DIR"
+# Only the staging copy is cleared. Previously built zips stay where they are:
+# build/ is the local archive of released artefacts, and wiping it on every
+# build would mean the only copy of an older release was the one attached to its
+# GitHub release, with nothing on disk to compare against.
+rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR"
 
 # Copy the plugin, honouring .distignore.
@@ -63,6 +67,22 @@ rm -f "$STAGE_DIR/composer.json" "$STAGE_DIR/composer.lock"
 
 ZIP_PATH="$BUILD_DIR/${SLUG}-${VERSION}.zip"
 
+if [ -f "$ZIP_PATH" ]; then
+	echo "Note: replacing the existing build of ${VERSION}." >&2
+	echo "      Bump the version in autoscribe.php before building a release." >&2
+
+	rm -f "$ZIP_PATH"
+fi
+
+# Remove the staging tree from the archive path first, so zip never walks it.
 ( cd "$BUILD_DIR" && zip -rq "$(basename "$ZIP_PATH")" "$SLUG" )
 
+rm -rf "$STAGE_DIR"
+
 echo "Built: $ZIP_PATH"
+echo
+echo "Builds on disk:"
+
+ls -1 "$BUILD_DIR"/*.zip 2>/dev/null | while IFS= read -r built; do
+	printf '  %s (%s bytes)\n' "$(basename "$built")" "$(stat -c%s "$built" 2>/dev/null || stat -f%z "$built")"
+done

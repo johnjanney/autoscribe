@@ -24,6 +24,7 @@ phpcs.xml.dist
 phpunit.xml.dist
 CLAUDE.md
 CONTRIBUTING.md
+DECISIONS.md
 
 # WSL writes these alongside files copied from Windows.
 *:Zone.Identifier

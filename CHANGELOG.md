@@ -5,6 +5,86 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+---
+
+## Version management
+
+### What the numbers mean
+
+`MAJOR.MINOR.PATCH`, and for a WordPress plugin the public API is larger than
+the PHP classes. Anything a site owner or another plugin can depend on counts.
+
+| Change | Bump |
+|---|---|
+| Removing or renaming a meta key, option, hook, filter, or capability | **MAJOR** |
+| A database migration that cannot be rolled back | **MAJOR** |
+| Raising the minimum PHP or WordPress version | **MAJOR** |
+| Changing a default in a way that alters existing sites' behaviour | **MAJOR** |
+| New feature, new setting, new provider adapter | **MINOR** |
+| New hook or filter, additive only | **MINOR** |
+| A default that only affects newly created prompts | **MINOR** |
+| Bug fix with no interface change | **PATCH** |
+| Documentation, tests, CI, tooling | **PATCH** |
+
+Two judgement calls worth stating, because they are easy to get wrong:
+
+- **Adding a prompt field is MINOR, not PATCH.** It changes what the editor
+  renders and what is stored, even though nothing breaks.
+- **Changing a sanitiser so it strips something it previously allowed is
+  MAJOR-ish.** It is a bug fix in intent, but existing content behaves
+  differently afterwards. Ship it as MINOR at minimum, and say so loudly in the
+  entry.
+
+### Where the version lives
+
+The plugin header in `autoscribe.php` is the single source of truth. The
+`AutoScribe\VERSION` constant mirrors it because the User-Agent needs it at
+runtime and parsing the plugin file on every request would be a real cost for no
+benefit.
+
+The two cannot drift: `tests/VersionTest.php` asserts they match, so a release
+with a bumped header and a stale constant fails the suite before it ships.
+
+### Release checklist
+
+1. `Unreleased` entries are complete and grouped under Keep a Changelog headings
+   (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`).
+2. Bump the version in **both** places in `autoscribe.php` — the header comment
+   and the `VERSION` constant.
+3. Move `Unreleased` content into a new dated section. Leave `Unreleased` in
+   place and empty.
+4. Update the version and any status claims in `README.md`.
+5. Regenerate translations:
+   ```bash
+   npx wp-env run cli --env-cwd=wp-content/plugins/autoscribe \
+     wp i18n make-pot . languages/autoscribe.pot --slug=autoscribe \
+     --domain=autoscribe --exclude=vendor,tests,dev,build,node_modules,bin
+   ```
+6. `./vendor/bin/phpcs` and the full PHPUnit suite pass.
+7. `bin/build.sh` produces `build/autoscribe-{version}.zip`. Earlier builds are
+   left in place on purpose — `build/` is the local archive of what was shipped.
+8. Commit, push, and **wait for CI to pass on all three PHP versions**. Do not
+   tag a commit CI has not gone green on.
+9. Tag and release:
+   ```bash
+   git tag -a v{version} -m "AutoScribe {version}"
+   git push origin v{version}
+   gh release create v{version} build/autoscribe-{version}.zip \
+     --verify-tag --title "AutoScribe {version}" --notes-from-tag
+   ```
+   `--title` is not optional: `--notes-from-tag` fills the body but leaves the
+   release name empty.
+
+### Build artefacts
+
+`build/` is gitignored. Binaries do not belong in version control, and the
+durable home for a released zip is its GitHub release. The local copies exist so
+you can diff what you actually shipped against what you are about to ship, so
+`bin/build.sh` no longer clears the directory — it replaces only the zip for the
+version being built, and lists what is on disk when it finishes.
+
+---
+
 ## [Unreleased]
 
 ## [1.0.0] - 2026-08-17
