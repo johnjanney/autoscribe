@@ -305,7 +305,7 @@ final class Run {
 				'SELECT * FROM %i
 				WHERE ( %d = 0 OR prompt_id = %d )
 					AND ( %s = \'\' OR status = %s )
-					AND ( %s = \'\' OR ( started_at >= %s AND started_at < %s ) )
+					AND started_at >= %s AND started_at < %s
 				ORDER BY id DESC
 				LIMIT %d OFFSET %d',
 				Activation::table_name(),
@@ -313,7 +313,6 @@ final class Run {
 				$filters['prompt_id'],
 				$filters['status'],
 				$filters['status'],
-				$filters['month_on'],
 				$filters['start'],
 				$filters['end'],
 				$per_page,
@@ -343,13 +342,12 @@ final class Run {
 				'SELECT COUNT(*) FROM %i
 				WHERE ( %d = 0 OR prompt_id = %d )
 					AND ( %s = \'\' OR status = %s )
-					AND ( %s = \'\' OR ( started_at >= %s AND started_at < %s ) )',
+					AND started_at >= %s AND started_at < %s',
 				Activation::table_name(),
 				$filters['prompt_id'],
 				$filters['prompt_id'],
 				$filters['status'],
 				$filters['status'],
-				$filters['month_on'],
 				$filters['start'],
 				$filters['end']
 			)
@@ -392,13 +390,18 @@ final class Run {
 	/**
 	 * Normalises the filter arguments into bindable values.
 	 *
-	 * A filter that is switched off gets the sentinel its clause tests for, so
-	 * the same statement serves every combination of filters.
+	 * A filter that is switched off gets a sentinel its clause always matches,
+	 * so the same statement serves every combination of filters.
+	 *
+	 * The date bounds widen to the full range a DATETIME can hold rather than
+	 * collapsing to an empty string. An empty string is not a datetime, and
+	 * MySQL in strict mode rejects the comparison outright and returns nothing —
+	 * which MariaDB tolerates, so the difference only showed up in CI.
 	 *
 	 * @since 0.7.0
 	 *
 	 * @param array<string, mixed> $args Filter arguments.
-	 * @return array{prompt_id: int, status: string, month_on: string, start: string, end: string}
+	 * @return array{prompt_id: int, status: string, start: string, end: string}
 	 */
 	private static function filter_values( array $args ): array {
 		$bounds = empty( $args['month'] ) ? null : self::month_bounds_utc( (string) $args['month'] );
@@ -406,9 +409,8 @@ final class Run {
 		return array(
 			'prompt_id' => (int) ( $args['prompt_id'] ?? 0 ),
 			'status'    => (string) ( $args['status'] ?? '' ),
-			'month_on'  => null === $bounds ? '' : 'on',
-			'start'     => null === $bounds ? '' : $bounds['start'],
-			'end'       => null === $bounds ? '' : $bounds['end'],
+			'start'     => null === $bounds ? '1000-01-01 00:00:00' : $bounds['start'],
+			'end'       => null === $bounds ? '9999-12-31 23:59:59' : $bounds['end'],
 		);
 	}
 
