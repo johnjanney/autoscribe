@@ -10,6 +10,7 @@ namespace AutoScribe\Providers\Text;
 use AutoScribe\Providers\Http;
 use AutoScribe\Providers\Request\Generation_Request;
 use AutoScribe\Providers\Response\Generation_Result;
+use AutoScribe\Providers\Response\Source_Extractor;
 use AutoScribe\Providers\Response\Usage;
 use AutoScribe\Providers\Text_Provider_Interface;
 use WP_Error;
@@ -261,7 +262,8 @@ final class Anthropic implements Text_Provider_Interface {
 				(int) ( $decoded['usage']['input_tokens'] ?? 0 ),
 				(int) ( $decoded['usage']['output_tokens'] ?? 0 )
 			),
-			isset( $decoded['model'] ) ? (string) $decoded['model'] : $model
+			isset( $decoded['model'] ) ? (string) $decoded['model'] : $model,
+			Source_Extractor::from( $decoded )
 		);
 	}
 }

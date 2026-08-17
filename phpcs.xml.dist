@@ -73,6 +73,22 @@
 		current time, so there is no API-level way to create them.
 		-->
 		<exclude-pattern>*/tests/Pipeline/Run_QueryTest.php</exclude-pattern>
+		<!--
+		The uninstall test asks the database directly whether the runs table is
+		still there. That is the assertion, and there is no wrapper for it.
+		-->
+		<exclude-pattern>*/tests/UninstallTest.php</exclude-pattern>
+	</rule>
+
+	<!--
+	WP_UNINSTALL_PLUGIN belongs to WordPress, not to this plugin, and uninstall.php
+	refuses to run without it. The test that executes uninstall.php therefore has
+	to define it, and cannot give it the plugin prefix the sniff wants, because
+	then the file under test would not recognise it. Scoped to that one file, so
+	every other global the plugin defines is still checked.
+	-->
+	<rule ref="WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound">
+		<exclude-pattern>*/tests/UninstallTest.php</exclude-pattern>
 	</rule>
 
 	<!--

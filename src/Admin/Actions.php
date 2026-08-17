@@ -8,8 +8,10 @@
 namespace AutoScribe\Admin;
 
 use AutoScribe\Activation;
+use AutoScribe\Content\Article;
 use AutoScribe\Content\Article_Validator;
 use AutoScribe\Content\Topic_Deduplicator;
+use AutoScribe\Cost\Pricing_Table;
 use AutoScribe\Pipeline\Run;
 use AutoScribe\Pipeline\Step_Budget_Check;
 use AutoScribe\Pipeline\Step_Generate_Body;
@@ -18,6 +20,7 @@ use AutoScribe\Prompts\Prompt;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Scheduling\Scheduler;
 use AutoScribe\Security\Key_Store;
+use WP_Error;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -166,37 +169,11 @@ final class Actions {
 	 */
 	public function handle_preview(): void {
 		$prompt_id = $this->authorize( self::ACTION_PREVIEW );
-		$prompt    = Prompt::load( $prompt_id );
-
-		if ( null === $prompt ) {
-			$this->redirect_back( $prompt_id, 'error', __( 'That prompt no longer exists.', 'autoscribe' ) );
-		}
-
-		$run = Run::start( $prompt_id );
-
-		$allowed = ( new Step_Budget_Check() )->run( $prompt, $run );
-
-		if ( is_wp_error( $allowed ) ) {
-			$this->redirect_back( $prompt_id, 'error', $allowed->get_error_message() );
-		}
-
-		$topic = ( new Step_Propose_Topic( $this->providers, new Topic_Deduplicator() ) )->run( $prompt, $run );
-
-		if ( is_wp_error( $topic ) ) {
-			$run->fail( $topic->get_error_message() );
-
-			$this->redirect_back( $prompt_id, 'error', $topic->get_error_message() );
-		}
-
-		$article = ( new Step_Generate_Body( $this->providers, new Article_Validator() ) )->run( $prompt, $run, $topic );
+		$article   = $this->preview( $prompt_id );
 
 		if ( is_wp_error( $article ) ) {
-			$run->fail( $article->get_error_message() );
-
 			$this->redirect_back( $prompt_id, 'error', $article->get_error_message() );
 		}
-
-		$run->succeed();
 
 		set_transient(
 			self::PREVIEW_TRANSIENT . get_current_user_id(),
@@ -209,6 +186,63 @@ final class Actions {
 		);
 
 		$this->redirect_back( $prompt_id, 'preview', __( 'Preview generated. It is shown below and was charged against the budget.', 'autoscribe' ) );
+	}
+
+	/**
+	 * Generates an article without assembling a post.
+	 *
+	 * Runs the pipeline as far as the body call and stops. Section 9.2 says a
+	 * preview is charged against the budget and logged, so it opens a real run
+	 * row and passes the budget check first; what it does not do is call
+	 * Step_Assemble_Post, which is the only step that creates a post.
+	 *
+	 * Separated from the request handler so it can be tested. The handler
+	 * redirects and exits, which cannot be asserted against.
+	 *
+	 * @since 0.8.0
+	 *
+	 * @param int $prompt_id Prompt to preview.
+	 * @return Article|WP_Error
+	 */
+	public function preview( int $prompt_id ): Article|WP_Error {
+		$prompt = Prompt::load( $prompt_id );
+
+		if ( null === $prompt ) {
+			return new WP_Error(
+				'autoscribe_unknown_prompt',
+				__( 'That prompt no longer exists.', 'autoscribe' )
+			);
+		}
+
+		$run = Run::start( $prompt_id );
+
+		$allowed = ( new Step_Budget_Check() )->run( $prompt, $run );
+
+		if ( is_wp_error( $allowed ) ) {
+			return $allowed;
+		}
+
+		$topic = ( new Step_Propose_Topic( $this->providers, new Topic_Deduplicator() ) )->run( $prompt, $run );
+
+		if ( is_wp_error( $topic ) ) {
+			$run->fail( $topic->get_error_message() );
+
+			return $topic;
+		}
+
+		$article = ( new Step_Generate_Body( $this->providers, new Article_Validator() ) )->run( $prompt, $run, $topic );
+
+		if ( is_wp_error( $article ) ) {
+			$run->fail( $article->get_error_message() );
+
+			return $article;
+		}
+
+		$run->record_step( 'preview' );
+		$run->settle_cost( new Pricing_Table(), $prompt->grounding_enabled() ? 1 : 0 );
+		$run->succeed();
+
+		return $article;
 	}
 
 	/**

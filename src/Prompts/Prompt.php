@@ -266,6 +266,20 @@ final class Prompt {
 	}
 
 	/**
+	 * Whether a Sources list is appended to grounded articles.
+	 *
+	 * Section 7.1 makes this optional, so it is a per-prompt choice rather than
+	 * something the pipeline decides.
+	 *
+	 * @since 0.8.0
+	 *
+	 * @return bool
+	 */
+	public function append_sources(): bool {
+		return (bool) $this->raw( 'append_sources' );
+	}
+
+	/**
 	 * Returns the per-prompt monthly cap in cents, or 0 for no cap.
 	 *
 	 * @since 0.5.0

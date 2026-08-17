@@ -131,6 +131,17 @@ rotation. Keys held in constants are unaffected.
 
 ---
 
+## Uninstalling
+
+Deleting the plugin removes its table, its options, its capabilities, and every
+prompt. It does **not** remove the posts and images it generated — those are
+your content, and deleting them is a decision only you should make.
+
+Two meta keys are deliberately left on that content so you can act on it later:
+`_autoscribe_generated` on every generated attachment, and `_autoscribe_run_id`
+on every generated post. Without them you would be left with content you could
+no longer distinguish from anything else on the site.
+
 ## Cost control
 
 Every prompt carries a monthly spend cap. Before any provider call, the budget
@@ -211,7 +222,7 @@ matches it.
 
 ## Status
 
-Version 0.7.0. The generation pipeline, scheduling, deduplication, budget
+Version 0.8.0. The generation pipeline, scheduling, deduplication, budget
 enforcement, SEO integration, WP-CLI interface, and admin interface are built
 and tested.
 

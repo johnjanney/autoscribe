@@ -2,14 +2,14 @@
 # This file is distributed under the GPL-2.0-or-later.
 msgid ""
 msgstr ""
-"Project-Id-Version: AutoScribe 0.7.0\n"
+"Project-Id-Version: AutoScribe 0.8.0\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/autoscribe\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-17T05:49:38+00:00\n"
+"POT-Creation-Date: 2026-08-17T10:55:56+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: autoscribe\n"
@@ -46,35 +46,35 @@ msgstr ""
 msgid "AutoScribe needs PHP %1$s or newer, WordPress %2$s or newer, and its Composer dependencies installed. The plugin has not been loaded."
 msgstr ""
 
-#: src/Admin/Actions.php:156
+#: src/Admin/Actions.php:159
 msgid "Run queued. The run log will show the result once the queue processes it."
 msgstr ""
 
-#: src/Admin/Actions.php:172
-msgid "That prompt no longer exists."
-msgstr ""
-
-#: src/Admin/Actions.php:211
+#: src/Admin/Actions.php:188
 msgid "Preview generated. It is shown below and was charged against the budget."
 msgstr ""
 
-#: src/Admin/Actions.php:234
+#: src/Admin/Actions.php:213
+msgid "That prompt no longer exists."
+msgstr ""
+
+#: src/Admin/Actions.php:268
 msgid "Retry queued as a new run."
 msgstr ""
 
-#: src/Admin/Actions.php:250
+#: src/Admin/Actions.php:284
 msgid "Unknown provider."
 msgstr ""
 
-#: src/Admin/Actions.php:254
+#: src/Admin/Actions.php:288
 msgid "Set a default model for this provider first — the connection test asks the provider about a specific model."
 msgstr ""
 
-#: src/Admin/Actions.php:269
+#: src/Admin/Actions.php:303
 msgid "Connection succeeded."
 msgstr ""
 
-#: src/Admin/Actions.php:289
+#: src/Admin/Actions.php:323
 msgid "You are not allowed to run AutoScribe prompts."
 msgstr ""
 
@@ -169,7 +169,7 @@ msgid "Title"
 msgstr ""
 
 #: src/Admin/Runs_List_Table.php:79
-#: src/Prompts/Prompt_Fields.php:716
+#: src/Prompts/Prompt_Fields.php:723
 msgid "Post"
 msgstr ""
 
@@ -464,11 +464,15 @@ msgstr ""
 msgid "Estimated AutoScribe spend for this month has passed 80 percent of the configured global cap. Runs will stop once the cap is reached. These figures are estimates; your provider billing is the authority."
 msgstr ""
 
-#: src/Pipeline/Step_Assemble_Post.php:111
+#: src/Pipeline/Step_Assemble_Post.php:125
+msgid "Sources"
+msgstr ""
+
+#: src/Pipeline/Step_Assemble_Post.php:154
 msgid "Nothing survived sanitisation of the generated body."
 msgstr ""
 
-#: src/Pipeline/Step_Assemble_Post.php:118
+#: src/Pipeline/Step_Assemble_Post.php:161
 msgid "A dangerous URI scheme survived sanitisation; the article was discarded."
 msgstr ""
 
@@ -485,19 +489,19 @@ msgid "No model ID is configured for this prompt."
 msgstr ""
 
 #. translators: %s: JSON schema describing the required response.
-#: src/Pipeline/Step_Generate_Body.php:174
+#: src/Pipeline/Step_Generate_Body.php:181
 #, php-format
 msgid "Return one JSON object and nothing else. No prose, no Markdown fences. It must satisfy this JSON Schema: %s"
 msgstr ""
 
 #. translators: 1: agreed article title, 2: agreed topic key.
-#: src/Pipeline/Step_Generate_Body.php:200
+#: src/Pipeline/Step_Generate_Body.php:207
 #, php-format
 msgid "Write the article for this agreed topic. Use exactly this title and topic_key in your response. title: %1$s. topic_key: %2$s"
 msgstr ""
 
 #. translators: 1: original instruction, 2: previous response, 3: validation error.
-#: src/Pipeline/Step_Generate_Body.php:219
+#: src/Pipeline/Step_Generate_Body.php:226
 #, php-format
 msgid ""
 "Original request:\n"
@@ -607,229 +611,237 @@ msgstr ""
 msgid "Grounded content is untrusted third-party text entering the model context. Human review is strongly recommended when this is on."
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:152
-msgid "Enabled"
+#: src/Prompts/Prompt_Fields.php:140
+msgid "Append a Sources list"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:155
-msgid "A disabled prompt is removed from the queue entirely."
+#: src/Prompts/Prompt_Fields.php:143
+msgid "Adds the URLs a grounded call reported using to the end of the article. They are recorded on the run either way."
 msgstr ""
 
 #: src/Prompts/Prompt_Fields.php:159
-msgid "Repeats"
+msgid "Enabled"
+msgstr ""
+
+#: src/Prompts/Prompt_Fields.php:162
+msgid "A disabled prompt is removed from the queue entirely."
 msgstr ""
 
 #: src/Prompts/Prompt_Fields.php:166
+msgid "Repeats"
+msgstr ""
+
+#: src/Prompts/Prompt_Fields.php:173
 msgid "Time of day"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:179
+#: src/Prompts/Prompt_Fields.php:186
 msgid "Weekday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:188
+#: src/Prompts/Prompt_Fields.php:195
 msgid "Day of month"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:195
+#: src/Prompts/Prompt_Fields.php:202
 msgid "A day past the end of a short month rolls back to that month's last day."
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:199
+#: src/Prompts/Prompt_Fields.php:206
 msgid "Which week"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:208
-#: src/Prompts/Prompt_Fields.php:620
+#: src/Prompts/Prompt_Fields.php:215
+#: src/Prompts/Prompt_Fields.php:627
 msgid "Every N hours"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:218
-#: src/Prompts/Prompt_Fields.php:621
+#: src/Prompts/Prompt_Fields.php:225
+#: src/Prompts/Prompt_Fields.php:628
 msgid "Cron expression"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:223
+#: src/Prompts/Prompt_Fields.php:230
 msgid "Five fields, evaluated in the site timezone."
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:239
+#: src/Prompts/Prompt_Fields.php:246
 msgid "Featured image"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:246
+#: src/Prompts/Prompt_Fields.php:253
 msgid "Image provider"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:250
+#: src/Prompts/Prompt_Fields.php:257
 msgid "Anthropic and DeepSeek generate no images, so the image provider is chosen separately from the text provider."
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:254
+#: src/Prompts/Prompt_Fields.php:261
 msgid "Image model"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:261
+#: src/Prompts/Prompt_Fields.php:268
 msgid "House style suffix"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:264
+#: src/Prompts/Prompt_Fields.php:271
 msgid "Appended to every image prompt, so every article shares a look without editing each prompt."
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:268
+#: src/Prompts/Prompt_Fields.php:275
 msgid "Fallback image ID"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:272
+#: src/Prompts/Prompt_Fields.php:279
 msgid "Attachment ID used when the mode is \"fallback\" and generation fails."
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:288
+#: src/Prompts/Prompt_Fields.php:295
 msgid "On completion"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:295
+#: src/Prompts/Prompt_Fields.php:302
 msgid "Create as"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:302
+#: src/Prompts/Prompt_Fields.php:309
 msgid "Categories"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:308
+#: src/Prompts/Prompt_Fields.php:315
 msgid "Tags"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:315
+#: src/Prompts/Prompt_Fields.php:322
 msgid "Fixed tags"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:318
+#: src/Prompts/Prompt_Fields.php:325
 msgid "Comma separated. Used when the tag mode is \"fixed\"."
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:322
+#: src/Prompts/Prompt_Fields.php:329
 msgid "Author"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:341
+#: src/Prompts/Prompt_Fields.php:348
 msgid "Monthly cap (cents)"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:345
+#: src/Prompts/Prompt_Fields.php:352
 msgid "Zero means no per-prompt cap. The global cap still applies and always wins."
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:349
+#: src/Prompts/Prompt_Fields.php:356
 msgid "Duplicate look-back"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:354
+#: src/Prompts/Prompt_Fields.php:361
 msgid "How many recent posts a proposed topic is compared against."
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:616
+#: src/Prompts/Prompt_Fields.php:623
 msgid "Every day"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:617
+#: src/Prompts/Prompt_Fields.php:624
 msgid "Every week"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:618
+#: src/Prompts/Prompt_Fields.php:625
 msgid "Monthly, on a date"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:619
+#: src/Prompts/Prompt_Fields.php:626
 msgid "Monthly, on a weekday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:634
+#: src/Prompts/Prompt_Fields.php:641
 msgid "Monday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:635
+#: src/Prompts/Prompt_Fields.php:642
 msgid "Tuesday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:636
+#: src/Prompts/Prompt_Fields.php:643
 msgid "Wednesday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:637
+#: src/Prompts/Prompt_Fields.php:644
 msgid "Thursday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:638
+#: src/Prompts/Prompt_Fields.php:645
 msgid "Friday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:639
+#: src/Prompts/Prompt_Fields.php:646
 msgid "Saturday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:640
+#: src/Prompts/Prompt_Fields.php:647
 msgid "Sunday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:661
+#: src/Prompts/Prompt_Fields.php:668
 msgid "First"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:662
+#: src/Prompts/Prompt_Fields.php:669
 msgid "Second"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:663
+#: src/Prompts/Prompt_Fields.php:670
 msgid "Third"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:664
+#: src/Prompts/Prompt_Fields.php:671
 msgid "Fourth"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:665
+#: src/Prompts/Prompt_Fields.php:672
 msgid "Last"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:686
+#: src/Prompts/Prompt_Fields.php:693
 msgid "Required — never publish without it"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:687
+#: src/Prompts/Prompt_Fields.php:694
 msgid "Fallback — use the fallback image"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:688
+#: src/Prompts/Prompt_Fields.php:695
 msgid "Optional — publish without one"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:689
+#: src/Prompts/Prompt_Fields.php:696
 msgid "None — skip image generation"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:702
+#: src/Prompts/Prompt_Fields.php:709
 msgid "Hold as a draft for review"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:703
+#: src/Prompts/Prompt_Fields.php:710
 msgid "Publish immediately"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:717
+#: src/Prompts/Prompt_Fields.php:724
 msgid "Page"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:730
+#: src/Prompts/Prompt_Fields.php:737
 msgid "No tags"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:731
+#: src/Prompts/Prompt_Fields.php:738
 msgid "Fixed list"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:732
+#: src/Prompts/Prompt_Fields.php:739
 msgid "Suggested by the model"
 msgstr ""
 
@@ -978,15 +990,15 @@ msgstr ""
 msgid "OpenAI returned no image."
 msgstr ""
 
-#: src/Providers/Text/Anthropic.php:81
+#: src/Providers/Text/Anthropic.php:82
 msgid "Anthropic (Claude)"
 msgstr ""
 
-#: src/Providers/Text/Anthropic.php:237
+#: src/Providers/Text/Anthropic.php:238
 msgid "Anthropic declined to answer this prompt."
 msgstr ""
 
-#: src/Providers/Text/Anthropic.php:254
+#: src/Providers/Text/Anthropic.php:255
 msgid "Anthropic returned no text content."
 msgstr ""
 
@@ -1004,19 +1016,19 @@ msgstr ""
 msgid "DeepSeek returned no text content."
 msgstr ""
 
-#: src/Providers/Text/Google.php:67
+#: src/Providers/Text/Google.php:68
 msgid "Google (Gemini)"
 msgstr ""
 
-#: src/Providers/Text/Google.php:235
+#: src/Providers/Text/Google.php:236
 msgid "Google returned no text content."
 msgstr ""
 
-#: src/Providers/Text/OpenAI.php:67
+#: src/Providers/Text/OpenAI.php:68
 msgid "OpenAI"
 msgstr ""
 
-#: src/Providers/Text/OpenAI.php:229
+#: src/Providers/Text/OpenAI.php:230
 msgid "OpenAI returned no text content."
 msgstr ""
 

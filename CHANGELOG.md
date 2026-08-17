@@ -9,11 +9,47 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Missing before 1.0
 
-- Automated coverage for the Run now and Preview controls.
-- Automated coverage for grounding and taxonomy application.
-- Runtime coverage for `uninstall.php`, which is currently only syntax-checked.
-- The section 11 integration test driving real schedules across a month boundary
-  and a daylight saving transition.
+- Automated coverage for the Settings screen's save path and the Test connection
+  control.
+- No end-to-end test drives the Action Scheduler queue itself; the queued run
+  handler is tested by calling it directly.
+
+## [0.8.0] - 2026-08-17
+
+Closes the coverage gaps left by phase 7, and two defects found while writing
+the tests for them.
+
+### Added
+
+- Grounding source URLs are now extracted from Anthropic, OpenAI, and Google
+  responses and recorded on the run row, as section 7.1 requires. They were
+  captured by the response object and then discarded: no adapter ever passed
+  them, so the feature was nominal.
+- Optional Sources list appended to grounded articles, controlled by a new
+  per-prompt setting.
+- Tests for the queued run path, retry backoff and the three-attempt cap,
+  Preview, taxonomy application, grounding, and `uninstall.php`.
+- Section 11's schedule integration test: three prompts on three schedule types
+  across a month boundary and both America/Chicago daylight saving transitions,
+  each asserting an exact UTC instant.
+
+### Fixed
+
+- `uninstall.php` left `autoscribe_pricing`, `autoscribe_global_budget_cents`,
+  and `autoscribe_budget_notice_month` behind. Those options were added in
+  phases 5 and 7 and never added to the uninstall.
+- `uninstall.php` deleted every `_autoscribe_%` post meta key, which included
+  the `_autoscribe_generated` flag section 6 adds to generated attachments so
+  they can be found later, and the `_autoscribe_run_id` link section 10 adds to
+  generated posts. Uninstall keeps that content deliberately, so destroying the
+  only means of identifying it was self-defeating. The sweep is now an explicit
+  key list, and a test asserts both halves.
+- Prompt posts are now removed on uninstall. They were left behind as
+  unreachable content of an unregistered post type.
+
+### Changed
+
+- `actions/checkout` bumped to v5, clearing the Node 20 deprecation warning.
 
 ## [0.7.0] - 2026-08-17
 

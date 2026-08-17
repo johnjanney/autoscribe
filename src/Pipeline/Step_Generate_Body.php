@@ -122,6 +122,13 @@ final class Step_Generate_Body {
 
 		$run->record_text_usage( $result->model(), $result->usage()->input_tokens(), $result->usage()->output_tokens() );
 
+		// Section 7.1: keep what the grounded call actually read. Recorded here
+		// rather than returned, because this step returns the article and the
+		// sources belong to the run, not to the article.
+		if ( array() !== $result->sources() ) {
+			$run->record_sources( $result->sources() );
+		}
+
 		$article = $this->validator->validate( $result->text() );
 
 		if ( ! is_wp_error( $article ) ) {

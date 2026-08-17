@@ -82,6 +82,14 @@ final class Run {
 	private ?int $post_id = null;
 
 	/**
+	 * Grounding source URLs, once read or written.
+	 *
+	 * @since 0.8.0
+	 * @var string[]|null
+	 */
+	private ?array $sources = null;
+
+	/**
 	 * Usage accumulated during this run, for the final cost calculation.
 	 *
 	 * @since 0.5.0
@@ -228,6 +236,75 @@ final class Run {
 			),
 			array( '%s', '%d' )
 		);
+	}
+
+	/**
+	 * Records the source URLs a grounded call reported using.
+	 *
+	 * Section 7.1 requires these to be kept on the run. They are the only record
+	 * of what third-party text entered the model context, which is the thing
+	 * worth being able to audit after the fact when a grounded article turns out
+	 * to be wrong.
+	 *
+	 * Stored in the payload column, which section 3.2 reserves for a run's
+	 * intermediate state and which nothing else writes to: the pipeline runs
+	 * inside a single action, so there is no inter-step state to keep there.
+	 *
+	 * @since 0.8.0
+	 *
+	 * @param string[] $urls Source URLs.
+	 * @return void
+	 */
+	public function record_sources( array $urls ): void {
+		$clean = array();
+
+		foreach ( $urls as $url ) {
+			$candidate = esc_url_raw( (string) $url );
+
+			if ( '' !== $candidate ) {
+				$clean[] = $candidate;
+			}
+		}
+
+		$clean = array_values( array_unique( $clean ) );
+
+		$this->sources = $clean;
+
+		$this->update(
+			array( 'payload' => (string) wp_json_encode( array( 'sources' => $clean ) ) ),
+			array( '%s' )
+		);
+	}
+
+	/**
+	 * Returns the source URLs recorded for this run.
+	 *
+	 * @since 0.8.0
+	 *
+	 * @return string[]
+	 */
+	public function sources(): array {
+		if ( null !== $this->sources ) {
+			return $this->sources;
+		}
+
+		global $wpdb;
+
+		$payload = $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT payload FROM %i WHERE id = %d',
+				Activation::table_name(),
+				$this->id
+			)
+		);
+
+		$decoded = json_decode( (string) $payload, true );
+
+		$this->sources = ( is_array( $decoded ) && isset( $decoded['sources'] ) && is_array( $decoded['sources'] ) )
+			? array_map( 'strval', $decoded['sources'] )
+			: array();
+
+		return $this->sources;
 	}
 
 	/**

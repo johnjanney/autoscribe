@@ -135,6 +135,13 @@ final class Prompt_Fields {
 				'default'     => false,
 				'description' => __( 'Grounded content is untrusted third-party text entering the model context. Human review is strongly recommended when this is on.', 'autoscribe' ),
 			),
+			'append_sources'    => array(
+				'tab'         => 'content',
+				'label'       => __( 'Append a Sources list', 'autoscribe' ),
+				'type'        => 'bool',
+				'default'     => false,
+				'description' => __( 'Adds the URLs a grounded call reported using to the end of the article. They are recorded on the run either way.', 'autoscribe' ),
+			),
 		);
 	}
 

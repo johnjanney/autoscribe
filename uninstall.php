@@ -3,9 +3,19 @@
  * Uninstall routine.
  *
  * Removes the plugin's own data only. Generated posts and generated media are
- * deliberately left in place: they are the site owner's content, and the
- * _autoscribe_generated flag from section 6 of the brief exists so a human can
- * find and remove them on purpose.
+ * deliberately left in place: they are the site owner's content.
+ *
+ * Three meta keys survive with them, on purpose. Section 6 adds
+ * _autoscribe_generated to every generated attachment precisely so a human can
+ * find and bulk-delete AI images later, and section 10 adds _autoscribe_run_id
+ * to every generated post so the content stays auditable. Deleting content but
+ * keeping the flags that identify it is coherent. Keeping the content while
+ * destroying the only means of identifying it is not, and that is what a
+ * wildcard sweep over _autoscribe_% does.
+ *
+ * So the sweep is explicit rather than wildcard. If a new prompt setting is
+ * added later it must be added to the list below, which is the cost of getting
+ * this the right way round.
  *
  * @package AutoScribe
  */
@@ -24,16 +34,68 @@ $autoscribe_table = $wpdb->prefix . 'autoscribe_runs';
 // cannot be passed as %s because that would quote it as a string literal.
 $wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $autoscribe_table ) );
 
-delete_option( 'autoscribe_db_version' );
-delete_option( 'autoscribe_settings' );
-delete_option( 'autoscribe_keys' );
+foreach (
+	array(
+		'autoscribe_db_version',
+		'autoscribe_settings',
+		'autoscribe_keys',
+		'autoscribe_pricing',
+		'autoscribe_global_budget_cents',
+		'autoscribe_budget_notice_month',
+	) as $autoscribe_option
+) {
+	delete_option( $autoscribe_option );
+}
 
-$wpdb->query(
+/*
+ * Meta this plugin owns outright: prompt configuration, and the retry counter.
+ * Everything here lives on prompt posts, which are removed with the post type.
+ * The three keys that live on generated content are deliberately absent.
+ */
+$autoscribe_meta_keys = array(
+	'_autoscribe_text_provider',
+	'_autoscribe_text_model',
+	'_autoscribe_system_prompt',
+	'_autoscribe_user_prompt',
+	'_autoscribe_target_word_count',
+	'_autoscribe_post_status_mode',
+	'_autoscribe_post_type',
+	'_autoscribe_category_ids',
+	'_autoscribe_author_id',
+	'_autoscribe_image_mode',
+	'_autoscribe_image_provider',
+	'_autoscribe_image_model',
+	'_autoscribe_image_style_suffix',
+	'_autoscribe_fallback_image_id',
+	'_autoscribe_grounding_enabled',
+	'_autoscribe_append_sources',
+	'_autoscribe_monthly_budget_cents',
+	'_autoscribe_dedupe_lookback',
+	'_autoscribe_tag_mode',
+	'_autoscribe_fixed_tags',
+	'_autoscribe_schedule_type',
+	'_autoscribe_schedule_params',
+	'_autoscribe_next_run_ts',
+	'_autoscribe_enabled',
+	'_autoscribe_attempt',
+);
+
+foreach ( $autoscribe_meta_keys as $autoscribe_meta_key ) {
+	delete_post_meta_by_key( $autoscribe_meta_key );
+}
+
+// Prompt posts themselves. The post type is not registered during uninstall, so
+// they are found by the stored post_type value rather than through WP_Query.
+$autoscribe_prompt_ids = $wpdb->get_col(
 	$wpdb->prepare(
-		"DELETE FROM {$wpdb->postmeta} WHERE meta_key LIKE %s",
-		$wpdb->esc_like( '_autoscribe_' ) . '%'
+		"SELECT ID FROM {$wpdb->posts} WHERE post_type = %s",
+		'autoscribe_prompt'
 	)
 );
+
+foreach ( $autoscribe_prompt_ids as $autoscribe_prompt_id ) {
+	wp_delete_post( (int) $autoscribe_prompt_id, true );
+}
 
 if ( class_exists( '\\AutoScribe\\Activation' ) ) {
 	$autoscribe_roles = wp_roles();

@@ -85,6 +85,49 @@ final class Step_Assemble_Post {
 	}
 
 	/**
+	 * Builds the optional Sources list from section 7.1.
+	 *
+	 * Appended after sanitisation rather than before, because this markup is the
+	 * plugin's own and would only be re-escaped by a second pass. The URLs are
+	 * not ours, though — they come from the provider — so each one goes through
+	 * esc_url, and anything that survives as empty is dropped rather than
+	 * rendered as a link to nowhere.
+	 *
+	 * @since 0.8.0
+	 *
+	 * @param Prompt $prompt Prompt being run.
+	 * @param Run    $run    Run recording progress.
+	 * @return string Markup to append, or an empty string.
+	 */
+	private function sources_block( Prompt $prompt, Run $run ): string {
+		if ( ! $prompt->append_sources() ) {
+			return '';
+		}
+
+		$items = '';
+
+		foreach ( $run->sources() as $url ) {
+			$safe = esc_url( (string) $url );
+
+			if ( '' === $safe ) {
+				continue;
+			}
+
+			$items .= sprintf( '<li><a href="%1$s" rel="nofollow noopener">%1$s</a></li>', $safe );
+		}
+
+		if ( '' === $items ) {
+			return '';
+		}
+
+		return sprintf(
+			'<h2>%s</h2><ul>%s</ul>',
+			esc_html__( 'Sources', 'autoscribe' ),
+			$items
+		);
+	}
+
+	/**
 	 * Creates the draft post.
 	 *
 	 * @since 0.3.0
@@ -118,6 +161,8 @@ final class Step_Assemble_Post {
 				__( 'A dangerous URI scheme survived sanitisation; the article was discarded.', 'autoscribe' )
 			);
 		}
+
+		$body .= $this->sources_block( $prompt, $run );
 
 		$postarr = array(
 			'post_type'    => $prompt->post_type(),
