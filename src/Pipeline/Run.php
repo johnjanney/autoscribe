@@ -9,6 +9,8 @@ namespace AutoScribe\Pipeline;
 
 use AutoScribe\Activation;
 use AutoScribe\Cost\Pricing_Table;
+use DateTimeImmutable;
+use DateTimeZone;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -269,6 +271,169 @@ final class Run {
 		);
 
 		return is_array( $row ) ? $row : null;
+	}
+
+	/**
+	 * Returns run rows matching the given filters, newest first.
+	 *
+	 * Section 9.3 wants the log filterable by prompt, status, and month. Month is
+	 * given as YYYY-MM and interpreted in the site timezone, matching how section
+	 * 7.4 sums spend; started_at is stored in UTC, so the bounds are converted
+	 * rather than compared as strings.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @param array<string, mixed> $args Optional prompt_id, status, month, per_page, paged.
+	 * @return array<int, array<string, mixed>> Rows as associative arrays.
+	 */
+	public static function query( array $args = array() ): array {
+		global $wpdb;
+
+		$per_page = max( 1, (int) ( $args['per_page'] ?? 20 ) );
+		$paged    = max( 1, (int) ( $args['paged'] ?? 1 ) );
+		$filters  = self::filter_values( $args );
+
+		/*
+		 * The statement is a fixed literal and every filter is a bound value,
+		 * including the ones that are switched off. Concatenating optional WHERE
+		 * fragments would have meant handing prepare() a variable, which is
+		 * exactly the shape that hides an injection, so each filter is instead
+		 * disabled by its own sentinel comparison.
+		 */
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT * FROM %i
+				WHERE ( %d = 0 OR prompt_id = %d )
+					AND ( %s = \'\' OR status = %s )
+					AND ( %s = \'\' OR ( started_at >= %s AND started_at < %s ) )
+				ORDER BY id DESC
+				LIMIT %d OFFSET %d',
+				Activation::table_name(),
+				$filters['prompt_id'],
+				$filters['prompt_id'],
+				$filters['status'],
+				$filters['status'],
+				$filters['month_on'],
+				$filters['start'],
+				$filters['end'],
+				$per_page,
+				( $paged - 1 ) * $per_page
+			),
+			ARRAY_A
+		);
+
+		return is_array( $rows ) ? $rows : array();
+	}
+
+	/**
+	 * Returns how many rows match the given filters.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @param array<string, mixed> $args Optional prompt_id, status, month.
+	 * @return int
+	 */
+	public static function count( array $args = array() ): int {
+		global $wpdb;
+
+		$filters = self::filter_values( $args );
+
+		$total = $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT COUNT(*) FROM %i
+				WHERE ( %d = 0 OR prompt_id = %d )
+					AND ( %s = \'\' OR status = %s )
+					AND ( %s = \'\' OR ( started_at >= %s AND started_at < %s ) )',
+				Activation::table_name(),
+				$filters['prompt_id'],
+				$filters['prompt_id'],
+				$filters['status'],
+				$filters['status'],
+				$filters['month_on'],
+				$filters['start'],
+				$filters['end']
+			)
+		);
+
+		return (int) $total;
+	}
+
+	/**
+	 * Deletes run rows older than the given number of days.
+	 *
+	 * Section 3.2 requires this: the table grows without bound otherwise, and a
+	 * site generating daily accumulates rows forever for no benefit.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @param int $days Age in days. Zero or less deletes nothing.
+	 * @return int Number of rows removed.
+	 */
+	public static function prune( int $days ): int {
+		global $wpdb;
+
+		if ( $days <= 0 ) {
+			return 0;
+		}
+
+		$cutoff = gmdate( 'Y-m-d H:i:s', time() - ( $days * DAY_IN_SECONDS ) );
+
+		$deleted = $wpdb->query(
+			$wpdb->prepare(
+				'DELETE FROM %i WHERE started_at < %s',
+				Activation::table_name(),
+				$cutoff
+			)
+		);
+
+		return (int) $deleted;
+	}
+
+	/**
+	 * Normalises the filter arguments into bindable values.
+	 *
+	 * A filter that is switched off gets the sentinel its clause tests for, so
+	 * the same statement serves every combination of filters.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @param array<string, mixed> $args Filter arguments.
+	 * @return array{prompt_id: int, status: string, month_on: string, start: string, end: string}
+	 */
+	private static function filter_values( array $args ): array {
+		$bounds = empty( $args['month'] ) ? null : self::month_bounds_utc( (string) $args['month'] );
+
+		return array(
+			'prompt_id' => (int) ( $args['prompt_id'] ?? 0 ),
+			'status'    => (string) ( $args['status'] ?? '' ),
+			'month_on'  => null === $bounds ? '' : 'on',
+			'start'     => null === $bounds ? '' : $bounds['start'],
+			'end'       => null === $bounds ? '' : $bounds['end'],
+		);
+	}
+
+	/**
+	 * Converts a YYYY-MM month in the site timezone into UTC bounds.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @param string $month Month as YYYY-MM.
+	 * @return array{start: string, end: string}|null Null when the input is not a month.
+	 */
+	private static function month_bounds_utc( string $month ): ?array {
+		if ( 1 !== preg_match( '/^(\d{4})-(0[1-9]|1[0-2])$/', $month ) ) {
+			return null;
+		}
+
+		$site_tz = wp_timezone();
+		$start   = new DateTimeImmutable( $month . '-01 00:00:00', $site_tz );
+		$end     = $start->modify( '+1 month' );
+		$utc     = new DateTimeZone( 'UTC' );
+
+		return array(
+			'start' => $start->setTimezone( $utc )->format( 'Y-m-d H:i:s' ),
+			'end'   => $end->setTimezone( $utc )->format( 'Y-m-d H:i:s' ),
+		);
 	}
 
 	/**

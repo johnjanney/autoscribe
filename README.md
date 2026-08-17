@@ -145,6 +145,24 @@ with that in mind.
 
 ---
 
+## Using it
+
+Prompts live under **AutoScribe** in the admin menu. Each one carries its
+instructions, schedule, provider, image settings, publishing rules, and spend
+cap, grouped into tabs. **Run now** queues an immediate run; **Preview**
+generates the article and shows it without creating a post. Both cost money and
+both appear in the run log.
+
+**AutoScribe → Run Log** lists every run with its status, tokens, estimated
+spend, and a Retry action on failures. **AutoScribe → Settings** holds the
+provider credentials, the global spend cap, the pricing table, the retention
+period, and a system health panel.
+
+One setting there is worth knowing about before anything else: **Force human
+review** holds every generated post as a draft regardless of how any individual
+prompt is configured, and cannot be bypassed by a manual run or a WP-CLI status
+argument. It is the switch to reach for when output quality drops.
+
 ## WP-CLI
 
 ```bash
@@ -193,8 +211,15 @@ matches it.
 
 ## Status
 
-Version 0.6.0. The generation pipeline, scheduling, deduplication, budget
-enforcement, SEO integration, and WP-CLI interface are built and tested. **The
-admin interface is not** — prompts are managed through the standard post-type
-screens and the WP-CLI commands, and there is no settings page, no run-now
-button, and no run log table yet. That is the gap between this and a 1.0.
+Version 0.7.0. The generation pipeline, scheduling, deduplication, budget
+enforcement, SEO integration, WP-CLI interface, and admin interface are built
+and tested.
+
+Not yet done, and the remaining gap to a 1.0:
+
+- The "Run now" and "Preview" controls have no automated coverage.
+- Web search grounding and AI tag suggestion work but are only covered
+  indirectly.
+- `uninstall.php` is syntax-checked, never executed in a test.
+- No integration test drives real schedules across a month boundary and a
+  daylight saving transition, which section 11 asks for.

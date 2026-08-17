@@ -1,0 +1,350 @@
+<?php
+/**
+ * Prompt editor tests.
+ *
+ * @package AutoScribe
+ */
+
+namespace AutoScribe\Tests\Admin;
+
+use AutoScribe\Activation;
+use AutoScribe\Admin\Prompt_Meta_Box;
+use AutoScribe\Prompts\Prompt;
+use AutoScribe\Prompts\Prompt_Fields;
+use AutoScribe\Tests\Support\Creates_Prompts;
+use WP_UnitTestCase;
+
+/**
+ * Covers the section 9.2 editor: authorisation, and the render/save round trip.
+ *
+ * @since 0.7.0
+ */
+final class Prompt_Meta_BoxTest extends WP_UnitTestCase {
+
+	use Creates_Prompts;
+
+	/**
+	 * Administrator used by most tests.
+	 *
+	 * @since 0.7.0
+	 * @var int
+	 */
+	private int $admin_id = 0;
+
+	/**
+	 * Grants the plugin capabilities and signs in an administrator.
+	 *
+	 * Activation normally grants these. The activation hook does not fire in the
+	 * test suite, so without this every capability check would fail for a reason
+	 * unrelated to what is being tested.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @return void
+	 */
+	public function set_up(): void {
+		parent::set_up();
+
+		$role = get_role( 'administrator' );
+
+		foreach ( Activation::capabilities() as $capability ) {
+			$role->add_cap( $capability );
+		}
+
+		$this->admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+
+		wp_set_current_user( $this->admin_id );
+	}
+
+	/**
+	 * Clears request state between tests.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @return void
+	 */
+	public function tear_down(): void {
+		$_POST = array();
+
+		wp_set_current_user( 0 );
+
+		parent::tear_down();
+	}
+
+	/**
+	 * Renders the meta box and returns its markup.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @param int $prompt_id Prompt to render.
+	 * @return string
+	 */
+	private function render( int $prompt_id ): string {
+		ob_start();
+
+		( new Prompt_Meta_Box() )->render( get_post( $prompt_id ) );
+
+		return (string) ob_get_clean();
+	}
+
+	/**
+	 * Builds a valid submission covering every field.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @param int $category_id Category to select.
+	 * @return array<string, mixed>
+	 */
+	private function submission( int $category_id ): array {
+		$values = array();
+
+		foreach ( Prompt_Fields::all() as $key => $field ) {
+			switch ( (string) $field['type'] ) {
+				case 'bool':
+					$values[ $key ] = '1';
+					break;
+
+				case 'int':
+					$values[ $key ] = (string) ( $field['min'] ?? 1 );
+					break;
+
+				case 'select':
+					$choices        = Prompt_Fields::choices( $field );
+					$values[ $key ] = (string) array_key_last( $choices );
+					break;
+
+				case 'terms':
+					$values[ $key ] = array( (string) $category_id );
+					break;
+
+				case 'csv':
+					$values[ $key ] = 'alpha, beta';
+					break;
+
+				case 'time':
+					$values[ $key ] = '07:30';
+					break;
+
+				default:
+					$values[ $key ] = 'value-for-' . $key;
+					break;
+			}
+		}
+
+		return $values;
+	}
+
+	/**
+	 * Every defined field is rendered, and every rendered field saves.
+	 *
+	 * This is the test that keeps the two passes honest. A field added to the
+	 * definition but forgotten in the form, or rendered but never read back,
+	 * fails here rather than failing silently in production by discarding what
+	 * the user typed.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @return void
+	 */
+	public function test_every_field_renders_and_round_trips(): void {
+		$category_id = self::factory()->category->create();
+		$prompt_id   = $this->create_prompt();
+
+		$markup = $this->render( $prompt_id );
+		$fields = Prompt_Fields::all();
+
+		$this->assertNotEmpty( $fields );
+
+		foreach ( $fields as $key => $field ) {
+			$this->assertStringContainsString(
+				'name="' . Prompt_Fields::INPUT_NAME . '[' . $key . ']',
+				$markup,
+				$key . ' is defined but never rendered'
+			);
+		}
+
+		$submitted = $this->submission( $category_id );
+
+		$_POST = array(
+			Prompt_Meta_Box::NONCE_NAME => wp_create_nonce( 'autoscribe_save_prompt_' . $prompt_id ),
+			Prompt_Fields::INPUT_NAME   => $submitted,
+		);
+
+		( new Prompt_Meta_Box() )->save( $prompt_id );
+
+		$params = get_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'schedule_params', true );
+
+		$this->assertIsArray( $params );
+
+		foreach ( $fields as $key => $field ) {
+			$expected = Prompt_Fields::sanitize( $field, $submitted[ $key ] );
+
+			if ( ! empty( $field['param'] ) ) {
+				$this->assertSame( $expected, $params[ $key ] ?? null, $key . ' did not round trip as a schedule parameter' );
+
+				continue;
+			}
+
+			$stored = get_post_meta( $prompt_id, Prompt_Fields::PREFIX . $key, true );
+
+			if ( 'bool' === $field['type'] ) {
+				$this->assertSame( $expected, (bool) $stored, $key . ' did not round trip' );
+
+				continue;
+			}
+
+			if ( is_array( $expected ) ) {
+				$this->assertSame( $expected, $stored, $key . ' did not round trip' );
+
+				continue;
+			}
+
+			$this->assertSame( (string) $expected, (string) $stored, $key . ' did not round trip' );
+		}
+	}
+
+	/**
+	 * A submission with no nonce writes nothing.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @return void
+	 */
+	public function test_save_without_a_nonce_writes_nothing(): void {
+		$prompt_id = $this->create_prompt( array( 'user_prompt' => 'original instruction' ) );
+
+		$_POST = array(
+			Prompt_Fields::INPUT_NAME => array( 'user_prompt' => 'injected instruction' ),
+		);
+
+		( new Prompt_Meta_Box() )->save( $prompt_id );
+
+		$this->assertSame(
+			'original instruction',
+			get_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'user_prompt', true )
+		);
+	}
+
+	/**
+	 * A submission carrying a wrong nonce writes nothing.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @return void
+	 */
+	public function test_save_with_a_bad_nonce_writes_nothing(): void {
+		$prompt_id = $this->create_prompt( array( 'user_prompt' => 'original instruction' ) );
+
+		$_POST = array(
+			Prompt_Meta_Box::NONCE_NAME => wp_create_nonce( 'some_other_action' ),
+			Prompt_Fields::INPUT_NAME   => array( 'user_prompt' => 'injected instruction' ),
+		);
+
+		( new Prompt_Meta_Box() )->save( $prompt_id );
+
+		$this->assertSame(
+			'original instruction',
+			get_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'user_prompt', true )
+		);
+	}
+
+	/**
+	 * A user without the capability writes nothing, even with a valid nonce.
+	 *
+	 * The nonce proves the request came from the editor. It says nothing about
+	 * whether this user may change anything, which is why both checks exist.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @return void
+	 */
+	public function test_save_without_the_capability_writes_nothing(): void {
+		$prompt_id = $this->create_prompt( array( 'user_prompt' => 'original instruction' ) );
+
+		$subscriber = self::factory()->user->create( array( 'role' => 'subscriber' ) );
+
+		wp_set_current_user( $subscriber );
+
+		$this->assertFalse( current_user_can( Activation::MANAGE_CAPABILITY ) );
+
+		$_POST = array(
+			Prompt_Meta_Box::NONCE_NAME => wp_create_nonce( 'autoscribe_save_prompt_' . $prompt_id ),
+			Prompt_Fields::INPUT_NAME   => array( 'user_prompt' => 'injected instruction' ),
+		);
+
+		( new Prompt_Meta_Box() )->save( $prompt_id );
+
+		$this->assertSame(
+			'original instruction',
+			get_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'user_prompt', true )
+		);
+	}
+
+	/**
+	 * A saved schedule is valid enough for the calculator to accept.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @return void
+	 */
+	public function test_saved_schedule_parameters_build_a_valid_schedule(): void {
+		$prompt_id = $this->create_prompt();
+
+		$_POST = array(
+			Prompt_Meta_Box::NONCE_NAME => wp_create_nonce( 'autoscribe_save_prompt_' . $prompt_id ),
+			Prompt_Fields::INPUT_NAME   => array(
+				'schedule_type' => 'monthly_ordinal',
+				'ordinal'       => 'second',
+				'weekday'       => 'tuesday',
+				'time'          => '06:00',
+			),
+		);
+
+		( new Prompt_Meta_Box() )->save( $prompt_id );
+
+		$prompt = Prompt::load( $prompt_id );
+
+		$this->assertNotNull( $prompt );
+		$this->assertNotWPError( $prompt->schedule() );
+		$this->assertSame( 'monthly_ordinal', $prompt->schedule_type() );
+	}
+
+	/**
+	 * A hostile select value falls back to the declared default.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @return void
+	 */
+	public function test_unlisted_select_values_are_rejected(): void {
+		$prompt_id = $this->create_prompt();
+
+		$_POST = array(
+			Prompt_Meta_Box::NONCE_NAME => wp_create_nonce( 'autoscribe_save_prompt_' . $prompt_id ),
+			Prompt_Fields::INPUT_NAME   => array(
+				'post_type'        => 'attachment',
+				'post_status_mode' => 'whatever',
+			),
+		);
+
+		( new Prompt_Meta_Box() )->save( $prompt_id );
+
+		$this->assertSame( 'post', get_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'post_type', true ) );
+		$this->assertSame( 'review', get_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'post_status_mode', true ) );
+	}
+
+	/**
+	 * No stored API key is echoed into the editor markup.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @return void
+	 */
+	public function test_render_does_not_leak_a_stored_key(): void {
+		\AutoScribe\Security\Key_Store::set( 'anthropic', 'sk-secret-value-9876' );
+
+		$markup = $this->render( $this->create_prompt() );
+
+		$this->assertStringNotContainsString( 'sk-secret-value-9876', $markup );
+	}
+}

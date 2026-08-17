@@ -7,6 +7,7 @@
 
 namespace AutoScribe;
 
+use AutoScribe\Pipeline\Run_Retention;
 use AutoScribe\Scheduling\Scheduler;
 use WP_Role;
 
@@ -121,6 +122,8 @@ final class Activation {
 		if ( function_exists( 'as_unschedule_all_actions' ) ) {
 			as_unschedule_all_actions( Scheduler::HOOK_RUN_PROMPT, array(), Scheduler::GROUP );
 		}
+
+		Run_Retention::unschedule();
 
 		flush_rewrite_rules();
 	}

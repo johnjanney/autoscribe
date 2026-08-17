@@ -9,11 +9,45 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Missing before 1.0
 
-- The admin interface described in section 9 of the project brief: settings page,
-  run-now button, run log list table, pricing table editor. Prompts are currently
-  managed through the standard post-type screens and WP-CLI.
+- Automated coverage for the Run now and Preview controls.
 - Automated coverage for grounding and taxonomy application.
 - Runtime coverage for `uninstall.php`, which is currently only syntax-checked.
+- The section 11 integration test driving real schedules across a month boundary
+  and a daylight saving transition.
+
+## [0.7.0] - 2026-08-17
+
+Section 9's admin interface, which section 11 never assigned to a phase.
+
+### Added
+
+- Tabbed prompt editor covering every setting in section 3.2, with a next-run
+  readout and Run now and Preview controls.
+- Run Log list table with filtering by prompt, status, and month, and a Retry
+  action on failed runs.
+- Settings screen: provider credentials, default model IDs, global spend cap,
+  editable pricing table, notification address, run-log retention, and a system
+  health panel.
+- `Run::query()`, `Run::count()`, and `Run::prune()`.
+- Section 10's global "force human review" override, which beats the per-prompt
+  setting and an explicit WP-CLI status argument alike.
+- Section 3.2's daily run-log retention job, defaulting to 90 days.
+- Admin notice reporting how many generated drafts are awaiting review.
+
+### Changed
+
+- Every prompt field is now declared once, in `Prompt_Fields`, which both the
+  render and the save pass read. A test asserts the round trip, so a field
+  cannot be rendered without also being saved.
+- The pricing table and global cap keep their own options rather than moving
+  into `autoscribe_settings`. Section 3.2 asks for a single option but section
+  8.1 contradicts it for keys, and both are read on paths that never load the
+  rest of the settings.
+
+### Fixed
+
+- `phpcs.xml.dist` was scanning `build/`, reporting every class in the plugin as
+  a duplicate of its own build output.
 
 ## [0.6.0] - 2026-08-17
 

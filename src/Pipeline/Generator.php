@@ -7,6 +7,7 @@
 
 namespace AutoScribe\Pipeline;
 
+use AutoScribe\Admin\Settings;
 use AutoScribe\Content\Article;
 use AutoScribe\Content\Article_Validator;
 use AutoScribe\Content\Taxonomy_Applier;
@@ -222,10 +223,7 @@ final class Generator {
 	 * @return void
 	 */
 	private function send_budget_warning(): void {
-		$settings = get_option( 'autoscribe_settings', array() );
-		$address  = is_array( $settings ) && ! empty( $settings['notification_email'] )
-			? (string) $settings['notification_email']
-			: (string) get_option( 'admin_email' );
+		$address = Settings::notification_email();
 
 		if ( '' === $address ) {
 			return;
@@ -318,6 +316,16 @@ final class Generator {
 	 * @return string
 	 */
 	private function final_status( Prompt $prompt, ?string $override ): string {
+		/*
+		 * Section 10's global override wins over everything, including an explicit
+		 * caller override. It is the safety catch for the moment a provider changes
+		 * behaviour or a prompt starts producing garbage, and a catch that any
+		 * caller can step around is not a catch. Checked first for that reason.
+		 */
+		if ( Settings::force_review() ) {
+			return 'draft';
+		}
+
 		if ( is_string( $override ) && in_array( $override, array( 'draft', 'publish', 'pending' ), true ) ) {
 			return $override;
 		}

@@ -7,10 +7,15 @@
 
 namespace AutoScribe;
 
+use AutoScribe\Admin\Actions;
+use AutoScribe\Admin\Assets;
+use AutoScribe\Admin\Menu;
+use AutoScribe\Admin\Prompt_Meta_Box;
 use AutoScribe\Cli\Command;
 use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Queued_Run_Handler;
 use AutoScribe\Pipeline\Retry_Policy;
+use AutoScribe\Pipeline\Run_Retention;
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Prompts\Prompt_Post_Type;
 use AutoScribe\Providers\Provider_Registry;
@@ -132,13 +137,36 @@ final class Plugin {
 		add_action( 'init', array( $this->prompt_post_type, 'register' ) );
 
 		add_action( Scheduler::HOOK_RUN_PROMPT, array( $this->queued_runs, 'handle' ) );
+		add_action( Run_Retention::HOOK, array( Run_Retention::class, 'handle' ) );
 		add_action( 'save_post_' . Prompt_Post_Type::POST_TYPE, array( $this, 'rearm_prompt' ) );
 		add_action( 'trashed_post', array( $this, 'cancel_prompt' ) );
 		add_action( 'untrashed_post', array( $this, 'rearm_prompt' ) );
+		add_action( 'init', array( Run_Retention::class, 'schedule' ), 20 );
+
+		if ( is_admin() ) {
+			$this->boot_admin();
+		}
 
 		if ( defined( 'WP_CLI' ) && WP_CLI ) {
 			WP_CLI::add_command( 'autoscribe', new Command( $this->providers ) );
 		}
+	}
+
+	/**
+	 * Registers the admin-only screens and handlers.
+	 *
+	 * Kept behind is_admin() so a front-end request never builds the editor,
+	 * the list table, or the settings page.
+	 *
+	 * @since 0.7.0
+	 *
+	 * @return void
+	 */
+	private function boot_admin(): void {
+		( new Prompt_Meta_Box() )->register();
+		( new Menu( $this->providers, $this->scheduler ) )->register();
+		( new Actions( $this->providers, $this->scheduler ) )->register();
+		( new Assets() )->register();
 	}
 
 	/**

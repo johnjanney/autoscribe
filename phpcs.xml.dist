@@ -6,6 +6,11 @@
 
 	<exclude-pattern>/vendor/*</exclude-pattern>
 	<exclude-pattern>/node_modules/*</exclude-pattern>
+	<!--
+		Build output. bin/build.sh stages a copy of the plugin here, so scanning
+		it reports every class in the plugin as a duplicate of itself.
+	-->
+	<exclude-pattern>/build/*</exclude-pattern>
 
 	<arg name="extensions" value="php"/>
 	<arg name="colors"/>
@@ -62,6 +67,39 @@
 		<exclude-pattern>*/src/Pipeline/Run.php</exclude-pattern>
 		<exclude-pattern>*/src/Cost/Budget_Guard.php</exclude-pattern>
 		<exclude-pattern>*/src/Content/Topic_Deduplicator.php</exclude-pattern>
+		<!--
+		The run log tests need rows with specific started_at values to exercise
+		month boundaries and the retention cutoff. Run::start() always stamps the
+		current time, so there is no API-level way to create them.
+		-->
+		<exclude-pattern>*/tests/Pipeline/Run_QueryTest.php</exclude-pattern>
+	</rule>
+
+	<!--
+	The capability sniff only knows WordPress core capabilities, so it reports the
+	plugin's own as possible typos. This is the property the sniff documents for
+	the purpose; it teaches the sniff the real names rather than switching it off,
+	so a genuine misspelling anywhere in the plugin is still caught.
+	-->
+	<rule ref="WordPress.WP.Capabilities">
+		<properties>
+			<property name="custom_capabilities" type="array">
+				<element value="autoscribe_manage_prompts"/>
+				<element value="edit_autoscribe_prompt"/>
+				<element value="read_autoscribe_prompt"/>
+				<element value="delete_autoscribe_prompt"/>
+				<element value="edit_autoscribe_prompts"/>
+				<element value="edit_others_autoscribe_prompts"/>
+				<element value="edit_private_autoscribe_prompts"/>
+				<element value="edit_published_autoscribe_prompts"/>
+				<element value="publish_autoscribe_prompts"/>
+				<element value="read_private_autoscribe_prompts"/>
+				<element value="delete_autoscribe_prompts"/>
+				<element value="delete_others_autoscribe_prompts"/>
+				<element value="delete_private_autoscribe_prompts"/>
+				<element value="delete_published_autoscribe_prompts"/>
+			</property>
+		</properties>
 	</rule>
 
 	<!--
