@@ -7,8 +7,10 @@
 
 namespace AutoScribe;
 
+use AutoScribe\Cli\Command;
 use AutoScribe\Prompts\Prompt_Post_Type;
 use AutoScribe\Providers\Provider_Registry;
+use WP_CLI;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -90,6 +92,10 @@ final class Plugin {
 		add_action( 'init', array( Activation::class, 'maybe_upgrade' ), 5 );
 		add_action( 'init', array( $this, 'load_textdomain' ) );
 		add_action( 'init', array( $this->prompt_post_type, 'register' ) );
+
+		if ( defined( 'WP_CLI' ) && WP_CLI ) {
+			WP_CLI::add_command( 'autoscribe', new Command( $this->providers ) );
+		}
 	}
 
 	/**

@@ -11,6 +11,13 @@ if ( ! is_string( $autoscribe_tests_dir ) || '' === $autoscribe_tests_dir ) {
 	$autoscribe_tests_dir = '/wordpress-phpunit';
 }
 
+/*
+ * Switch off the development HTTP mock. It is mounted into the tests container
+ * as well as the development one, and if it stayed active it would answer the
+ * very requests the tripwire below exists to intercept.
+ */
+define( 'AUTOSCRIBE_DISABLE_MOCK', true );
+
 require_once dirname( __DIR__ ) . '/vendor/autoload.php';
 require_once $autoscribe_tests_dir . '/includes/functions.php';
 

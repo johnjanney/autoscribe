@@ -2,13 +2,16 @@
   "core": null,
   "phpVersion": "8.1",
   "mappings": {
-    "wp-content/plugins/autoscribe": "."
+    "wp-content/plugins/autoscribe": ".",
+    "wp-content/mu-plugins": "./dev/mu-plugins"
   },
   "config": {
     "WP_DEBUG": true,
     "WP_DEBUG_LOG": true,
     "WP_DEBUG_DISPLAY": false,
     "SCRIPT_DEBUG": true,
-    "WP_DISABLE_FATAL_ERROR_HANDLER": true
+    "WP_DISABLE_FATAL_ERROR_HANDLER": true,
+    "AUTOSCRIBE_ANTHROPIC_KEY": "mock-anthropic-key",
+    "AUTOSCRIBE_OPENAI_IMAGE_KEY": "mock-openai-image-key"
   }
 }

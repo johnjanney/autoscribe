@@ -38,9 +38,26 @@ final class Key_StoreTest extends WP_UnitTestCase {
 	 * @return void
 	 */
 	public function test_key_round_trips(): void {
-		$this->assertTrue( Key_Store::set( 'anthropic', 'sk-ant-secret-value' ) );
-		$this->assertSame( Key_Store::SOURCE_STORED, Key_Store::source( 'anthropic' ) );
-		$this->assertSame( 'sk-ant-secret-value', Key_Store::get( 'anthropic' ) );
+		// A slug with no wp-config constant, so the stored path is what is tested.
+		$this->assertTrue( Key_Store::set( 'roundtrip', 'sk-ant-secret-value' ) );
+		$this->assertSame( Key_Store::SOURCE_STORED, Key_Store::source( 'roundtrip' ) );
+		$this->assertSame( 'sk-ant-secret-value', Key_Store::get( 'roundtrip' ) );
+	}
+
+	/**
+	 * A wp-config constant outranks a stored key, per section 8.1.
+	 *
+	 * @since 0.3.0
+	 *
+	 * @return void
+	 */
+	public function test_constant_takes_precedence_over_stored_key(): void {
+		define( 'AUTOSCRIBE_PRECEDENCE_KEY', 'from-wp-config' );
+
+		Key_Store::set( 'precedence', 'from-the-database' );
+
+		$this->assertSame( Key_Store::SOURCE_CONSTANT, Key_Store::source( 'precedence' ) );
+		$this->assertSame( 'from-wp-config', Key_Store::get( 'precedence' ) );
 	}
 
 	/**
