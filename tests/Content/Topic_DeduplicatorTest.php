@@ -11,6 +11,7 @@ use AutoScribe\Content\Topic_Deduplicator;
 use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Run;
 use AutoScribe\Providers\Provider_Registry;
+use AutoScribe\Security\Key_Store;
 use AutoScribe\Tests\Support\Creates_Prompts;
 use WP_UnitTestCase;
 
@@ -58,6 +59,15 @@ final class Topic_DeduplicatorTest extends WP_UnitTestCase {
 
 		$this->requests = array();
 		$this->mock     = null;
+
+		/*
+		 * Provide the key the suite needs rather than relying on the wp-config
+		 * constants that .wp-env.json happens to define. Without this the test
+		 * passes locally and fails in CI, where no wp-config exists, for an
+		 * environmental reason rather than a real one. Key_Store still prefers a
+		 * constant when one is present, so this is a floor, not an override.
+		 */
+		Key_Store::set( 'anthropic', 'test-key' );
 	}
 
 	/**

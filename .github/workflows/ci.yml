@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+
+    # fail-fast is off deliberately: when a version-specific problem appears we
+    # want to see which of the three PHP versions are affected, not just the
+    # first one to fall over.
+    strategy:
+      fail-fast: false
+      matrix:
+        php: [ '8.1', '8.2', '8.3' ]
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: wordpress_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=20
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mysqli, curl, zip, sodium, mbstring, xml, intl
+          coverage: none
+          tools: composer:v2
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Run PHPCS
+        run: ./vendor/bin/phpcs --no-colors
+
+      - name: Download WordPress core
+        run: |
+          mkdir -p /tmp/wordpress
+          curl -sSL https://wordpress.org/latest.tar.gz \
+            | tar -xz -C /tmp/wordpress --strip-components=1
+
+      # Written inside the wp-phpunit package because that is the location its
+      # own bootstrap falls back to when no config constant is defined. Pointing
+      # at it with a path instead would mean defining WP_TESTS_CONFIG_FILE_PATH
+      # in tests/bootstrap.php, and a core constant cannot carry the plugin
+      # prefix the coding standard requires of anything a plugin defines.
+      - name: Write the test config
+        run: |
+          cat > vendor/wp-phpunit/wp-phpunit/wp-tests-config.php <<'PHPCONF'
+          <?php
+          define( 'ABSPATH', '/tmp/wordpress/' );
+          define( 'DB_NAME', 'wordpress_test' );
+          define( 'DB_USER', 'root' );
+          define( 'DB_PASSWORD', 'root' );
+          define( 'DB_HOST', '127.0.0.1:3306' );
+          define( 'DB_CHARSET', 'utf8' );
+          define( 'DB_COLLATE', '' );
+          define( 'AUTH_KEY', 'ci-auth-key-not-a-secret' );
+          define( 'SECURE_AUTH_KEY', 'ci-secure-auth-key-not-a-secret' );
+          define( 'LOGGED_IN_KEY', 'ci-logged-in-key-not-a-secret' );
+          define( 'NONCE_KEY', 'ci-nonce-key-not-a-secret' );
+          define( 'AUTH_SALT', 'ci-auth-salt-not-a-secret' );
+          define( 'SECURE_AUTH_SALT', 'ci-secure-auth-salt-not-a-secret' );
+          define( 'LOGGED_IN_SALT', 'ci-logged-in-salt-not-a-secret' );
+          define( 'NONCE_SALT', 'ci-nonce-salt-not-a-secret' );
+          define( 'WP_TESTS_DOMAIN', 'example.org' );
+          define( 'WP_TESTS_EMAIL', 'admin@example.org' );
+          define( 'WP_TESTS_TITLE', 'Test Blog' );
+          define( 'WP_PHP_BINARY', 'php' );
+          define( 'WP_DEBUG', true );
+          $table_prefix = 'wptests_';
+          PHPCONF
+
+      - name: Wait for MySQL
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -proot --silent; then
+              echo "MySQL is up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "MySQL did not become ready"; exit 1
+
+      - name: Run PHPUnit
+        env:
+          WP_TESTS_DIR: ${{ github.workspace }}/vendor/wp-phpunit/wp-phpunit
+        run: ./vendor/bin/phpunit

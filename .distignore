@@ -1,0 +1,29 @@
+# Files and directories excluded from the distributable zip.
+#
+# Everything here is development or repository scaffolding. The zip must contain
+# the plugin and its production dependencies only: shipping the dev tooling
+# would put PHPUnit and PHPCS on every site that installs it.
+
+.git
+.github
+.gitignore
+.distignore
+.editorconfig
+.claude
+.wp-env.json
+.phpunit.result.cache
+
+bin
+build
+dev
+docs
+tests
+node_modules
+
+phpcs.xml.dist
+phpunit.xml.dist
+CLAUDE.md
+CONTRIBUTING.md
+
+# WSL writes these alongside files copied from Windows.
+*:Zone.Identifier

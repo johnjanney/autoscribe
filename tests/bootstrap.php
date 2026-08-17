@@ -8,6 +8,8 @@
 $autoscribe_tests_dir = getenv( 'WP_TESTS_DIR' );
 
 if ( ! is_string( $autoscribe_tests_dir ) || '' === $autoscribe_tests_dir ) {
+	// wp-env mounts the core test suite here. Continuous integration has no
+	// container, so it points WP_TESTS_DIR at the wp-phpunit package instead.
 	$autoscribe_tests_dir = '/wordpress-phpunit';
 }
 

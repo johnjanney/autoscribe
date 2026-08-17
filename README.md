@@ -1,0 +1,199 @@
+# AutoScribe
+
+Generates and publishes WordPress posts from scheduled AI prompts.
+
+A prompt is a custom post type holding instructions, a schedule, a provider and
+model, a monthly spend cap, and the taxonomy and SEO settings for whatever it
+produces. When a prompt's schedule fires, AutoScribe asks the configured model
+for a topic, checks that topic against what the site has already published,
+generates the article, optionally generates a featured image, sanitizes
+everything, and inserts the post as a draft or publishes it.
+
+- **Requires WordPress:** 6.4
+- **Requires PHP:** 8.1
+- **License:** GPL-2.0-or-later
+
+---
+
+## Third-party services
+
+**AutoScribe sends data to third-party AI providers.** It cannot do its job
+otherwise. This section lists every external endpoint the plugin contacts, what
+is sent, and when — it is the disclosure required of any plugin that relies on
+an external service.
+
+Nothing is sent until you supply an API key and a prompt configured to use that
+provider. A site with no keys configured makes no external requests at all.
+
+### Text generation
+
+Exactly one text provider is contacted per prompt run — whichever that prompt is
+configured to use.
+
+| Provider | Endpoints contacted |
+| --- | --- |
+| Anthropic | `https://api.anthropic.com/v1/messages`<br>`https://api.anthropic.com/v1/models/{model}` |
+| OpenAI | `https://api.openai.com/v1/responses`<br>`https://api.openai.com/v1/models/{model}` |
+| Google | `https://generativelanguage.googleapis.com/v1beta/interactions`<br>`https://generativelanguage.googleapis.com/v1beta/models/{model}` |
+| DeepSeek | `https://api.deepseek.com/chat/completions`<br>`https://api.deepseek.com/models` |
+
+The `models` endpoints are read-only capability checks. They confirm that the
+model ID a prompt is configured with still exists before a paid generation call
+is made, so that a model retirement surfaces as a clear error rather than a
+failed run. They send no site content.
+
+**Sent on a generation call:**
+
+- The system prompt and user prompt stored on the prompt post, verbatim. Whatever
+  you type into a prompt is sent to the provider.
+- The requested article's target word count, expressed as an output token ceiling.
+- The JSON schema the response must conform to.
+- **Titles and topic keys of your own recently published, drafted, pending, and
+  scheduled posts.** The topic-proposal call sends these so the model can avoid
+  proposing something the site already covers. The number of posts included is
+  the prompt's look-back setting. Only titles and topic keys are sent — never
+  post bodies.
+- On a rejected proposal, the title that collided, so the re-ask can name it.
+- On a malformed response, the model's own previous reply, so the repair call can
+  correct it.
+- Your API key, in the provider's authentication header.
+- A `User-Agent` header of the form `AutoScribe/{version} (+https://your-site.example/)`.
+  **This contains your site's URL and is sent on every request**, including the
+  capability checks.
+
+If a prompt has grounding enabled and the provider supports it, that provider's
+own web search tool runs server-side on the provider's infrastructure. The
+provider then reaches sites of its own choosing; AutoScribe has no visibility
+into and no control over which.
+
+### Image generation
+
+Contacted only when a prompt is configured to generate a featured image.
+
+| Provider | Endpoints contacted |
+| --- | --- |
+| OpenAI | `https://api.openai.com/v1/images/generations`<br>`https://api.openai.com/v1/models/{model}` |
+| Google | `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`<br>`https://generativelanguage.googleapis.com/v1beta/models/{model}` |
+
+**Sent:** an image description derived from the generated article's title and
+subject, the requested size, your API key, and the same `User-Agent` header
+carrying your site URL. The generated image is returned to your server and
+sideloaded into the media library; it is not hot-linked.
+
+### What is never sent
+
+- Existing post bodies, page content, or any other stored content beyond the
+  titles and topic keys described above.
+- User accounts, email addresses, comments, or any personal data.
+- WordPress options, settings, or database contents.
+- Anything at all to Anthropic, OpenAI, Google, or DeepSeek other than through
+  the endpoints listed above. AutoScribe contacts no analytics, telemetry,
+  licensing, or update service of its own.
+
+### Their terms, not ours
+
+Data you send becomes subject to the receiving provider's terms and privacy
+policy, including whatever retention and model-training practices those set out.
+Read them before configuring a provider:
+
+- Anthropic — <https://www.anthropic.com/legal/consumer-terms> · <https://www.anthropic.com/legal/privacy>
+- OpenAI — <https://openai.com/policies/terms-of-use> · <https://openai.com/policies/privacy-policy>
+- Google — <https://ai.google.dev/gemini-api/terms> · <https://policies.google.com/privacy>
+- DeepSeek — <https://platform.deepseek.com/downloads/DeepSeek%20Terms%20of%20Use.html> · <https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html>
+
+Retention and training-use defaults differ substantially between these providers
+and change over time. If that matters for your content, verify the current terms
+directly rather than relying on this list.
+
+---
+
+## API keys
+
+Keys are read from PHP constants first, and from encrypted option storage
+otherwise. Constants are the safer choice: they keep the key out of the database
+entirely and out of any database backup.
+
+```php
+// wp-config.php
+define( 'AUTOSCRIBE_ANTHROPIC_KEY',    '...' );
+define( 'AUTOSCRIBE_OPENAI_KEY',       '...' );
+define( 'AUTOSCRIBE_GOOGLE_KEY',       '...' );
+define( 'AUTOSCRIBE_DEEPSEEK_KEY',     '...' );
+define( 'AUTOSCRIBE_OPENAI_IMAGE_KEY', '...' );
+define( 'AUTOSCRIBE_GOOGLE_IMAGE_KEY', '...' );
+```
+
+Keys stored in options are encrypted with `sodium_crypto_secretbox`, under a key
+derived from the site's `AUTH_KEY` and `SECURE_AUTH_KEY` salts. **Rotating those
+salts makes stored keys unreadable** — the plugin detects this and reports the
+key as missing rather than failing obscurely. Re-enter the key after a salt
+rotation. Keys held in constants are unaffected.
+
+---
+
+## Cost control
+
+Every prompt carries a monthly spend cap. Before any provider call, the budget
+guard totals the month's spend for that prompt and refuses the run if the cap is
+already met. Cost is computed from the token counts the provider reports, priced
+against a pricing table you maintain — the plugin does not fetch prices, so the
+table must be kept current or the totals will drift from your real bill.
+
+The guard is a floor, not a ceiling: it stops a run from *starting* once the cap
+is reached, so a single run can carry the month slightly past it. Set the cap
+with that in mind.
+
+---
+
+## WP-CLI
+
+```bash
+wp autoscribe run <prompt-id>
+```
+
+Runs one prompt immediately, bypassing its schedule but not its budget cap, and
+reports the run ID, the post ID, the attachment ID, and the resulting post
+status. This is currently the only command.
+
+---
+
+## Development
+
+Requires Docker, Node, and Composer.
+
+```bash
+composer install
+npx wp-env start
+
+npx wp-env run tests-cli --env-cwd=wp-content/plugins/autoscribe ./vendor/bin/phpunit
+./vendor/bin/phpcs
+```
+
+`wp-env` mounts the plugin without activating it, so a fatal during activation
+does not tear down the container. Activate it from the CLI once the stack is up.
+
+The development environment mounts a mock provider as an mu-plugin, so nothing
+in `wp-env` reaches a live API. The test suite disables that mock and installs a
+tripwire in its place: any HTTP request that escapes the suite unmocked throws
+rather than silently reaching a real provider.
+
+### Building a release
+
+```bash
+bin/build.sh
+```
+
+Produces `build/autoscribe-{version}.zip` containing the plugin and its
+production dependencies only. The version is read from the plugin header, which
+is the single source of truth; a test enforces that the `VERSION` constant
+matches it.
+
+---
+
+## Status
+
+Version 0.6.0. The generation pipeline, scheduling, deduplication, budget
+enforcement, SEO integration, and WP-CLI interface are built and tested. **The
+admin interface is not** — prompts are managed through the standard post-type
+screens and the WP-CLI commands, and there is no settings page, no run-now
+button, and no run log table yet. That is the gap between this and a 1.0.
