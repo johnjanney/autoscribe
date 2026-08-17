@@ -148,6 +148,24 @@ function deactivate(): void {
 	Activation::deactivate();
 }
 
+/*
+ * Action Scheduler is required unconditionally at file scope, before
+ * plugins_loaded fires.
+ *
+ * Section 12 of the brief says to guard this with a class_exists check because
+ * WooCommerce may already have loaded it. That is the documented wrong way.
+ * Action Scheduler is built for multiple copies to coexist: every plugin loads
+ * its own, each registers with ActionScheduler_Versions, and the newest version
+ * wins on plugins_loaded. Skipping the require when the class already exists
+ * means a newer copy never registers, and deactivating WooCommerce makes the
+ * class vanish and this plugin's scheduling stop silently. The library performs
+ * its own internal guard, so requiring it twice is safe.
+ */
+if ( file_exists( __DIR__ . '/vendor/autoload.php' ) ) {
+	require_once __DIR__ . '/vendor/autoload.php';
+	require_once __DIR__ . '/vendor/woocommerce/action-scheduler/action-scheduler.php';
+}
+
 add_action( 'plugins_loaded', __NAMESPACE__ . '\\bootstrap' );
 register_activation_hook( __FILE__, __NAMESPACE__ . '\\activate' );
 register_deactivation_hook( __FILE__, __NAMESPACE__ . '\\deactivate' );

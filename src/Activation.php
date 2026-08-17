@@ -7,6 +7,7 @@
 
 namespace AutoScribe;
 
+use AutoScribe\Scheduling\Scheduler;
 use WP_Role;
 
 defined( 'ABSPATH' ) || exit;
@@ -114,6 +115,13 @@ final class Activation {
 	 * @return void
 	 */
 	public static function deactivate(): void {
+		// Cancel every queued run. Without this a deactivated plugin leaves armed
+		// Action Scheduler actions behind, which the queue keeps picking up and
+		// failing for as long as the site runs.
+		if ( function_exists( 'as_unschedule_all_actions' ) ) {
+			as_unschedule_all_actions( Scheduler::HOOK_RUN_PROMPT, array(), Scheduler::GROUP );
+		}
+
 		flush_rewrite_rules();
 	}
 

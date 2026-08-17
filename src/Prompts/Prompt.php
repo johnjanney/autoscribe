@@ -7,6 +7,8 @@
 
 namespace AutoScribe\Prompts;
 
+use AutoScribe\Scheduling\Schedule;
+use WP_Error;
 use WP_Post;
 
 defined( 'ABSPATH' ) || exit;
@@ -261,6 +263,67 @@ final class Prompt {
 	 */
 	public function grounding_enabled(): bool {
 		return (bool) $this->raw( 'grounding_enabled' );
+	}
+
+	/**
+	 * Returns the configured schedule type.
+	 *
+	 * @since 0.4.0
+	 *
+	 * @return string
+	 */
+	public function schedule_type(): string {
+		return $this->string( 'schedule_type', Schedule::TYPE_DAILY );
+	}
+
+	/**
+	 * Returns the raw schedule parameters.
+	 *
+	 * @since 0.4.0
+	 *
+	 * @return array<string, mixed>
+	 */
+	public function schedule_params(): array {
+		$raw = $this->raw( 'schedule_params' );
+
+		return is_array( $raw ) ? $raw : array();
+	}
+
+	/**
+	 * Returns the validated schedule.
+	 *
+	 * @since 0.4.0
+	 *
+	 * @return Schedule|WP_Error
+	 */
+	public function schedule(): Schedule|WP_Error {
+		return Schedule::create( $this->schedule_type(), $this->schedule_params() );
+	}
+
+	/**
+	 * Returns the cached next-run timestamp.
+	 *
+	 * Section 3.2 calls this display-only; the queue is the source of truth.
+	 * Stored as a UTC Unix timestamp, matching the runs table.
+	 *
+	 * @since 0.4.0
+	 *
+	 * @return int
+	 */
+	public function next_run_ts(): int {
+		return (int) $this->raw( 'next_run_ts' );
+	}
+
+	/**
+	 * Caches the next-run timestamp for display.
+	 *
+	 * @since 0.4.0
+	 *
+	 * @param int $timestamp UTC Unix timestamp.
+	 * @return void
+	 */
+	public function set_next_run_ts( int $timestamp ): void {
+		update_post_meta( $this->id(), self::PREFIX . 'next_run_ts', $timestamp );
 	}
 
 	/**

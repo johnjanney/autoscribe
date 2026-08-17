@@ -8,8 +8,13 @@
 namespace AutoScribe;
 
 use AutoScribe\Cli\Command;
+use AutoScribe\Pipeline\Generator;
+use AutoScribe\Pipeline\Queued_Run_Handler;
+use AutoScribe\Pipeline\Retry_Policy;
+use AutoScribe\Prompts\Prompt;
 use AutoScribe\Prompts\Prompt_Post_Type;
 use AutoScribe\Providers\Provider_Registry;
+use AutoScribe\Scheduling\Scheduler;
 use WP_CLI;
 
 defined( 'ABSPATH' ) || exit;
@@ -46,6 +51,22 @@ final class Plugin {
 	private Provider_Registry $providers;
 
 	/**
+	 * Action Scheduler queue wrapper.
+	 *
+	 * @since 0.4.0
+	 * @var Scheduler
+	 */
+	private Scheduler $scheduler;
+
+	/**
+	 * Handler for queued prompt runs.
+	 *
+	 * @since 0.4.0
+	 * @var Queued_Run_Handler
+	 */
+	private Queued_Run_Handler $queued_runs;
+
+	/**
 	 * Builds the container.
 	 *
 	 * @since 0.1.0
@@ -53,6 +74,23 @@ final class Plugin {
 	private function __construct() {
 		$this->prompt_post_type = new Prompt_Post_Type();
 		$this->providers        = new Provider_Registry();
+		$this->scheduler        = new Scheduler();
+		$this->queued_runs      = new Queued_Run_Handler(
+			new Generator( $this->providers ),
+			$this->scheduler,
+			new Retry_Policy()
+		);
+	}
+
+	/**
+	 * Returns the queue wrapper.
+	 *
+	 * @since 0.4.0
+	 *
+	 * @return Scheduler
+	 */
+	public function scheduler(): Scheduler {
+		return $this->scheduler;
 	}
 
 	/**
@@ -93,9 +131,71 @@ final class Plugin {
 		add_action( 'init', array( $this, 'load_textdomain' ) );
 		add_action( 'init', array( $this->prompt_post_type, 'register' ) );
 
+		add_action( Scheduler::HOOK_RUN_PROMPT, array( $this->queued_runs, 'handle' ) );
+		add_action( 'save_post_' . Prompt_Post_Type::POST_TYPE, array( $this, 'rearm_prompt' ) );
+		add_action( 'trashed_post', array( $this, 'cancel_prompt' ) );
+		add_action( 'untrashed_post', array( $this, 'rearm_prompt' ) );
+
 		if ( defined( 'WP_CLI' ) && WP_CLI ) {
 			WP_CLI::add_command( 'autoscribe', new Command( $this->providers ) );
 		}
+	}
+
+	/**
+	 * Re-arms a prompt's queue entry after it is saved or restored.
+	 *
+	 * Section 4.3 requires the old occurrence to be cancelled first, so a
+	 * changed schedule does not leave the previous one armed alongside the new.
+	 *
+	 * @since 0.4.0
+	 *
+	 * @param int $post_id Post being saved.
+	 * @return void
+	 */
+	public function rearm_prompt( int $post_id ): void {
+		if ( wp_is_post_revision( $post_id ) || wp_is_post_autosave( $post_id ) ) {
+			return;
+		}
+
+		$prompt = Prompt::load( $post_id );
+
+		if ( null === $prompt ) {
+			return;
+		}
+
+		if ( ! $prompt->enabled() ) {
+			$this->scheduler->cancel( $post_id );
+
+			return;
+		}
+
+		$schedule = $prompt->schedule();
+
+		if ( is_wp_error( $schedule ) ) {
+			return;
+		}
+
+		$timestamp = $this->scheduler->rearm( $post_id, $schedule );
+
+		if ( ! is_wp_error( $timestamp ) ) {
+			$prompt->set_next_run_ts( $timestamp );
+		}
+	}
+
+	/**
+	 * Cancels a prompt's queue entries when it is trashed.
+	 *
+	 * @since 0.4.0
+	 *
+	 * @param int $post_id Post being trashed.
+	 * @return void
+	 */
+	public function cancel_prompt( int $post_id ): void {
+		if ( Prompt_Post_Type::POST_TYPE !== get_post_type( $post_id ) ) {
+			return;
+		}
+
+		$this->scheduler->cancel( $post_id );
 	}
 
 	/**
