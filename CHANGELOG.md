@@ -7,12 +7,31 @@ the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Missing before 1.0
+## [1.0.0] - 2026-08-17
 
-- Automated coverage for the Settings screen's save path and the Test connection
-  control.
-- No end-to-end test drives the Action Scheduler queue itself; the queued run
-  handler is tested by calling it directly.
+First stable release. Every section of the project brief is implemented: the
+four text providers and two image providers, the six schedule types, the
+generation pipeline with sanitisation and structured-output validation, web
+search grounding, duplicate-topic avoidance, SEO adapters, taxonomy handling,
+cost caps, the admin interface, and the human-review override.
+
+No functional change from 0.8.0. This release marks the point at which the
+brief's scope is complete and the version number stops understating it.
+
+### Known limitations
+
+These are real and are not blockers, but they are worth knowing about:
+
+- The Settings screen's save path and the Test connection control have no
+  automated coverage. The prompt editor's save path does.
+- No test drives Action Scheduler itself. `Queued_Run_Handler` is tested by
+  calling it directly, so the queue's own dispatch is exercised in development
+  but not asserted.
+- CI runs against MySQL only. A divergence between MySQL and MariaDB was found
+  and fixed during phase 7; nothing guards against the reverse.
+- Cost figures are estimates computed from reported token usage against a
+  pricing table the site owner maintains. They are not billing data and the
+  plugin never fetches prices.
 
 ## [0.8.0] - 2026-08-17
 

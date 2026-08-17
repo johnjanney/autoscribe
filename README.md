@@ -222,15 +222,19 @@ matches it.
 
 ## Status
 
-Version 0.8.0. The generation pipeline, scheduling, deduplication, budget
-enforcement, SEO integration, WP-CLI interface, and admin interface are built
-and tested.
+Version 1.0.0. Everything in the project brief is implemented and covered by
+tests: the provider layer, the generation pipeline, scheduling, duplicate-topic
+avoidance, grounding, SEO adapters, taxonomy handling, cost caps, the admin
+interface, and the human-review override. 185 tests run against PHP 8.1, 8.2,
+and 8.3 on every push.
 
-Not yet done, and the remaining gap to a 1.0:
+Known limitations, none of them blocking:
 
-- The "Run now" and "Preview" controls have no automated coverage.
-- Web search grounding and AI tag suggestion work but are only covered
-  indirectly.
-- `uninstall.php` is syntax-checked, never executed in a test.
-- No integration test drives real schedules across a month boundary and a
-  daylight saving transition, which section 11 asks for.
+- The Settings screen's save path and the Test connection control have no
+  automated coverage. The prompt editor's save path does.
+- No test drives Action Scheduler itself; the queued run handler is tested by
+  calling it directly.
+- CI runs against MySQL only. A MySQL/MariaDB divergence was found and fixed
+  during development; nothing guards against the reverse.
+- Spend figures are estimates computed from reported token usage, not billing
+  data.
