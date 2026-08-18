@@ -34,6 +34,43 @@ final class Image_Sideloader {
 	public const GENERATED_META = '_autoscribe_generated';
 
 	/**
+	 * Largest generated image the plugin will accept, in bytes.
+	 *
+	 * The bytes are held in memory and then written to the uploads directory, so
+	 * an unbounded response is both a memory and a disk problem. Twenty megabytes
+	 * is generous for a featured image from any of the providers.
+	 *
+	 * @since 1.0.1
+	 * @var int
+	 */
+	public const MAX_IMAGE_BYTES = 20971520;
+
+	/**
+	 * Largest generated image the plugin will process, in total pixels.
+	 *
+	 * Byte size alone does not bound the cost of generating thumbnails: a highly
+	 * compressible image can be small on disk and enormous once decoded, which is
+	 * the decompression bomb that turns one attachment into an out-of-memory
+	 * fatal. 50 megapixels is roughly four times a 4K frame.
+	 *
+	 * @since 1.0.1
+	 * @var int
+	 */
+	public const MAX_IMAGE_PIXELS = 50000000;
+
+	/**
+	 * Timeout for fetching an image from a provider URL, in seconds.
+	 *
+	 * WordPress otherwise defaults download_url() to 300 seconds, which is longer
+	 * than the whole generation budget and long enough for a stalled connection
+	 * to hold a queue worker open on its own.
+	 *
+	 * @since 1.0.1
+	 * @var int
+	 */
+	public const DOWNLOAD_TIMEOUT = 60;
+
+	/**
 	 * Sideloads an image and attaches it to a post.
 	 *
 	 * @since 0.3.0
@@ -60,9 +97,24 @@ final class Image_Sideloader {
 			return new WP_Error( 'autoscribe_upload_failed', (string) $upload['error'] );
 		}
 
+		/*
+		 * The file is on disk before it can be inspected, because the checks that
+		 * matter — what it actually is, and how large it decodes to — read the
+		 * file rather than the buffer. Anything that fails from here on removes
+		 * the file again, so a rejected or half-finished sideload does not leave
+		 * an orphan in the uploads directory.
+		 */
+		$verified = $this->verify_file( (string) $upload['file'], $image->mime_type() );
+
+		if ( is_wp_error( $verified ) ) {
+			wp_delete_file( (string) $upload['file'] );
+
+			return $verified;
+		}
+
 		$attachment_id = wp_insert_attachment(
 			array(
-				'post_mime_type' => $image->mime_type(),
+				'post_mime_type' => $verified,
 				'post_title'     => $title,
 				'post_content'   => '',
 				'post_excerpt'   => $alt_text,
@@ -74,6 +126,8 @@ final class Image_Sideloader {
 		);
 
 		if ( is_wp_error( $attachment_id ) ) {
+			wp_delete_file( (string) $upload['file'] );
+
 			return $attachment_id;
 		}
 
@@ -121,7 +175,7 @@ final class Image_Sideloader {
 		$bytes = $image->bytes();
 
 		if ( is_string( $bytes ) && '' !== $bytes ) {
-			return $bytes;
+			return $this->within_byte_limit( $bytes );
 		}
 
 		$url = $image->url();
@@ -133,7 +187,7 @@ final class Image_Sideloader {
 			);
 		}
 
-		$temp = download_url( $url );
+		$temp = download_url( $url, self::DOWNLOAD_TIMEOUT );
 
 		if ( is_wp_error( $temp ) ) {
 			return $temp;
@@ -155,7 +209,84 @@ final class Image_Sideloader {
 			);
 		}
 
-		return $contents;
+		return $this->within_byte_limit( $contents );
+	}
+
+	/**
+	 * Rejects image data larger than the plugin will handle.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @param string $bytes Raw image data.
+	 * @return string|WP_Error The data unchanged, or an error.
+	 */
+	private function within_byte_limit( string $bytes ): string|WP_Error {
+		if ( strlen( $bytes ) > self::MAX_IMAGE_BYTES ) {
+			return new WP_Error(
+				'autoscribe_image_too_large',
+				sprintf(
+					/* translators: %d: size limit in megabytes. */
+					__( 'The generated image is larger than the %d MB the plugin will accept.', 'autoscribe' ),
+					(int) ( self::MAX_IMAGE_BYTES / MB_IN_BYTES )
+				)
+			);
+		}
+
+		return $bytes;
+	}
+
+	/**
+	 * Confirms an uploaded file really is an image the plugin can process.
+	 *
+	 * The provider's declared MIME type is a claim about the bytes, not a fact
+	 * about them, and it was previously stored on the attachment without ever
+	 * being checked. Reading the type from the file itself and bounding the pixel
+	 * count keeps a mislabelled or deliberately hostile response from reaching
+	 * wp_generate_attachment_metadata(), which is where the expensive decoding
+	 * happens.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @param string $path     Absolute path to the uploaded file.
+	 * @param string $declared MIME type the provider claimed.
+	 * @return string|WP_Error The verified MIME type, or an error.
+	 */
+	private function verify_file( string $path, string $declared ): string|WP_Error {
+		$size = @getimagesize( $path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Returns false for a non-image, which is the answer being tested for.
+
+		if ( false === $size || empty( $size['mime'] ) ) {
+			return new WP_Error(
+				'autoscribe_image_invalid',
+				__( 'The image provider returned data that is not a readable image.', 'autoscribe' )
+			);
+		}
+
+		if ( ( (int) $size[0] * (int) $size[1] ) > self::MAX_IMAGE_PIXELS ) {
+			return new WP_Error(
+				'autoscribe_image_too_large',
+				sprintf(
+					/* translators: 1: image width, 2: image height. */
+					__( 'The generated image is %1$d by %2$d pixels, which is beyond what the plugin will process.', 'autoscribe' ),
+					(int) $size[0],
+					(int) $size[1]
+				)
+			);
+		}
+
+		$checked = wp_check_filetype_and_ext( $path, basename( $path ) );
+
+		if ( empty( $checked['type'] ) ) {
+			return new WP_Error(
+				'autoscribe_image_invalid',
+				sprintf(
+					/* translators: %s: MIME type the provider declared. */
+					__( 'The generated file is not a type this site permits, despite being declared as %s.', 'autoscribe' ),
+					$declared
+				)
+			);
+		}
+
+		return (string) $checked['type'];
 	}
 
 	/**

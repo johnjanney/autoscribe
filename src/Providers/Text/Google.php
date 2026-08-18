@@ -165,9 +165,21 @@ final class Google implements Text_Provider_Interface {
 			),
 		);
 
+		/*
+		 * Structured output is a top-level response_format object on the
+		 * Interactions API, not the generateContent pair of
+		 * generation_config.response_mime_type and response_schema. Google removed
+		 * those two fields when Interactions replaced generateContent; sending
+		 * them here is either rejected outright or silently ignored, and a
+		 * silently ignored schema is worse — the plugin would believe output was
+		 * provider-enforced when it was not.
+		 */
 		if ( $request->wants_json() ) {
-			$body['generation_config']['response_mime_type'] = 'application/json';
-			$body['generation_config']['response_schema']    = $request->json_schema();
+			$body['response_format'] = array(
+				'type'      => 'text',
+				'mime_type' => 'application/json',
+				'schema'    => $request->json_schema(),
+			);
 		}
 
 		if ( $request->wants_grounding() ) {

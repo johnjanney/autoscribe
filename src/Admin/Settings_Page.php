@@ -56,6 +56,14 @@ final class Settings_Page {
 	private Scheduler $scheduler;
 
 	/**
+	 * Problems raised while saving, shown above the form.
+	 *
+	 * @since 1.0.1
+	 * @var string[]
+	 */
+	private array $errors = array();
+
+	/**
 	 * Builds the page.
 	 *
 	 * @since 0.7.0
@@ -89,8 +97,12 @@ final class Settings_Page {
 		echo '<div class="wrap">';
 		echo '<h1>' . esc_html__( 'AutoScribe Settings', 'autoscribe' ) . '</h1>';
 
-		if ( $saved ) {
+		if ( $saved && array() === $this->errors ) {
 			echo '<div class="notice notice-success"><p>' . esc_html__( 'Settings saved.', 'autoscribe' ) . '</p></div>';
+		}
+
+		foreach ( $this->errors as $error ) {
+			echo '<div class="notice notice-error"><p>' . esc_html( $error ) . '</p></div>';
 		}
 
 		echo '<form method="post">';
@@ -147,7 +159,13 @@ final class Settings_Page {
 				: '';
 
 			if ( '' !== $submitted_key ) {
-				Key_Store::set( $slug, $submitted_key );
+				$stored = Key_Store::set( $slug, $submitted_key );
+
+				// A refusal here means the key was not saved. Silently discarding
+				// it would leave the administrator believing it had been.
+				if ( is_wp_error( $stored ) ) {
+					$this->errors[] = $stored->get_error_message();
+				}
 			}
 		}
 
@@ -216,8 +234,11 @@ final class Settings_Page {
 	 * @return void
 	 */
 	private function render_credentials(): void {
+		$results = $this->test_results();
+
 		echo '<h2>' . esc_html__( 'Providers', 'autoscribe' ) . '</h2>';
 		echo '<p>' . esc_html__( 'A key set in wp-config.php is used in preference to a stored one, never enters the database, and cannot be overwritten here.', 'autoscribe' ) . '</p>';
+		echo '<p>' . esc_html__( 'The default model is used by any prompt that leaves its own model field blank. Test connection probes that model, so set it before testing.', 'autoscribe' ) . '</p>';
 		echo '<table class="form-table" role="presentation"><tbody>';
 
 		foreach ( $this->all_providers() as $slug => $label ) {
@@ -242,10 +263,45 @@ final class Settings_Page {
 
 			printf( '<p class="description">%s</p>', esc_html( $this->key_status( $slug ) ) );
 
+			/*
+			 * A link rather than a submit button, because this form posts the
+			 * whole settings screen and a test must not depend on the
+			 * administrator having saved first — nor should it save on their
+			 * behalf. The handler checks its own nonce and capability.
+			 */
+			printf(
+				'<p><a class="button button-secondary" href="%1$s">%2$s</a>%3$s</p>',
+				esc_url( Actions::test_url( $slug ) ),
+				esc_html__( 'Test connection', 'autoscribe' ),
+				isset( $results[ $slug ] )
+					? ' <strong>' . esc_html( (string) $results[ $slug ] ) . '</strong>'
+					: ''
+			);
+
 			echo '</td></tr>';
 		}
 
 		echo '</tbody></table>';
+	}
+
+	/**
+	 * Returns the results of the most recent connection test, then clears them.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @return array<string, string>
+	 */
+	private function test_results(): array {
+		$key     = Actions::TEST_TRANSIENT . get_current_user_id();
+		$results = get_transient( $key );
+
+		if ( ! is_array( $results ) ) {
+			return array();
+		}
+
+		delete_transient( $key );
+
+		return $results;
 	}
 
 	/**
@@ -370,6 +426,10 @@ final class Settings_Page {
 					: __( 'Not loaded. Nothing will run on a schedule.', 'autoscribe' ),
 			),
 			array(
+				__( 'Queue last processed', 'autoscribe' ),
+				$this->last_processed_text(),
+			),
+			array(
 				__( 'DISABLE_WP_CRON', 'autoscribe' ),
 				defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON
 					? __( 'Set. Make sure a system cron entry hits wp-cron.php every minute.', 'autoscribe' )
@@ -380,6 +440,12 @@ final class Settings_Page {
 				function_exists( 'sodium_crypto_secretbox' )
 					? __( 'Available. Keys stored in the database are encrypted.', 'autoscribe' )
 					: __( 'Missing. Keys cannot be stored in the database; use wp-config.php constants.', 'autoscribe' ),
+			),
+			array(
+				__( 'Security salts', 'autoscribe' ),
+				Key_Store::salts_are_usable()
+					? __( 'AUTH_KEY and SECURE_AUTH_KEY are set. The stored-key encryption has a site-specific key.', 'autoscribe' )
+					: __( 'AUTH_KEY or SECURE_AUTH_KEY is missing or still a placeholder. Keys cannot be stored in the database until that is fixed; use wp-config.php constants.', 'autoscribe' ),
 			),
 		);
 
@@ -392,6 +458,28 @@ final class Settings_Page {
 		}
 
 		echo '</tbody></table>';
+	}
+
+	/**
+	 * Describes when the queue last completed one of the plugin's actions.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @return string
+	 */
+	private function last_processed_text(): string {
+		$timestamp = $this->scheduler->last_processed();
+
+		if ( null === $timestamp ) {
+			return __( 'Nothing has completed yet. If prompts are enabled and their next run has passed, the queue is not running.', 'autoscribe' );
+		}
+
+		return sprintf(
+			/* translators: 1: formatted date and time, 2: human-readable interval. */
+			__( '%1$s (%2$s ago)', 'autoscribe' ),
+			wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $timestamp ),
+			human_time_diff( $timestamp )
+		);
 	}
 
 	/**

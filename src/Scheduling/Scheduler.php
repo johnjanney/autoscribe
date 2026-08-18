@@ -196,6 +196,56 @@ final class Scheduler {
 	}
 
 	/**
+	 * Returns when the queue last finished one of this plugin's actions.
+	 *
+	 * Section 9.4 asks the health panel to report when the queue last processed
+	 * something. "Action Scheduler is loaded" answers a different and much weaker
+	 * question: the library can be present and correctly configured while nothing
+	 * has actually run for a week, which is exactly the state a health panel
+	 * exists to reveal.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @return int|null Unix timestamp, or null when nothing has completed or the
+	 *                  queue cannot be queried.
+	 */
+	public function last_processed(): ?int {
+		if ( ! function_exists( 'as_get_scheduled_actions' ) ) {
+			return null;
+		}
+
+		$actions = as_get_scheduled_actions(
+			array(
+				'group'    => self::GROUP,
+				'status'   => 'complete',
+				'per_page' => 1,
+				'orderby'  => 'date',
+				'order'    => 'DESC',
+			)
+		);
+
+		if ( ! is_array( $actions ) || array() === $actions ) {
+			return null;
+		}
+
+		$action = reset( $actions );
+
+		if ( ! is_object( $action ) || ! method_exists( $action, 'get_schedule' ) ) {
+			return null;
+		}
+
+		$schedule = $action->get_schedule();
+
+		if ( ! is_object( $schedule ) || ! method_exists( $schedule, 'get_date' ) ) {
+			return null;
+		}
+
+		$date = $schedule->get_date();
+
+		return $date instanceof \DateTimeInterface ? $date->getTimestamp() : null;
+	}
+
+	/**
 	 * Builds the argument array identifying a prompt's actions.
 	 *
 	 * @since 0.4.0

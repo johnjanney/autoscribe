@@ -8,6 +8,7 @@
 namespace AutoScribe\Admin;
 
 use AutoScribe\Prompts\Prompt_Post_Type;
+use AutoScribe\Providers\Provider_Registry;
 
 use const AutoScribe\VERSION;
 
@@ -30,6 +31,25 @@ final class Assets {
 	 * @var string
 	 */
 	private const HANDLE = 'autoscribe-admin';
+
+	/**
+	 * Provider registry, for the grounding capability map.
+	 *
+	 * @since 1.0.1
+	 * @var Provider_Registry
+	 */
+	private Provider_Registry $providers;
+
+	/**
+	 * Builds the asset loader.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @param Provider_Registry|null $providers Provider registry, or null to build one.
+	 */
+	public function __construct( ?Provider_Registry $providers = null ) {
+		$this->providers = $providers instanceof Provider_Registry ? $providers : new Provider_Registry();
+	}
 
 	/**
 	 * Registers the enqueue hook.
@@ -61,7 +81,38 @@ final class Assets {
 
 		wp_register_script( self::HANDLE, '', array(), VERSION, true );
 		wp_enqueue_script( self::HANDLE );
+		wp_add_inline_script( self::HANDLE, $this->data(), 'before' );
 		wp_add_inline_script( self::HANDLE, $this->js() );
+	}
+
+	/**
+	 * Emits the provider capability map the grounding control reads.
+	 *
+	 * Section 7.1 requires the editor to disable grounding for a provider that
+	 * cannot do it and to say why. The answer belongs to the adapters, so it is
+	 * handed to the script rather than duplicated in JavaScript, where it would
+	 * go stale the first time a provider gained the capability.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @return string
+	 */
+	private function data(): string {
+		$search = array();
+
+		foreach ( $this->providers->text_providers() as $provider ) {
+			$search[ $provider->slug() ] = $provider->supports_web_search();
+		}
+
+		return sprintf(
+			'window.autoscribeCapabilities = %s;',
+			(string) wp_json_encode(
+				array(
+					'webSearch' => $search,
+					'noSearch'  => __( 'This provider has no web search, so grounding cannot be used with it.', 'autoscribe' ),
+				)
+			)
+		);
 	}
 
 	/**
@@ -138,6 +189,39 @@ final class Assets {
 	if ( tabs.length ) {
 		show( tabs[ 0 ].dataset.autoscribeTab );
 	}
+
+	/*
+	 * Grounding depends on the selected text provider. Disabling the control
+	 * rather than hiding it keeps the reason visible, and clearing the checkbox
+	 * means a prompt cannot be saved claiming a capability the provider does not
+	 * have. The server repeats both checks; this is the courtesy, not the guard.
+	 */
+	var caps      = window.autoscribeCapabilities || { webSearch: {}, noSearch: '' };
+	var provider  = document.getElementById( 'autoscribe-field-text_provider' );
+	var grounding = document.getElementById( 'autoscribe-field-grounding_enabled' );
+
+	if ( ! provider || ! grounding ) {
+		return;
+	}
+
+	var reason = document.createElement( 'span' );
+	reason.className = 'description';
+	reason.style.marginLeft = '0.5em';
+	grounding.parentNode.appendChild( reason );
+
+	function syncGrounding() {
+		var supported = caps.webSearch[ provider.value ] !== false;
+
+		grounding.disabled = ! supported;
+		reason.textContent = supported ? '' : caps.noSearch;
+
+		if ( ! supported ) {
+			grounding.checked = false;
+		}
+	}
+
+	provider.addEventListener( 'change', syncGrounding );
+	syncGrounding();
 }() );
 JS;
 	}

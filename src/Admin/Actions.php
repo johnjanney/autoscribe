@@ -60,6 +60,22 @@ final class Actions {
 	public const ACTION_RETRY = 'autoscribe_retry';
 
 	/**
+	 * Probes one provider's credentials from the settings screen.
+	 *
+	 * @since 1.0.1
+	 * @var string
+	 */
+	public const ACTION_TEST = 'autoscribe_test_connection';
+
+	/**
+	 * Transient holding the most recent connection-test results, keyed by user.
+	 *
+	 * @since 1.0.1
+	 * @var string
+	 */
+	public const TEST_TRANSIENT = 'autoscribe_test_';
+
+	/**
 	 * Transient holding the most recent preview, keyed by user.
 	 *
 	 * @since 0.7.0
@@ -107,6 +123,64 @@ final class Actions {
 		add_action( 'admin_post_' . self::ACTION_RUN_NOW, array( $this, 'handle_run_now' ) );
 		add_action( 'admin_post_' . self::ACTION_PREVIEW, array( $this, 'handle_preview' ) );
 		add_action( 'admin_post_' . self::ACTION_RETRY, array( $this, 'handle_retry' ) );
+		add_action( 'admin_post_' . self::ACTION_TEST, array( $this, 'handle_test_connection' ) );
+	}
+
+	/**
+	 * Runs one provider's connection test and returns to the settings screen.
+	 *
+	 * Section 9.4 requires a Test connection control per provider. The method
+	 * behind it existed but nothing called it: no hook, no button, no form. An
+	 * administrator could paste a key and had no way to find out whether it
+	 * worked short of waiting for a scheduled run to fail.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @return void
+	 */
+	public function handle_test_connection(): void {
+		$slug = isset( $_GET['provider'] ) ? sanitize_key( wp_unslash( $_GET['provider'] ) ) : '';
+
+		check_admin_referer( self::ACTION_TEST . '_' . $slug );
+
+		if ( ! current_user_can( Activation::MANAGE_CAPABILITY ) ) {
+			wp_die(
+				esc_html__( 'You are not allowed to manage AutoScribe settings.', 'autoscribe' ),
+				'',
+				array( 'response' => 403 )
+			);
+		}
+
+		set_transient(
+			self::TEST_TRANSIENT . get_current_user_id(),
+			array( $slug => $this->test_connection( $slug, Settings::default_model( $slug ) ) ),
+			MINUTE_IN_SECONDS
+		);
+
+		wp_safe_redirect( admin_url( 'admin.php?page=' . Settings_Page::SLUG ) );
+
+		exit;
+	}
+
+	/**
+	 * Builds a nonce-protected URL for a provider connection test.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @param string $slug Provider slug.
+	 * @return string
+	 */
+	public static function test_url( string $slug ): string {
+		return wp_nonce_url(
+			add_query_arg(
+				array(
+					'action'   => self::ACTION_TEST,
+					'provider' => $slug,
+				),
+				admin_url( 'admin-post.php' )
+			),
+			self::ACTION_TEST . '_' . $slug
+		);
 	}
 
 	/**
@@ -215,6 +289,10 @@ final class Actions {
 		}
 
 		$run = Run::start( $prompt_id );
+
+		if ( is_wp_error( $run ) ) {
+			return $run;
+		}
 
 		$allowed = ( new Step_Budget_Check() )->run( $prompt, $run );
 

@@ -110,9 +110,10 @@ final class Generator {
 	 *
 	 * @param int         $prompt_id       Prompt to run.
 	 * @param string|null $status_override Final post status, or null to use the prompt's mode.
+	 * @param int         $attempt         Attempt number, so the run row records the real one.
 	 * @return array<string, int|string>|WP_Error Summary of what was produced, or an error.
 	 */
-	public function run( int $prompt_id, ?string $status_override = null ): array|WP_Error {
+	public function run( int $prompt_id, ?string $status_override = null, int $attempt = 1 ): array|WP_Error {
 		$prompt = Prompt::load( $prompt_id );
 
 		if ( null === $prompt ) {
@@ -126,7 +127,14 @@ final class Generator {
 			);
 		}
 
-		$run = Run::start( $prompt_id );
+		$run = Run::start( $prompt_id, $attempt );
+
+		if ( is_wp_error( $run ) ) {
+			return $run;
+		}
+
+		$grounded = $prompt->grounding_enabled() ? 1 : 0;
+		$pricing  = new Pricing_Table();
 
 		// Section 7.4: first, and before any paid call. On a breach the run is
 		// abandoned rather than partially executed.
@@ -144,7 +152,7 @@ final class Generator {
 
 		if ( is_wp_error( $topic ) ) {
 			if ( 'autoscribe_duplicate_topic' !== $topic->get_error_code() ) {
-				$run->fail( $topic->get_error_message() );
+				$run->fail( $topic->get_error_message(), $pricing, $grounded );
 			}
 
 			return $topic;
@@ -155,17 +163,28 @@ final class Generator {
 		$article = $this->body_step->run( $prompt, $run, $topic );
 
 		if ( is_wp_error( $article ) ) {
-			$run->fail( $article->get_error_message() );
+			$run->fail( $article->get_error_message(), $pricing, $grounded );
 
 			return $article;
 		}
 
 		$run->record_step( 'generate_body' );
 
+		/*
+		 * A previous attempt may have got as far as a draft before failing. Bind
+		 * it to this run so assembly updates that draft instead of adding a
+		 * second one for the same prompt.
+		 */
+		$inherited = Run::adoptable_draft( $prompt_id, $run->id() );
+
+		if ( null !== $inherited ) {
+			$run->record_post( $inherited );
+		}
+
 		$post_id = $this->assemble_step->run( $prompt, $article, $run );
 
 		if ( is_wp_error( $post_id ) ) {
-			$run->fail( $post_id->get_error_message() );
+			$run->fail( $post_id->get_error_message(), $pricing, $grounded );
 
 			return $post_id;
 		}
@@ -175,7 +194,7 @@ final class Generator {
 		$attachment_id = $this->attach_image( $prompt, $article, $run, $post_id );
 
 		if ( is_wp_error( $attachment_id ) ) {
-			$run->fail( $attachment_id->get_error_message() );
+			$run->fail( $attachment_id->get_error_message(), $pricing, $grounded );
 
 			return $attachment_id;
 		}
@@ -184,20 +203,37 @@ final class Generator {
 
 		$status = $this->final_status( $prompt, $status_override );
 
+		/*
+		 * A refused status transition used to pass unnoticed, and the run then
+		 * reported success for a post still sitting in draft. Section 10 makes
+		 * the difference between draft and published the whole safety model, so
+		 * the failure is surfaced rather than swallowed.
+		 */
 		if ( 'draft' !== $status ) {
-			wp_update_post(
+			$updated = wp_update_post(
 				array(
 					'ID'          => $post_id,
 					'post_status' => $status,
-				)
+				),
+				true
 			);
+
+			if ( is_wp_error( $updated ) ) {
+				$run->fail( $updated->get_error_message(), $pricing, $grounded );
+
+				return $updated;
+			}
 		}
 
 		// Section 7.4: replace the reservation with what the run actually cost,
 		// now that the providers have reported their usage.
-		$cost = $run->settle_cost( new Pricing_Table(), $prompt->grounding_enabled() ? 1 : 0 );
+		$cost = $run->settle_cost( $pricing, $grounded );
 
 		$run->succeed();
+
+		if ( 'draft' === $status ) {
+			$this->send_review_notice( $article, $post_id );
+		}
 
 		if ( $this->budget_step->guard()->should_send_warning() ) {
 			$this->send_budget_warning();
@@ -209,6 +245,83 @@ final class Generator {
 			'attachment_id' => (int) $attachment_id,
 			'status'        => $status,
 			'cost_cents'    => $cost,
+		);
+	}
+
+	/**
+	 * Tells the notification address that a draft is waiting for review.
+	 *
+	 * Section 10 requires this for every review-mode draft, with the title, the
+	 * opening of the article, and a direct edit link. Without it review mode is
+	 * a queue nobody is told about, which is the failure that leads people to
+	 * turn review off and publish unread.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @param Article $article Validated article.
+	 * @param int     $post_id Draft post ID.
+	 * @return void
+	 */
+	private function send_review_notice( Article $article, int $post_id ): void {
+		$address = Settings::notification_email();
+
+		if ( '' === $address ) {
+			return;
+		}
+
+		$opening = trim( wp_strip_all_tags( $article->raw_content_html() ) );
+
+		wp_mail(
+			$address,
+			sprintf(
+				/* translators: %s: article title. */
+				__( 'AutoScribe draft ready for review: %s', 'autoscribe' ),
+				$article->title()
+			),
+			sprintf(
+				/* translators: 1: article title, 2: opening of the article, 3: edit URL. */
+				__( "AutoScribe generated a draft and held it for review.\n\n%1\$s\n\n%2\$s\n\nReview and publish it here:\n%3\$s", 'autoscribe' ),
+				$article->title(),
+				mb_substr( $opening, 0, 200 ),
+				(string) get_edit_post_link( $post_id, 'raw' )
+			)
+		);
+	}
+
+	/**
+	 * Tells the notification address that a run failed for good.
+	 *
+	 * Section 5 asks for one notification after the attempts are exhausted, not
+	 * one per attempt, so this is called by the queue handler once it has decided
+	 * there will be no further try.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @param int      $prompt_id Prompt that failed.
+	 * @param WP_Error $error     The final failure.
+	 * @return void
+	 */
+	public static function send_failure_notice( int $prompt_id, WP_Error $error ): void {
+		$address = Settings::notification_email();
+
+		if ( '' === $address ) {
+			return;
+		}
+
+		wp_mail(
+			$address,
+			sprintf(
+				/* translators: %s: prompt title. */
+				__( 'AutoScribe run failed: %s', 'autoscribe' ),
+				get_the_title( $prompt_id )
+			),
+			sprintf(
+				/* translators: 1: prompt title, 2: error message, 3: edit URL. */
+				__( "An AutoScribe prompt failed and will not be retried.\n\nPrompt: %1\$s\nReason: %2\$s\n\nThe run log has the detail. The prompt is here:\n%3\$s", 'autoscribe' ),
+				get_the_title( $prompt_id ),
+				$error->get_error_message(),
+				(string) get_edit_post_link( $prompt_id, 'raw' )
+			)
 		);
 	}
 

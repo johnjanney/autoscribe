@@ -131,6 +131,16 @@ final class Prompt_Meta_BoxTest extends WP_UnitTestCase {
 			}
 		}
 
+		/*
+		 * Every select takes its last choice, which for text_provider is DeepSeek
+		 * — the one provider with no web search. Grounding is refused for that
+		 * combination on save, so the round trip would fail on a field that is
+		 * behaving correctly. Pinned to a provider that can ground instead;
+		 * test_grounding_is_refused_for_a_provider_without_search covers the
+		 * refusal on its own.
+		 */
+		$values['text_provider'] = 'anthropic';
+
 		return $values;
 	}
 
@@ -201,6 +211,62 @@ final class Prompt_Meta_BoxTest extends WP_UnitTestCase {
 
 			$this->assertSame( (string) $expected, (string) $stored, $key . ' did not round trip' );
 		}
+	}
+
+	/**
+	 * Grounding cannot be saved against a provider that has no web search.
+	 *
+	 * Section 7.1 forbids saving a configuration that cannot run. The editor
+	 * disables the control, but the control is a courtesy: this save path is also
+	 * reached by the REST API, by WP-CLI, and by an imported prompt, none of
+	 * which ever see it.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @return void
+	 */
+	public function test_grounding_is_refused_for_a_provider_without_search(): void {
+		$prompt_id = $this->create_prompt();
+
+		$_POST = array(
+			Prompt_Meta_Box::NONCE_NAME => wp_create_nonce( 'autoscribe_save_prompt_' . $prompt_id ),
+			Prompt_Fields::INPUT_NAME   => array(
+				'text_provider'     => 'deepseek',
+				'grounding_enabled' => '1',
+			),
+		);
+
+		( new Prompt_Meta_Box() )->save( $prompt_id );
+
+		$this->assertFalse(
+			(bool) get_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'grounding_enabled', true ),
+			'DeepSeek has no web search, so grounding must not survive the save'
+		);
+	}
+
+	/**
+	 * Grounding is kept for a provider that does have web search.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @return void
+	 */
+	public function test_grounding_is_kept_for_a_provider_with_search(): void {
+		$prompt_id = $this->create_prompt();
+
+		$_POST = array(
+			Prompt_Meta_Box::NONCE_NAME => wp_create_nonce( 'autoscribe_save_prompt_' . $prompt_id ),
+			Prompt_Fields::INPUT_NAME   => array(
+				'text_provider'     => 'anthropic',
+				'grounding_enabled' => '1',
+			),
+		);
+
+		( new Prompt_Meta_Box() )->save( $prompt_id );
+
+		$this->assertTrue(
+			(bool) get_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'grounding_enabled', true )
+		);
 	}
 
 	/**

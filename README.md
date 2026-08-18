@@ -107,10 +107,11 @@ configured to use.
 | Google | `https://generativelanguage.googleapis.com/v1beta/interactions`<br>`https://generativelanguage.googleapis.com/v1beta/models/{model}` |
 | DeepSeek | `https://api.deepseek.com/chat/completions`<br>`https://api.deepseek.com/models` |
 
-The `models` endpoints are read-only capability checks. They confirm that the
-model ID a prompt is configured with still exists before a paid generation call
-is made, so that a model retirement surfaces as a clear error rather than a
-failed run. They send no site content.
+The `models` endpoints are read-only capability checks. An administrator
+contacts them by pressing "Test connection" on the Settings screen. They confirm
+that the model ID still exists, so that a retirement surfaces as a clear message
+on that screen. They send no site content, and they are not contacted during a
+generation run — a run does not preflight its model.
 
 **Sent on a generation call:**
 
@@ -190,12 +191,26 @@ way to tell it apart from the rest of the site.
 
 ## Status and known limitations
 
-Version 1.0.0. Everything in the project brief is implemented and covered by
-tests. 185 tests run against PHP 8.1, 8.2, and 8.3 on every push.
+Version 1.0.1, a release candidate rather than a settled stable release. Almost
+everything in the project brief is implemented and covered by tests, but one
+requirement is knowingly not met — the first item below. 200 tests run against
+PHP 8.1, 8.2, and 8.3 on every push.
 
-None of these are blocking, but they are real:
+The first two items are the ones to read before enabling unattended publishing.
+The rest are real but minor:
 
-- The Settings screen's save path and the "Test connection" control have no
+- **The generation pipeline runs as one Action Scheduler action, not one action
+  per step as section 5 of the brief requires.** A run takes 30 to 120 seconds
+  inside a single PHP request, so a host with a short `max_execution_time` can
+  terminate it part-way, and the queue cannot resume from the step that was
+  interrupted — a retry re-runs from the beginning. A draft left behind by a
+  failed run is adopted by the retry rather than duplicated, so this costs you
+  repeated provider calls, not repeated posts.
+- **The monthly budget cap is enforced by reservation and re-check, not by a
+  lock.** The worst-case overshoot is one run's estimated cost, because a run
+  already past the check cannot be recalled. Your provider's own spending limit
+  is the only hard ceiling; treat this cap as a brake, not a wall.
+- The Settings screen's save path and its connection-test controls have no
   automated coverage. The prompt editor's save path does.
 - The "Next run" readout in the prompt editor reflects the *saved* schedule. It
   does not update as you change the schedule controls — save to see the effect.
@@ -205,6 +220,7 @@ None of these are blocking, but they are real:
   during development; nothing guards against the reverse.
 - Spend figures are estimates computed from reported token usage against a
   pricing table you maintain. They are not billing data.
+- There is no screenshot in this README yet, which the brief asks for.
 
 ---
 

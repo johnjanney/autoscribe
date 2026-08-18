@@ -97,6 +97,69 @@ final class GoogleTest extends Provider_Test_Case {
 	}
 
 	/**
+	 * Structured output goes in a top-level response_format object.
+	 *
+	 * The Interactions API removed generateContent's
+	 * generation_config.response_mime_type and response_schema pair. The adapter
+	 * sent that pair for the first release and nothing noticed, because no test
+	 * asserted anything about the structured-output fields at all — which is the
+	 * gap this test exists to close, as much as the shape itself.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @return void
+	 */
+	public function test_structured_output_uses_top_level_response_format(): void {
+		$this->mock_json(
+			200,
+			array(
+				'model' => 'gemini-3.7-flash',
+				'steps' => array(
+					array(
+						'type'    => 'model_output',
+						'content' => array(
+							array(
+								'type' => 'text',
+								'text' => '{"title":"A"}',
+							),
+						),
+					),
+				),
+				'usage' => array(
+					'total_input_tokens'  => 1,
+					'total_output_tokens' => 1,
+				),
+			)
+		);
+
+		$schema = array(
+			'type'       => 'object',
+			'properties' => array( 'title' => array( 'type' => 'string' ) ),
+			'required'   => array( 'title' ),
+		);
+
+		( new Google() )->generate(
+			'goog-test',
+			'gemini-3.7-flash',
+			new Generation_Request( 'system', 'user', 512, $schema )
+		);
+
+		$body = $this->captured_body();
+
+		$this->assertArrayHasKey( 'response_format', $body );
+		$this->assertSame( 'text', $body['response_format']['type'] );
+		$this->assertSame( 'application/json', $body['response_format']['mime_type'] );
+		$this->assertSame( $schema, $body['response_format']['schema'] );
+
+		$this->assertArrayNotHasKey(
+			'response_mime_type',
+			$body['generation_config'],
+			'response_mime_type was removed from this API and must not be sent'
+		);
+		$this->assertArrayNotHasKey( 'response_schema', $body['generation_config'] );
+	}
+
+	/**
 	 * Schema and grounding are not advertised as usable together.
 	 *
 	 * @since 0.2.0

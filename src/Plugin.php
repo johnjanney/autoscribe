@@ -163,10 +163,10 @@ final class Plugin {
 	 * @return void
 	 */
 	private function boot_admin(): void {
-		( new Prompt_Meta_Box() )->register();
+		( new Prompt_Meta_Box( $this->providers ) )->register();
 		( new Menu( $this->providers, $this->scheduler ) )->register();
 		( new Actions( $this->providers, $this->scheduler ) )->register();
-		( new Assets() )->register();
+		( new Assets( $this->providers ) )->register();
 	}
 
 	/**

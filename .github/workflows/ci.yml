@@ -37,11 +37,16 @@ jobs:
           --health-retries=20
 
     steps:
+      # Third-party actions are pinned to a full commit SHA rather than a moving
+      # major-version tag. A tag can be repointed by whoever owns the action, so
+      # `@v5` is a promise about intent, not about the code that will run here.
+      # The trailing comment records which release each SHA is, so an update is a
+      # reviewable diff rather than an opaque hash change.
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Set up PHP ${{ matrix.php }}
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: ${{ matrix.php }}
           extensions: mysqli, curl, zip, sodium, mbstring, xml, intl

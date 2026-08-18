@@ -9,6 +9,7 @@ namespace AutoScribe\Pipeline;
 
 use AutoScribe\Content\Article;
 use AutoScribe\Prompts\Prompt;
+use AutoScribe\Providers\Model_Resolver;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Providers\Response\Image_Result;
 use AutoScribe\Security\Key_Store;
@@ -77,7 +78,7 @@ final class Step_Generate_Image {
 			return $api_key;
 		}
 
-		$model = '' !== $prompt->image_model() ? $prompt->image_model() : ( $provider->suggested_models()[0] ?? '' );
+		$model = Model_Resolver::resolve( $prompt->image_model(), $slug, $provider->suggested_models() );
 
 		if ( '' === $model ) {
 			return new WP_Error(

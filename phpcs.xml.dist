@@ -78,6 +78,13 @@
 		still there. That is the assertion, and there is no wrapper for it.
 		-->
 		<exclude-pattern>*/tests/UninstallTest.php</exclude-pattern>
+		<!--
+		The cost accounting tests read the run row back to assert what was written
+		to it. Run exposes no getter for cost_cents or the token columns, and
+		adding one purely so a test can avoid a direct read would put production
+		API in the plugin to serve the test suite.
+		-->
+		<exclude-pattern>*/tests/Pipeline/Cost_AccountingTest.php</exclude-pattern>
 	</rule>
 
 	<!--

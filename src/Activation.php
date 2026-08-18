@@ -36,7 +36,7 @@ final class Activation {
 	 * @since 0.1.0
 	 * @var string
 	 */
-	public const DB_VERSION = '1';
+	public const DB_VERSION = '2';
 
 	/**
 	 * Capability gating the settings screens.
@@ -166,6 +166,17 @@ final class Activation {
 		$table_name      = self::table_name();
 		$charset_collate = $wpdb->get_charset_collate();
 
+		/*
+		 * started_at carries an index of its own as well as being the second
+		 * column of prompt_started. Site-wide spend is summed by month across
+		 * every prompt, so it filters on started_at alone, and a composite index
+		 * cannot serve a query that does not constrain its leading column. That
+		 * left the monthly total scanning the whole table — unnoticeable on a new
+		 * site, and steadily less so on one generating daily for a year.
+		 *
+		 * dbDelta parses this string with its own regexes, so it stays free of
+		 * SQL comments and keeps one definition per line.
+		 */
 		$sql = "CREATE TABLE {$table_name} (
 			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 			prompt_id bigint(20) unsigned NOT NULL,
@@ -188,7 +199,8 @@ final class Activation {
 			PRIMARY KEY  (id),
 			KEY prompt_started (prompt_id, started_at),
 			KEY status_idx (status),
-			KEY topic_key_idx (topic_key)
+			KEY topic_key_idx (topic_key),
+			KEY started_at_idx (started_at)
 		) {$charset_collate};";
 
 		dbDelta( $sql );

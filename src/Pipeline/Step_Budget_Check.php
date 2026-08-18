@@ -69,6 +69,23 @@ final class Step_Budget_Check {
 		// Reserve before any paid call so concurrent runs can see this one.
 		$run->reserve_cost( $estimate );
 
+		/*
+		 * Reading the total and writing the reservation are two statements, and a
+		 * concurrent worker can read between them. Confirming afterwards, counting
+		 * only rows up to this one, resolves that race in row order: whichever run
+		 * reserved first proceeds and the other stands down. Releasing the
+		 * reservation before skipping keeps the row from holding budget it will
+		 * never spend.
+		 */
+		$confirmed = $this->guard->confirm_reservation( $prompt, $run->id() );
+
+		if ( is_wp_error( $confirmed ) ) {
+			$run->reserve_cost( 0 );
+			$run->skip( Run::STATUS_SKIPPED_BUDGET, $confirmed->get_error_message() );
+
+			return $confirmed;
+		}
+
 		return true;
 	}
 

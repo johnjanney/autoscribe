@@ -9,6 +9,7 @@ namespace AutoScribe\Cost;
 
 use AutoScribe\Activation;
 use AutoScribe\Prompts\Prompt;
+use AutoScribe\Providers\Model_Resolver;
 use DateTimeImmutable;
 use DateTimeZone;
 use WP_Error;
@@ -65,6 +66,32 @@ final class Budget_Guard {
 	public const WARNING_FRACTION = 0.8;
 
 	/**
+	 * Output token ceiling assumed for one topic proposal call.
+	 *
+	 * Matches the ceiling Step_Propose_Topic actually requests.
+	 *
+	 * @since 1.0.1
+	 * @var int
+	 */
+	public const PROPOSAL_OUTPUT_ALLOWANCE = 512;
+
+	/**
+	 * Input token allowance assumed for one topic proposal call.
+	 *
+	 * @since 1.0.1
+	 * @var int
+	 */
+	public const PROPOSAL_INPUT_ALLOWANCE = 2000;
+
+	/**
+	 * Input token allowance assumed for one body call.
+	 *
+	 * @since 1.0.1
+	 * @var int
+	 */
+	public const BODY_INPUT_ALLOWANCE = 2000;
+
+	/**
 	 * Pricing table.
 	 *
 	 * @since 0.5.0
@@ -97,15 +124,21 @@ final class Budget_Guard {
 	/**
 	 * Returns month-to-date spend in cents.
 	 *
-	 * Skipped runs are excluded: they cost nothing, and counting them would let
-	 * a run that was blocked for being over budget push the total further over.
+	 * Every status counts. Skipped runs used to be excluded on the reasoning that
+	 * they cost nothing, which is true of a budget skip — it stops before any
+	 * paid call and settles to zero — but false of a duplicate skip, which has
+	 * already paid for one or two proposal calls. Excluding the row hid that
+	 * money from the cap, so a prompt stuck proposing repeats could spend
+	 * indefinitely while the reported total stood still. Rows now carry their
+	 * real settled cost, so summing all of them is both simpler and correct.
 	 *
 	 * @since 0.5.0
 	 *
-	 * @param int|null $prompt_id Restrict to one prompt, or null for the whole site.
+	 * @param int|null $prompt_id  Restrict to one prompt, or null for the whole site.
+	 * @param int      $max_run_id Only count runs up to this row ID, or 0 for all.
 	 * @return int
 	 */
-	public function month_to_date_cents( ?int $prompt_id = null ): int {
+	public function month_to_date_cents( ?int $prompt_id = null, int $max_run_id = 0 ): int {
 		global $wpdb;
 
 		$bounds = $this->month_bounds_utc();
@@ -113,34 +146,71 @@ final class Budget_Guard {
 
 		// %i is an identifier placeholder, supported since WordPress 6.2. A table
 		// name cannot be passed as %s because that would quote it as a string.
-		if ( null === $prompt_id ) {
-			$total = $wpdb->get_var(
-				$wpdb->prepare(
-					'SELECT SUM(cost_cents) FROM %i WHERE started_at >= %s AND started_at < %s AND status NOT IN (%s, %s)',
-					$table,
-					$bounds['start'],
-					$bounds['end'],
-					'skipped_budget',
-					'skipped_duplicate'
-				)
-			);
-
-			return (int) $total;
-		}
-
 		$total = $wpdb->get_var(
 			$wpdb->prepare(
-				'SELECT SUM(cost_cents) FROM %i WHERE prompt_id = %d AND started_at >= %s AND started_at < %s AND status NOT IN (%s, %s)',
+				'SELECT SUM(cost_cents) FROM %i
+				WHERE ( %d = 0 OR prompt_id = %d )
+					AND ( %d = 0 OR id <= %d )
+					AND started_at >= %s AND started_at < %s',
 				$table,
-				$prompt_id,
+				(int) $prompt_id,
+				(int) $prompt_id,
+				$max_run_id,
+				$max_run_id,
 				$bounds['start'],
-				$bounds['end'],
-				'skipped_budget',
-				'skipped_duplicate'
+				$bounds['end']
 			)
 		);
 
 		return (int) $total;
+	}
+
+	/**
+	 * Re-checks the caps once this run's reservation is on the table.
+	 *
+	 * The check() method reads the month total and returns; the caller then
+	 * writes its reservation. Between those two statements a concurrent worker reads the
+	 * same total, so both pass and both spend. Action Scheduler runs a batch of
+	 * actions at once, which makes that window ordinary rather than theoretical.
+	 *
+	 * This second pass closes it without a lock or a transaction. It counts only
+	 * rows up to and including this run's own ID, so two runs that reserved
+	 * concurrently reach different answers: the earlier row sees only itself and
+	 * proceeds, the later row sees both and stands down. The ordering is total
+	 * and comes from the database's own auto-increment, so there is no tie.
+	 *
+	 * The remaining overshoot bound is one run's estimate: a run already past
+	 * this point cannot be recalled. No client-side cap can do better, and none
+	 * replaces a provider-side spending limit.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @param Prompt $prompt Prompt about to run.
+	 * @param int    $run_id Row ID of this run's reservation.
+	 * @return true|WP_Error True when the run may proceed.
+	 */
+	public function confirm_reservation( Prompt $prompt, int $run_id ): bool|WP_Error {
+		$prompt_cap = $prompt->monthly_budget_cents();
+
+		if ( $prompt_cap > 0 ) {
+			$prompt_total = $this->month_to_date_cents( $prompt->id(), $run_id );
+
+			if ( $prompt_total > $prompt_cap ) {
+				return $this->over_budget( $prompt_total, $prompt_cap, true );
+			}
+		}
+
+		$global_cap = $this->global_cap_cents();
+
+		if ( $global_cap > 0 ) {
+			$global_total = $this->month_to_date_cents( null, $run_id );
+
+			if ( $global_total > $global_cap ) {
+				return $this->over_budget( $global_total, $global_cap, false );
+			}
+		}
+
+		return true;
 	}
 
 	/**
@@ -214,9 +284,18 @@ final class Budget_Guard {
 	/**
 	 * Estimates what a run will cost before it happens.
 	 *
-	 * The estimate is deliberately generous: the token ceiling rather than the
-	 * likely usage, both calls the pipeline makes, and the image. Under-
-	 * estimating would let a run slip past a cap it was going to breach.
+	 * The estimate has to bound the worst case, not the likely one: under-
+	 * estimating lets a run slip past a cap it was going to breach. The previous
+	 * version priced a single body call, while the pipeline can make four paid
+	 * text calls — two topic proposals when the first collides, then the body and
+	 * its one repair — so a run could cost roughly twice what was reserved for it.
+	 *
+	 * Every call the pipeline can make is now counted:
+	 *
+	 * - two proposal calls, at the 512-token ceiling section 7.2's cheap call uses;
+	 * - the body call, at the same token ceiling the body step requests;
+	 * - one repair call, whose prompt also carries the rejected response back;
+	 * - one image, and one grounded request.
 	 *
 	 * @since 0.5.0
 	 *
@@ -224,16 +303,21 @@ final class Budget_Guard {
 	 * @return int
 	 */
 	public function estimate_cents( Prompt $prompt ): int {
-		$output_tokens = max( 1024, $prompt->target_word_count() * 3 );
-		$input_tokens  = 2000;
-		$images        = 'none' === $prompt->image_mode() ? 0 : 1;
-		$grounded      = $prompt->grounding_enabled() ? 1 : 0;
+		$body_output = max( 1024, $prompt->target_word_count() * 3 );
+
+		// Two proposals, the body, and one repair. The repair prompt quotes the
+		// failed response back, so its input allowance is the larger one.
+		$input_tokens  = ( 2 * self::PROPOSAL_INPUT_ALLOWANCE ) + self::BODY_INPUT_ALLOWANCE + ( 2 * self::BODY_INPUT_ALLOWANCE );
+		$output_tokens = ( 2 * self::PROPOSAL_OUTPUT_ALLOWANCE ) + ( 2 * $body_output );
+
+		$images   = 'none' === $prompt->image_mode() ? 0 : 1;
+		$grounded = $prompt->grounding_enabled() ? 1 : 0;
 
 		return $this->pricing->cost_cents(
-			$prompt->text_model(),
+			Model_Resolver::resolve( $prompt->text_model(), $prompt->text_provider() ),
 			$input_tokens,
 			$output_tokens,
-			$prompt->image_model(),
+			Model_Resolver::resolve( $prompt->image_model(), $prompt->image_provider() ),
 			$images,
 			$grounded
 		);

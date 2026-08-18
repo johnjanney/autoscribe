@@ -75,6 +75,39 @@ final class Retry_PolicyTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Outcomes that cost money to repeat are never retried.
+	 *
+	 * These three used to fall through to the transient branch. A duplicate topic
+	 * paid for two more proposals per retry; an exhausted validation repair paid
+	 * for two more full calls, turning section 5.1's documented one-repair limit
+	 * into six paid calls; and a budget breach re-ran a check whose answer only
+	 * ever moves one way within a month.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @return void
+	 */
+	public function test_paid_outcomes_are_not_retried(): void {
+		$codes = array(
+			'autoscribe_duplicate_topic',
+			'autoscribe_budget_exceeded',
+			'autoscribe_invalid_json',
+			'autoscribe_missing_fields',
+			'autoscribe_wrong_types',
+			'autoscribe_empty_fields',
+			'autoscribe_empty_payload',
+			'autoscribe_grounding_unsupported',
+		);
+
+		foreach ( $codes as $code ) {
+			$this->assertFalse(
+				$this->policy->should_retry( new WP_Error( $code, 'x' ), 1 ),
+				$code . ' must not be retried'
+			);
+		}
+	}
+
+	/**
 	 * Attempts stop at the section 5 cap of three.
 	 *
 	 * @since 0.4.0

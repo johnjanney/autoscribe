@@ -61,6 +61,28 @@ final class Retry_Policy {
 		'autoscribe_empty_body',
 		'autoscribe_invalid_schedule_parameter',
 		'autoscribe_invalid_schedule_type',
+		'autoscribe_grounding_unsupported',
+		'autoscribe_run_not_recorded',
+
+		/*
+		 * These three are outcomes, not faults, and retrying each one costs money
+		 * to reach the same answer.
+		 *
+		 * A duplicate topic has already paid for the two proposal calls section
+		 * 7.2 allows; a queue retry pays for two more and the topic is no less
+		 * covered than it was. A budget breach will still be a breach in five
+		 * minutes, because the total only ever climbs within a month. And a body
+		 * that fails validation has already had the single repair section 5.1
+		 * permits — letting the queue retry it twice more turns a documented
+		 * one-repair limit into six paid calls.
+		 */
+		'autoscribe_duplicate_topic',
+		'autoscribe_budget_exceeded',
+		'autoscribe_empty_payload',
+		'autoscribe_invalid_json',
+		'autoscribe_missing_fields',
+		'autoscribe_wrong_types',
+		'autoscribe_empty_fields',
 	);
 
 	/**

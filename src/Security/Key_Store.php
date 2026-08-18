@@ -191,6 +191,13 @@ final class Key_Store {
 			);
 		}
 
+		if ( ! self::salts_are_usable() ) {
+			return new WP_Error(
+				'autoscribe_salts_missing',
+				__( 'This site does not define usable AUTH_KEY and SECURE_AUTH_KEY values, so the encryption key would be predictable and storing an API key here would give no protection at all. Set the provider key as a wp-config.php constant, or generate fresh WordPress salts first.', 'autoscribe' )
+			);
+		}
+
 		$nonce = random_bytes( SODIUM_CRYPTO_SECRETBOX_NONCEBYTES );
 
 		$keys          = self::all_records();
@@ -297,5 +304,37 @@ final class Key_Store {
 		$secure = defined( 'SECURE_AUTH_KEY' ) ? (string) constant( 'SECURE_AUTH_KEY' ) : '';
 
 		return $auth . '|' . $secure;
+	}
+
+	/**
+	 * Whether the salts the encryption key derives from are real secrets.
+	 *
+	 * A normal WordPress install defines both. An incomplete, damaged, or
+	 * hand-assembled one may not, and the derivation used to accept that
+	 * silently: with both constants absent every such site derived its key from
+	 * the string "|", so a stolen database dump was enough to read every stored
+	 * provider key without knowing anything about the site.
+	 *
+	 * The placeholder wp-config.php ships with counts as absent. It is published
+	 * in the WordPress source, so it is not a secret in any sense.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @return bool
+	 */
+	public static function salts_are_usable(): bool {
+		foreach ( array( 'AUTH_KEY', 'SECURE_AUTH_KEY' ) as $constant ) {
+			if ( ! defined( $constant ) ) {
+				return false;
+			}
+
+			$value = trim( (string) constant( $constant ) );
+
+			if ( '' === $value || 'put your unique phrase here' === strtolower( $value ) ) {
+				return false;
+			}
+		}
+
+		return true;
 	}
 }

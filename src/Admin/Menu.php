@@ -12,6 +12,7 @@ use AutoScribe\Pipeline\Step_Assemble_Post;
 use AutoScribe\Prompts\Prompt_Post_Type;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Scheduling\Scheduler;
+use WP_Query;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -170,27 +171,32 @@ final class Menu {
 	 */
 	private function render_pending_drafts_notice(): void {
 		/*
-		 * Drafts are fetched and then filtered in PHP rather than through a
-		 * meta_query. A meta comparison here is an unindexed join against
-		 * postmeta on every admin page load, and the recent-drafts window is
-		 * small enough that reading the meta for each is cheaper.
+		 * Counted through a meta_query rather than by reading 100 recent drafts
+		 * and filtering in PHP. The old approach was cheaper per query but wrong:
+		 * it silently stopped counting at 100, and the sites most in need of this
+		 * notice are precisely the ones that have let more than 100 generated
+		 * drafts pile up. The comparison is EXISTS against an indexed meta_key,
+		 * and only the count is fetched, so no post rows are hydrated.
 		 */
-		$drafts = get_posts(
+		$query = new WP_Query(
 			array(
-				'post_type'      => array( 'post', 'page' ),
-				'post_status'    => 'draft',
-				'posts_per_page' => 100,
-				'fields'         => 'ids',
+				'post_type'              => array( 'post', 'page' ),
+				'post_status'            => 'draft',
+				'posts_per_page'         => 1,
+				'fields'                 => 'ids',
+				'ignore_sticky_posts'    => true,
+				'update_post_meta_cache' => false,
+				'update_post_term_cache' => false,
+				'meta_query'             => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- EXISTS on an indexed meta_key, counting only.
+					array(
+						'key'     => Step_Assemble_Post::RUN_ID_META,
+						'compare' => 'EXISTS',
+					),
+				),
 			)
 		);
 
-		$count = 0;
-
-		foreach ( $drafts as $draft_id ) {
-			if ( '' !== (string) get_post_meta( (int) $draft_id, Step_Assemble_Post::RUN_ID_META, true ) ) {
-				++$count;
-			}
-		}
+		$count = (int) $query->found_posts;
 
 		if ( 0 === $count ) {
 			return;

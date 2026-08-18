@@ -87,7 +87,104 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-17
+
+An external audit of the 1.0.0 release found defects in cost accounting, retry
+behaviour, one provider contract, and several admin features that existed in
+code but had no reachable path. This release fixes them and corrects the release
+documentation, which claimed completeness the code did not have.
+
+### Fixed
+
+- **Google structured output used the wrong request contract.** The adapter sent
+  `generation_config.response_mime_type` and `response_schema`, which the
+  Interactions API removed when it replaced `generateContent`. Structured output
+  now goes in a top-level `response_format` object. Every Google topic proposal
+  requests a schema, so this affected every Google run.
+- **Token usage was overwritten rather than accumulated.** The body call erased
+  the proposal call's tokens, so the settled cost omitted every proposal a run
+  had paid for.
+- **A duplicate-topic skip recorded a cost of zero** despite having paid for one
+  or two proposal calls, and skipped runs were excluded from the monthly total
+  entirely. A prompt stuck proposing repeats could spend without the reported
+  total moving. Skips now settle to what they really spent, and every status
+  counts towards the cap.
+- **A failed run kept its full estimated reservation.** A run that fell over on
+  its first provider call still counted a whole article and image against the
+  cap. Failures now settle from measured usage.
+- **The preflight estimate priced one body call** while the pipeline can make
+  four paid text calls — two proposals, the body, and one repair. It now bounds
+  all of them.
+- **The cap could be exceeded by concurrent workers.** Reading the month total
+  and writing the reservation are separate statements, and Action Scheduler runs
+  actions in batches. A second pass now counts only rows up to the reserving run,
+  so concurrent runs resolve in row order rather than all passing.
+- **Duplicate topics, budget breaches, and exhausted validation repairs were
+  retried.** Each retry re-ran the paid work to reach the same answer, turning
+  the documented one-repair limit into six paid calls. All three are now
+  permanent.
+- **A retry after an image failure created a second draft.** The retry now adopts
+  the draft left by the previous attempt and updates it.
+- **Run rows always recorded `attempt = 1`,** so the Run Log's attempt column
+  never showed the real retry number.
+- **A failed run-row insert produced a `Run` with ID 0,** which then silently
+  discarded every subsequent write, including the budget reservation.
+- **A refused `wp_update_post()` on the final publish transition passed
+  unnoticed,** so a run reported success for a post still sitting in draft.
+- **Grounding could be saved for a provider that has none.** DeepSeek has no web
+  search; the prompt editor now disables the control and explains why, the save
+  path refuses it, and a run that reaches the body step with an impossible
+  configuration fails rather than quietly generating an ungrounded article.
+- **Site default models were saved and ignored.** Generation read the prompt
+  field and then fell straight through to the adapter's first hard-coded
+  suggestion. Resolution is now prompt, then site default, then suggestion.
+- **The "Test connection" control did not exist.** The method behind it had no
+  hook, button, or form. It is now a per-provider button on the Settings screen.
+- **The Preview control generated an article, charged it against the budget, and
+  never displayed it.** The result is now rendered in the prompt editor, through
+  the same sanitiser the pipeline applies before inserting a post.
+- **A key that could not be stored was discarded silently.** The Settings screen
+  now reports the failure instead of showing "Settings saved".
+- **The pending-draft notice stopped counting at 100 drafts,** understating the
+  backlog on exactly the sites most in need of the warning.
+
+### Added
+
+- Email notification when a draft is held for review, and one notification after
+  a run's retries are exhausted. Section 10 required both; only the 80-percent
+  budget warning existed.
+- Response size limits on provider calls, and byte, pixel, and file-type checks
+  on generated images. A faulty or hostile response could previously exhaust
+  memory, disk, or image-processing time. Uploads are removed if the attachment
+  fails to insert.
+- An explicit untrusted-data block around the post titles and topic keys sent in
+  the topic proposal call. Anyone who can author a post can write a title, which
+  is a wider group than those allowed to manage prompts.
+- Database key storage is refused when `AUTH_KEY` or `SECURE_AUTH_KEY` is absent
+  or still a placeholder. Every such site derived the same encryption key from
+  the string `"|"`, so a database dump was enough to read the stored keys. The
+  health panel reports the condition.
+- A "Queue last processed" row in the health panel. "Action Scheduler is loaded"
+  is true of a queue that has not run for a week.
+- An index on `runs.started_at`, which site-wide monthly spend filters on alone.
+
+### Changed
+
+- CI pins third-party GitHub Actions to full commit SHAs rather than moving
+  major-version tags.
+- The README no longer claims every brief requirement is implemented, and states
+  the single-action pipeline, the cap's overshoot bound, and the missing
+  screenshot as known deviations.
+- The grounding warning in INSTRUCTIONS.md no longer claims the plugin wraps
+  retrieved web content in delimiters. Search runs on the provider's
+  infrastructure and the plugin never sees that text before the model does.
+
 ## [1.0.0] - 2026-08-17
+
+> **Corrected by 1.0.1.** The completeness claim below was not accurate. An
+> audit found that the pipeline does not use one queue action per step, several
+> admin controls had no reachable path, and the cost cap did not hold. See the
+> 1.0.1 entry. This entry is left as written for the record.
 
 First stable release. Every section of the project brief is implemented: the
 four text providers and two image providers, the six schedule types, the

@@ -11,6 +11,8 @@ use AutoScribe\Activation;
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Prompts\Prompt_Fields;
 use AutoScribe\Prompts\Prompt_Post_Type;
+use AutoScribe\Providers\Provider_Registry;
+use AutoScribe\Security\Content_Sanitizer;
 use WP_Post;
 
 defined( 'ABSPATH' ) || exit;
@@ -40,6 +42,25 @@ final class Prompt_Meta_Box {
 	 * @var string
 	 */
 	public const NONCE_NAME = 'autoscribe_prompt_nonce';
+
+	/**
+	 * Provider registry, for capability checks on save.
+	 *
+	 * @since 1.0.1
+	 * @var Provider_Registry
+	 */
+	private Provider_Registry $providers;
+
+	/**
+	 * Builds the meta box.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @param Provider_Registry|null $providers Provider registry, or null to build one.
+	 */
+	public function __construct( ?Provider_Registry $providers = null ) {
+		$this->providers = $providers instanceof Provider_Registry ? $providers : new Provider_Registry();
+	}
 
 	/**
 	 * Registers the meta box and its save handler.
@@ -386,6 +407,65 @@ final class Prompt_Meta_Box {
 			'<p class="description">%s</p>',
 			esc_html__( 'Run now queues an immediate run and creates a post. Preview generates the article and shows it without creating one. Both are charged against the budget and appear in the run log.', 'autoscribe' )
 		);
+
+		$this->render_preview();
+	}
+
+	/**
+	 * Shows the most recent preview, then discards it.
+	 *
+	 * Section 9.2 asks the Preview control to show its output. It previously
+	 * generated the article, charged it against the budget, wrote it to a
+	 * transient, and then told the user it was shown below — while nothing ever
+	 * read the transient back. The user paid for output the screen never
+	 * displayed.
+	 *
+	 * The body goes through the same sanitiser the pipeline applies before
+	 * wp_insert_post(). Preview output is model output, and rendering it into an
+	 * admin page unfiltered would make the preview a softer target than the post
+	 * it is previewing.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @return void
+	 */
+	private function render_preview(): void {
+		$key     = Actions::PREVIEW_TRANSIENT . get_current_user_id();
+		$preview = get_transient( $key );
+
+		if ( ! is_array( $preview ) || empty( $preview['title'] ) ) {
+			return;
+		}
+
+		// Shown once. Leaving it in place would redisplay a stale article on
+		// every subsequent load of the editor.
+		delete_transient( $key );
+
+		$sanitizer = new Content_Sanitizer();
+
+		echo '<hr /><h3>' . esc_html__( 'Preview', 'autoscribe' ) . '</h3>';
+
+		printf(
+			'<p><strong>%s</strong></p>',
+			esc_html( $sanitizer->sanitize_title( (string) $preview['title'] ) )
+		);
+
+		if ( ! empty( $preview['excerpt'] ) ) {
+			printf(
+				'<p><em>%s</em></p>',
+				esc_html( $sanitizer->sanitize_meta_description( (string) $preview['excerpt'] ) )
+			);
+		}
+
+		printf(
+			'<div class="autoscribe-preview">%s</div>',
+			wp_kses_post( $sanitizer->sanitize_body( (string) ( $preview['content'] ?? '' ) ) )
+		);
+
+		printf(
+			'<p class="description">%s</p>',
+			esc_html__( 'No post was created. This preview is not saved and disappears when you leave the page.', 'autoscribe' )
+		);
 	}
 
 	/**
@@ -489,6 +569,34 @@ final class Prompt_Meta_Box {
 			update_post_meta( $post_id, Prompt_Fields::PREFIX . $key, $value );
 		}
 
+		$this->enforce_grounding_capability( $post_id );
+
 		update_post_meta( $post_id, Prompt_Fields::PREFIX . 'schedule_params', $params );
+	}
+
+	/**
+	 * Refuses to store grounding for a provider that cannot do it.
+	 *
+	 * Section 7.1: never let a user save a configuration that cannot run. The
+	 * editor disables the control, but a disabled control is a courtesy — the
+	 * REST API, WP-CLI, and an imported prompt all reach this save path without
+	 * ever seeing it, so the capability is checked again here.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @param int $post_id Prompt being saved.
+	 * @return void
+	 */
+	private function enforce_grounding_capability( int $post_id ): void {
+		if ( '' === (string) get_post_meta( $post_id, Prompt_Fields::PREFIX . 'grounding_enabled', true ) ) {
+			return;
+		}
+
+		$slug     = (string) get_post_meta( $post_id, Prompt_Fields::PREFIX . 'text_provider', true );
+		$provider = $this->providers->text_provider( $slug );
+
+		if ( null !== $provider && ! $provider->supports_web_search() ) {
+			update_post_meta( $post_id, Prompt_Fields::PREFIX . 'grounding_enabled', false );
+		}
 	}
 }

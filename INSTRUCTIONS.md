@@ -208,11 +208,20 @@ and only then turn **Enabled** on.
 - **Append a Sources list** — adds the URLs a grounded call used to the bottom
   of the article. The URLs are recorded on the run either way.
 
-> **Grounding is a prompt-injection surface.** Retrieved pages are untrusted
-> third-party text entering the model's context, and a hostile page can contain
-> instructions aimed at the model. The plugin wraps retrieved content in
-> delimiters and tells the model to treat it as data — that reduces the risk, it
-> does not remove it. Keep human review on when grounding is on.
+> **Grounding is a prompt-injection surface.** The search runs on the provider's
+> own infrastructure, and the pages it retrieves enter the model's context as
+> untrusted third-party text. A hostile page can carry instructions aimed at the
+> model. AutoScribe never sees that text before the model reads it, so it cannot
+> wrap it in delimiters or filter it — nothing the plugin does protects you here.
+>
+> What the plugin does wrap is the data it supplies itself: the titles and topic
+> keys of your own recent posts go into the topic proposal call inside an
+> explicitly labelled untrusted-data block, because anyone who can author a post
+> can write a title, and that is a wider group than the people allowed to manage
+> prompts.
+>
+> Keep human review on when grounding is on. It is the only control that covers
+> what the provider retrieved.
 
 DeepSeek has no web search. The control tells you so rather than letting you
 save a configuration that cannot run.

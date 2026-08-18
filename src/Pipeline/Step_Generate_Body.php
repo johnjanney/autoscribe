@@ -10,6 +10,7 @@ namespace AutoScribe\Pipeline;
 use AutoScribe\Content\Article;
 use AutoScribe\Content\Article_Validator;
 use AutoScribe\Prompts\Prompt;
+use AutoScribe\Providers\Model_Resolver;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Providers\Request\Generation_Request;
 use AutoScribe\Security\Key_Store;
@@ -88,7 +89,11 @@ final class Step_Generate_Body {
 			return $api_key;
 		}
 
-		$model = '' !== $prompt->text_model() ? $prompt->text_model() : ( $provider->suggested_models()[0] ?? '' );
+		$model = Model_Resolver::resolve(
+			$prompt->text_model(),
+			$prompt->text_provider(),
+			$provider->suggested_models()
+		);
 
 		if ( '' === $model ) {
 			return new WP_Error(
@@ -97,7 +102,27 @@ final class Step_Generate_Body {
 			);
 		}
 
-		$grounding = $prompt->grounding_enabled() && $provider->supports_web_search();
+		/*
+		 * Section 7.1 forbids saving a configuration that cannot run, and the
+		 * editor now prevents it. A prompt written before that — or through the
+		 * REST API, or WP-CLI — can still ask for grounding from a provider that
+		 * has none. Failing is the honest answer: quietly generating an
+		 * ungrounded article, which is what this used to do, produces content the
+		 * user believes was researched and a Sources list that is empty for no
+		 * stated reason.
+		 */
+		if ( $prompt->grounding_enabled() && ! $provider->supports_web_search() ) {
+			return new WP_Error(
+				'autoscribe_grounding_unsupported',
+				sprintf(
+					/* translators: %s: provider label. */
+					__( 'This prompt asks for web search grounding, but %s does not offer it. Turn grounding off or choose another text provider.', 'autoscribe' ),
+					$provider->label()
+				)
+			);
+		}
+
+		$grounding = $prompt->grounding_enabled();
 		$schema    = $provider->supports_strict_json() ? Article_Validator::schema() : null;
 
 		// Section 7.1 grounding and schema-constrained output are not usable
@@ -150,10 +175,12 @@ final class Step_Generate_Body {
 			return $second;
 		}
 
+		// Only the repair call's own tokens. The first call's were added when it
+		// returned, and record_text_usage accumulates.
 		$run->record_text_usage(
 			$second->model(),
-			$result->usage()->input_tokens() + $second->usage()->input_tokens(),
-			$result->usage()->output_tokens() + $second->usage()->output_tokens()
+			$second->usage()->input_tokens(),
+			$second->usage()->output_tokens()
 		);
 
 		return $this->validator->validate( $second->text() );

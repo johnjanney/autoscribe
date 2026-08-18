@@ -9,6 +9,7 @@ namespace AutoScribe\Pipeline;
 
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Scheduling\Scheduler;
+use WP_Error;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -95,13 +96,23 @@ final class Queued_Run_Handler {
 		}
 
 		$attempt = $this->attempt( $prompt_id );
-		$result  = $this->generator->run( $prompt_id );
+		$result  = $this->generator->run( $prompt_id, null, $attempt );
 
 		if ( is_wp_error( $result ) && $this->policy->should_retry( $result, $attempt ) ) {
 			update_post_meta( $prompt_id, self::ATTEMPT_META, $attempt + 1 );
 			$this->scheduler->schedule_retry( $prompt_id, $this->policy->delay_seconds( $attempt ) );
 
 			return;
+		}
+
+		/*
+		 * Section 5 asks for one notification once the attempts are spent, not
+		 * one per attempt. This is the only point that knows the difference: the
+		 * branch above has already taken every failure that will be tried again.
+		 * Skips are outcomes rather than faults, so they are not mailed.
+		 */
+		if ( is_wp_error( $result ) && ! $this->is_skip( $result ) ) {
+			Generator::send_failure_notice( $prompt_id, $result );
 		}
 
 		delete_post_meta( $prompt_id, self::ATTEMPT_META );
@@ -129,6 +140,22 @@ final class Queued_Run_Handler {
 		if ( ! is_wp_error( $timestamp ) ) {
 			$prompt->set_next_run_ts( $timestamp );
 		}
+	}
+
+	/**
+	 * Whether a failure is a deliberate skip rather than a fault.
+	 *
+	 * @since 1.0.1
+	 *
+	 * @param WP_Error $error The failure.
+	 * @return bool
+	 */
+	private function is_skip( WP_Error $error ): bool {
+		return in_array(
+			$error->get_error_code(),
+			array( 'autoscribe_duplicate_topic', 'autoscribe_budget_exceeded' ),
+			true
+		);
 	}
 
 	/**

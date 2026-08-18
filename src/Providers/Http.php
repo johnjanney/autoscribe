@@ -42,6 +42,21 @@ final class Http {
 	public const TIMEOUT_DEFAULT = 30;
 
 	/**
+	 * Largest provider response body the plugin will read, in bytes.
+	 *
+	 * A response is read wholly into memory before it is decoded, so without a
+	 * ceiling a faulty or compromised endpoint can exhaust PHP's memory limit and
+	 * take the request down with a fatal rather than a handled error. Eight
+	 * megabytes is far above any legitimate JSON article payload — the largest a
+	 * 10,000-word request can produce is a few hundred kilobytes — and far below
+	 * a default memory limit.
+	 *
+	 * @since 1.0.1
+	 * @var int
+	 */
+	public const MAX_RESPONSE_BYTES = 8388608;
+
+	/**
 	 * Sends a JSON POST and returns the decoded body.
 	 *
 	 * @since 0.2.0
@@ -58,10 +73,11 @@ final class Http {
 		$response = wp_remote_post(
 			$url,
 			array(
-				'headers'    => $headers,
-				'body'       => wp_json_encode( $body ),
-				'timeout'    => $timeout,
-				'user-agent' => self::user_agent(),
+				'headers'             => $headers,
+				'body'                => wp_json_encode( $body ),
+				'timeout'             => $timeout,
+				'user-agent'          => self::user_agent(),
+				'limit_response_size' => self::MAX_RESPONSE_BYTES,
 			)
 		);
 
@@ -82,9 +98,10 @@ final class Http {
 		$response = wp_remote_get(
 			$url,
 			array(
-				'headers'    => $headers,
-				'timeout'    => $timeout,
-				'user-agent' => self::user_agent(),
+				'headers'             => $headers,
+				'timeout'             => $timeout,
+				'user-agent'          => self::user_agent(),
+				'limit_response_size' => self::MAX_RESPONSE_BYTES,
 			)
 		);
 

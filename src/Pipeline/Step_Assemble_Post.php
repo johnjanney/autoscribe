@@ -138,11 +138,16 @@ final class Step_Assemble_Post {
 	 * @return int|WP_Error Post ID, or an error.
 	 */
 	public function run( Prompt $prompt, Article $article, Run $run ): int|WP_Error {
-		// Idempotency, required by section 5: a retried step must not create a
-		// second post.
+		/*
+		 * Idempotency, required by section 5: a retried step must not create a
+		 * second post. A post already bound to this run is updated in place
+		 * rather than returned untouched, because a retry that regenerated the
+		 * article has new content to write and returning early would leave the
+		 * earlier attempt's text sitting under a run that never produced it.
+		 */
 		$existing = $run->post_id();
 
-		if ( null !== $existing ) {
+		if ( null !== $existing && 'draft' !== get_post_status( $existing ) ) {
 			return $existing;
 		}
 
@@ -180,7 +185,13 @@ final class Step_Assemble_Post {
 			$postarr['post_category'] = $prompt->category_ids();
 		}
 
-		$post_id = wp_insert_post( $postarr, true );
+		if ( null !== $existing ) {
+			$postarr['ID'] = $existing;
+
+			$post_id = wp_update_post( $postarr, true );
+		} else {
+			$post_id = wp_insert_post( $postarr, true );
+		}
 
 		if ( is_wp_error( $post_id ) ) {
 			return $post_id;
