@@ -25,6 +25,8 @@ phpunit.xml.dist
 CLAUDE.md
 CONTRIBUTING.md
 DECISIONS.md
+CODEX-REVIEW.md
+CODEX-REVIEW-RESPONSE.md
 
 # WSL writes these alongside files copied from Windows.
 *:Zone.Identifier
