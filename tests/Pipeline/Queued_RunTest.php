@@ -534,6 +534,149 @@ final class Queued_RunTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A prompt deleted mid-chain closes the run instead of fatalling.
+	 *
+	 * The branch handling a removed prompt went on to ask that prompt whether
+	 * grounding was enabled, which is a TypeError when there is no prompt left.
+	 * The action died before the run could be failed or its chain cancelled, so
+	 * the run stayed open with its budget reservation held — the opposite of what
+	 * the branch exists to do.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_a_deleted_prompt_closes_the_run_rather_than_fatalling(): void {
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt();
+
+		$this->handler()->handle( $prompt_id );
+
+		$run_id = (int) Run::latest_for_prompt( $prompt_id )['id'];
+
+		$this->handler()->handle_step( $run_id );
+
+		wp_delete_post( $prompt_id, true );
+
+		$this->handler()->handle_step( $run_id );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertIsArray( $row );
+		$this->assertSame( Run::STATUS_FAILED, $row['status'] );
+		$this->assertSame( 0, (int) $row['cost_cents'], 'A run stopped before any paid call settles to nothing.' );
+	}
+
+	/**
+	 * Turning grounding off mid-run does not erase the charge already incurred.
+	 *
+	 * The direction my first fix got wrong. Settlement used to read the prompt's
+	 * current setting, so an editor disabling grounding after the grounded body
+	 * call had the surcharge dropped from a request the run had already paid for.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_disabling_grounding_mid_run_still_charges_for_the_call_made(): void {
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt( array( 'grounding_enabled' => 1 ) );
+
+		$run_id = $this->advance_to_body( $prompt_id );
+
+		update_post_meta( $prompt_id, '_autoscribe_grounding_enabled', 0 );
+
+		$this->handler()->handle_step( $run_id );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertGreaterThan(
+			$this->ungrounded_cost( $row ),
+			(int) $row['cost_cents'],
+			'A grounded request that was made must be charged for, whatever the prompt says now.'
+		);
+	}
+
+	/**
+	 * Turning grounding on mid-run does not invent a charge.
+	 *
+	 * The opposite direction, and the one my "over-stating a cap is the safe
+	 * direction" reasoning missed entirely. Enabling grounding after the topic
+	 * proposal — before any grounded call — used to add a surcharge for a request
+	 * that never happened, because the proposal's own token usage is enough to
+	 * make settlement apply the count it is given.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_enabling_grounding_mid_run_does_not_invent_a_charge(): void {
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt();
+
+		$this->handler()->handle( $prompt_id );
+
+		$run_id = (int) Run::latest_for_prompt( $prompt_id )['id'];
+
+		// Budget check and the topic proposal: paid, but not grounded.
+		$this->handler()->handle_step( $run_id );
+		$this->handler()->handle_step( $run_id );
+
+		update_post_meta( $prompt_id, '_autoscribe_grounding_enabled', 1 );
+
+		$this->handler()->handle_step( $run_id );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame(
+			$this->ungrounded_cost( $row ),
+			(int) $row['cost_cents'],
+			'No grounded request was made, so none should be charged for.'
+		);
+	}
+
+	/**
+	 * Advances a fresh run as far as a completed body call.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param int $prompt_id Prompt to run.
+	 * @return int The run's ID.
+	 */
+	private function advance_to_body( int $prompt_id ): int {
+		$this->handler()->handle( $prompt_id );
+
+		$run_id = (int) Run::latest_for_prompt( $prompt_id )['id'];
+
+		foreach ( array( 'budget_check', 'propose_topic', 'generate_body' ) as $expected ) {
+			$this->handler()->handle_step( $run_id );
+
+			$this->assertSame( $expected, (string) Run::latest_for_prompt( $prompt_id )['step'] );
+		}
+
+		return $run_id;
+	}
+
+	/**
+	 * Returns what a run's recorded tokens would cost without a grounded call.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param array<string, mixed> $row Run row.
+	 * @return int
+	 */
+	private function ungrounded_cost( array $row ): int {
+		return ( new Pricing_Table() )->cost_cents(
+			(string) $row['text_model'],
+			(int) $row['input_tokens'],
+			(int) $row['output_tokens']
+		);
+	}
+
+	/**
 	 * A disabled prompt is not run at all.
 	 *
 	 * @since 0.8.0

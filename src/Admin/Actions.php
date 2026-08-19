@@ -317,7 +317,7 @@ final class Actions {
 		}
 
 		$run->record_step( 'preview' );
-		$run->settle_cost( new Pricing_Table(), $prompt->grounding_enabled() ? 1 : 0 );
+		$run->settle_cost( new Pricing_Table(), $run->grounded_calls() );
 		$run->succeed();
 
 		return $article;

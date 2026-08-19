@@ -114,7 +114,7 @@ final class Queued_Run_Handler {
 		$armed = $this->scheduler->schedule_step( $run->id() );
 
 		if ( is_wp_error( $armed ) ) {
-			$run->fail( $armed->get_error_message(), null, $this->grounded_calls( $prompt ) );
+			$run->fail( $armed->get_error_message(), null, $run->grounded_calls() );
 			$this->conclude( $prompt, $attempt, $armed );
 		}
 	}
@@ -153,7 +153,7 @@ final class Queued_Run_Handler {
 			$run->fail(
 				__( 'The prompt was disabled or removed while this run was in progress.', 'autoscribe' ),
 				null,
-				$this->grounded_calls( $prompt )
+				$run->grounded_calls()
 			);
 			$this->scheduler->cancel( $prompt_id );
 
@@ -163,17 +163,16 @@ final class Queued_Run_Handler {
 		$changed = $this->config_changed( $prompt, $run );
 
 		if ( null !== $changed ) {
-			$run->fail( $changed->get_error_message(), null, $this->grounded_calls( $prompt ) );
+			$run->fail( $changed->get_error_message(), null, $run->grounded_calls() );
 			$this->conclude( $prompt, $run->attempt(), $changed );
 
 			return;
 		}
 
-		$grounded = $prompt->grounding_enabled() ? 1 : 0;
-		$step     = $this->generator->advance( $prompt, $run );
+		$step = $this->generator->advance( $prompt, $run );
 
 		if ( is_wp_error( $step ) ) {
-			$this->generator->close( $run, $step, $grounded );
+			$this->generator->close( $run, $step, $run->grounded_calls() );
 			$this->conclude( $prompt, $run->attempt(), $step );
 
 			return;
@@ -183,37 +182,14 @@ final class Queued_Run_Handler {
 			$armed = $this->scheduler->schedule_step( $run_id );
 
 			if ( is_wp_error( $armed ) ) {
-				$this->generator->close( $run, $armed, $grounded );
+				$this->generator->close( $run, $armed, $run->grounded_calls() );
 				$this->conclude( $prompt, $run->attempt(), $armed );
 			}
 
 			return;
 		}
 
-		$this->finish( $prompt, $run, $grounded );
-	}
-
-	/**
-	 * Returns the number of grounded requests to settle a run against.
-	 *
-	 * Run::fail() settles from measured usage, and the grounded-request charge is
-	 * not part of that measurement — it has to be passed in. Every abort path
-	 * here left it at zero, so a run that had already paid for a grounded body
-	 * call settled for less than it spent and the month-to-date total the section
-	 * 7.4 cap reads was short by the difference.
-	 *
-	 * The prompt's setting rather than a count of calls actually made: settlement
-	 * ignores it entirely when no usage was recorded, so a run that stopped
-	 * before the body call is unaffected, and over-stating a cap is the safe
-	 * direction to be wrong in.
-	 *
-	 * @since 1.1.0
-	 *
-	 * @param Prompt $prompt Prompt being run.
-	 * @return int
-	 */
-	private function grounded_calls( Prompt $prompt ): int {
-		return $prompt->grounding_enabled() ? 1 : 0;
+		$this->finish( $prompt, $run );
 	}
 
 	/**
@@ -265,22 +241,21 @@ final class Queued_Run_Handler {
 	 *
 	 * @since 1.1.0
 	 *
-	 * @param Prompt $prompt   Prompt being run.
-	 * @param Run    $run      Run to finish.
-	 * @param int    $grounded Number of grounded requests made.
+	 * @param Prompt $prompt Prompt being run.
+	 * @param Run    $run    Run to finish.
 	 * @return void
 	 */
-	private function finish( Prompt $prompt, Run $run, int $grounded ): void {
+	private function finish( Prompt $prompt, Run $run ): void {
 		$article = $this->generator->article( $run );
 
 		if ( is_wp_error( $article ) ) {
-			$this->generator->close( $run, $article, $grounded );
+			$this->generator->close( $run, $article, $run->grounded_calls() );
 			$this->conclude( $prompt, $run->attempt(), $article );
 
 			return;
 		}
 
-		$result = $this->generator->finalise( $prompt, $run, $article, null, new Pricing_Table(), $grounded );
+		$result = $this->generator->finalise( $prompt, $run, $article, null, new Pricing_Table(), $run->grounded_calls() );
 
 		$this->conclude( $prompt, $run->attempt(), is_wp_error( $result ) ? $result : null );
 	}

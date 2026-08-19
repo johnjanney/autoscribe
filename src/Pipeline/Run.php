@@ -486,6 +486,24 @@ final class Run {
 	}
 
 	/**
+	 * Returns how many grounded requests this run actually made.
+	 *
+	 * Recorded by the step that makes the request, because nothing else can know.
+	 * Section 7.1's surcharge is not part of the usage providers report, so it
+	 * has to be carried separately, and deriving it from the prompt's current
+	 * setting is wrong in both directions once a run outlives an edit: the
+	 * surcharge is dropped from a request already paid for, or added to one that
+	 * never happened.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return int
+	 */
+	public function grounded_calls(): int {
+		return max( 0, (int) ( $this->payload()['grounded_calls'] ?? 0 ) );
+	}
+
+	/**
 	 * Returns the source URLs recorded for this run.
 	 *
 	 * @since 0.8.0
