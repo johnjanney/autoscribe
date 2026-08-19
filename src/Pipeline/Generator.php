@@ -116,11 +116,27 @@ final class Generator {
 		 * "Run now" wants and what the tests drive. The queue driver advances the
 		 * same sequence one action at a time. Neither knows the order — that is
 		 * the point of there being only one list.
+		 *
+		 * The bound is not decoration. A driver that trusts advance() to make
+		 * progress spins for ever the moment anything stops it doing so, holding
+		 * the budget reservation open and re-running side effects until PHP gives
+		 * up — and the queue driver would do the same as an endless chain of
+		 * actions. One cause of that is fixed (a refused runs.step write is now a
+		 * terminal error), and this covers the ones nobody has thought of yet: a
+		 * sequence that stops advancing ends the request rather than spinning
+		 * inside it.
 		 */
-		while ( true ) {
+		$completed = false;
+
+		// One iteration per step, plus the one that finds none left and stops.
+		$allowed = count( Pipeline::STEPS ) + 1;
+
+		for ( $i = 0; $i < $allowed; $i++ ) {
 			$step = $this->pipeline->advance( $prompt, $run );
 
 			if ( null === $step ) {
+				$completed = true;
+
 				break;
 			}
 
@@ -129,6 +145,17 @@ final class Generator {
 
 				return $step;
 			}
+		}
+
+		if ( ! $completed ) {
+			$stalled = new WP_Error(
+				'autoscribe_pipeline_stalled',
+				__( 'The run stopped making progress through its steps and was abandoned rather than repeated indefinitely.', 'autoscribe' )
+			);
+
+			$this->close_failed( $run, $stalled, $pricing, $grounded );
+
+			return $stalled;
 		}
 
 		$article = $this->pipeline_article( $run );

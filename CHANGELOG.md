@@ -103,6 +103,19 @@ bump.
   `Run::merge_payload()`, which merges at the top level. The grounding sources
   recorded under section 7.1 were the data that would have been lost.
 
+- **A step that could not be recorded as completed made the run repeat it.**
+  Everything downstream reads `runs.step` to know where a run has got to, and
+  the write that advances it discarded its result. A refused write therefore
+  left the run pointing at the step that had just finished, and the driver — told
+  the step succeeded — read the same position back and ran it again, and kept
+  running it: for as long as PHP allowed, with the budget reservation held open
+  throughout. Under the queue driver it would have been an endless chain of
+  actions instead. The refusal is now terminal.
+
+  The synchronous driver is also bounded to one iteration per step. That is not
+  a second fix for the same fault but a guard against the ones nobody has thought
+  of yet: a sequence that stops advancing now ends the request instead of
+  spinning inside it, whatever the reason.
 - **The payload cache was assigned before the write was attempted.** A refused
   write left the merged document in memory, so the object went on reporting keys
   the row did not contain, and a later write persisted the rejected patch along
