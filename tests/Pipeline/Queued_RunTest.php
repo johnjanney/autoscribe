@@ -8,6 +8,7 @@
 namespace AutoScribe\Tests\Pipeline;
 
 use AutoScribe\Pipeline\Generator;
+use AutoScribe\Pipeline\Pipeline;
 use AutoScribe\Pipeline\Queued_Run_Handler;
 use AutoScribe\Pipeline\Retry_Policy;
 use AutoScribe\Pipeline\Run;
@@ -74,6 +75,57 @@ final class Queued_RunTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Runs a prompt the way the queue does: one action per step.
+	 *
+	 * The handler no longer completes a run: it opens one and arms the first
+	 * step, and each step arms the next. Calling the handler once and asserting on the
+	 * outcome would have tested the first half of an action chain and called it
+	 * the whole thing.
+	 *
+	 * Driving it here rather than through Action Scheduler keeps the tests off
+	 * the queue's own scheduling, which is still the coverage gap the README
+	 * records. What it does test, which nothing did before, is that a run really
+	 * can be picked up from its row by an action that shares no memory with the
+	 * one before it.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param int $prompt_id Prompt to run.
+	 * @return void
+	 */
+	private function run_to_completion( int $prompt_id ): void {
+		$this->handler()->handle( $prompt_id );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		if ( ! is_array( $row ) ) {
+			return;
+		}
+
+		$run_id = (int) $row['id'];
+
+		/*
+		 * One pass per step, one for the action that finds none left and
+		 * publishes, and one more to observe the terminal state. A chain that has
+		 * not finished by then is a defect, and the assertion below says so.
+		 */
+		$passes = count( Pipeline::STEPS ) + 2;
+
+		for ( $i = 0; $i < $passes; $i++ ) {
+			$current = Run::latest_for_prompt( $prompt_id );
+
+			if ( ! is_array( $current ) || Run::STATUS_RUNNING !== $current['status'] ) {
+				return;
+			}
+
+			// A retry opens a new run, so always advance the newest one.
+			$this->handler()->handle_step( (int) $current['id'] );
+		}
+
+		$this->fail( 'The action chain for run ' . $run_id . ' did not reach a terminal state.' );
+	}
+
+	/**
 	 * Executing the queued action runs the pipeline and records a run row.
 	 *
 	 * @since 0.8.0
@@ -85,7 +137,7 @@ final class Queued_RunTest extends WP_UnitTestCase {
 
 		$prompt_id = $this->create_prompt();
 
-		$this->handler()->handle( $prompt_id );
+		$this->run_to_completion( $prompt_id );
 
 		$row = Run::latest_for_prompt( $prompt_id );
 
@@ -99,6 +151,117 @@ final class Queued_RunTest extends WP_UnitTestCase {
 			(string) $row['id'],
 			(string) get_post_meta( (int) $row['post_id'], \AutoScribe\Pipeline\Step_Assemble_Post::RUN_ID_META, true )
 		);
+	}
+
+	/**
+	 * The opening action opens a run and stops, without spending anything.
+	 *
+	 * This is the behaviour change section 5 asks for. No mock is installed, so
+	 * the bootstrap tripwire throws on any provider call — reaching the assertion
+	 * is itself the proof that opening a run costs nothing.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_the_first_action_only_opens_the_run(): void {
+		$prompt_id = $this->create_prompt();
+
+		$this->handler()->handle( $prompt_id );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertIsArray( $row );
+		$this->assertSame( Run::STATUS_RUNNING, $row['status'] );
+		$this->assertSame( '', (string) $row['step'], 'No step should have run yet.' );
+	}
+
+	/**
+	 * Each action advances the run by exactly one step.
+	 *
+	 * The point of the split: a host that kills a request now loses one provider
+	 * call rather than a whole article. Each action gets a fresh handler, so
+	 * nothing carries over in memory between them — everything a step needs has
+	 * to come off the run row.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_each_action_advances_exactly_one_step(): void {
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt();
+
+		$this->handler()->handle( $prompt_id );
+
+		$run_id   = (int) Run::latest_for_prompt( $prompt_id )['id'];
+		$observed = array();
+
+		foreach ( Pipeline::STEPS as $expected ) {
+			$this->handler()->handle_step( $run_id );
+
+			$observed[] = (string) Run::latest_for_prompt( $prompt_id )['step'];
+		}
+
+		$this->assertSame( Pipeline::STEPS, $observed );
+
+		// The run is still open: publishing is the next action's work.
+		$this->assertSame( Run::STATUS_RUNNING, Run::latest_for_prompt( $prompt_id )['status'] );
+
+		$this->handler()->handle_step( $run_id );
+
+		$this->assertSame( Run::STATUS_SUCCESS, Run::latest_for_prompt( $prompt_id )['status'] );
+	}
+
+	/**
+	 * A prompt disabled part-way through its chain stops the run.
+	 *
+	 * Scheduler::cancel() cannot reach these actions, because they are keyed by
+	 * run rather than by prompt. Without the check in the step handler, turning a
+	 * prompt off would stop the next occurrence and let the run in flight carry
+	 * on spending.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_disabling_a_prompt_stops_a_run_already_in_flight(): void {
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt();
+
+		$this->handler()->handle( $prompt_id );
+
+		$run_id = (int) Run::latest_for_prompt( $prompt_id )['id'];
+
+		$this->handler()->handle_step( $run_id );
+
+		update_post_meta( $prompt_id, '_autoscribe_enabled', 0 );
+
+		$this->handler()->handle_step( $run_id );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame( Run::STATUS_FAILED, $row['status'] );
+		$this->assertSame( 'budget_check', (string) $row['step'], 'The chain should stop where it was.' );
+	}
+
+	/**
+	 * An action for a run that no longer exists does nothing.
+	 *
+	 * The retention job prunes old rows, and an action can outlive the run it
+	 * was armed for.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_an_action_for_a_missing_run_is_ignored(): void {
+		// No mock: a provider call would throw.
+		$this->handler()->handle_step( 999999 );
+
+		$this->assertTrue( true );
 	}
 
 	/**
@@ -130,7 +293,7 @@ final class Queued_RunTest extends WP_UnitTestCase {
 
 		$prompt_id = $this->create_prompt();
 
-		$this->handler()->handle( $prompt_id );
+		$this->run_to_completion( $prompt_id );
 
 		$this->assertSame(
 			2,
@@ -176,7 +339,7 @@ final class Queued_RunTest extends WP_UnitTestCase {
 
 		update_post_meta( $prompt_id, Queued_Run_Handler::ATTEMPT_META, 3 );
 
-		$this->handler()->handle( $prompt_id );
+		$this->run_to_completion( $prompt_id );
 
 		$this->assertSame(
 			'',
@@ -197,7 +360,7 @@ final class Queued_RunTest extends WP_UnitTestCase {
 
 		$prompt_id = $this->create_prompt();
 
-		$this->handler()->handle( $prompt_id );
+		$this->run_to_completion( $prompt_id );
 
 		$this->assertSame(
 			'',
@@ -220,7 +383,7 @@ final class Queued_RunTest extends WP_UnitTestCase {
 
 		update_post_meta( $prompt_id, Queued_Run_Handler::ATTEMPT_META, 2 );
 
-		$this->handler()->handle( $prompt_id );
+		$this->run_to_completion( $prompt_id );
 
 		$this->assertSame( '', get_post_meta( $prompt_id, Queued_Run_Handler::ATTEMPT_META, true ) );
 	}

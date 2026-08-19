@@ -7,6 +7,7 @@
 
 namespace AutoScribe\Pipeline;
 
+use AutoScribe\Cost\Pricing_Table;
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Scheduling\Scheduler;
 use WP_Error;
@@ -96,9 +97,133 @@ final class Queued_Run_Handler {
 		}
 
 		$attempt = $this->attempt( $prompt_id );
-		$result  = $this->generator->run( $prompt_id, null, $attempt );
+		$run     = $this->generator->open( $prompt_id, $attempt );
 
-		if ( is_wp_error( $result ) && $this->policy->should_retry( $result, $attempt ) ) {
+		if ( is_wp_error( $run ) ) {
+			$this->conclude( $prompt, $attempt, $run );
+
+			return;
+		}
+
+		/*
+		 * Opening a run is cheap; everything after it is not. This action stops
+		 * here and arms the first step as its own request, which is the whole of
+		 * section 5's split — a host with a short max_execution_time now kills at
+		 * most one provider call rather than a whole article.
+		 */
+		$armed = $this->scheduler->schedule_step( $run->id() );
+
+		if ( is_wp_error( $armed ) ) {
+			$run->fail( $armed->get_error_message() );
+			$this->conclude( $prompt, $attempt, $armed );
+		}
+	}
+
+	/**
+	 * Advances one open run by a single step, and arms the next.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param int $run_id Run to advance.
+	 * @return void
+	 */
+	public function handle_step( int $run_id ): void {
+		$run = Run::load( $run_id );
+
+		if ( null === $run ) {
+			// The row was pruned, or the action outlived the run it was armed for.
+			return;
+		}
+
+		if ( Run::STATUS_RUNNING !== $run->status() ) {
+			// Something already closed it — a duplicate skip, or a second worker.
+			return;
+		}
+
+		$prompt_id = $run->prompt_id();
+		$prompt    = Prompt::load( $prompt_id );
+
+		if ( null === $prompt || ! $prompt->enabled() ) {
+			/*
+			 * A prompt turned off or trashed part-way through its own chain.
+			 * Scheduler::cancel() cannot reach these actions, because they are
+			 * keyed by run rather than by prompt, so the check lives here instead
+			 * — and this way it also catches a prompt disabled between two steps.
+			 */
+			$run->fail( __( 'The prompt was disabled or removed while this run was in progress.', 'autoscribe' ) );
+			$this->scheduler->cancel( $prompt_id );
+
+			return;
+		}
+
+		$grounded = $prompt->grounding_enabled() ? 1 : 0;
+		$step     = $this->generator->advance( $prompt, $run );
+
+		if ( is_wp_error( $step ) ) {
+			$this->generator->close( $run, $step, $grounded );
+			$this->conclude( $prompt, $run->attempt(), $step );
+
+			return;
+		}
+
+		if ( null !== $step ) {
+			$armed = $this->scheduler->schedule_step( $run_id );
+
+			if ( is_wp_error( $armed ) ) {
+				$this->generator->close( $run, $armed, $grounded );
+				$this->conclude( $prompt, $run->attempt(), $armed );
+			}
+
+			return;
+		}
+
+		$this->finish( $prompt, $run, $grounded );
+	}
+
+	/**
+	 * Publishes a run that has run out of steps.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Prompt $prompt   Prompt being run.
+	 * @param Run    $run      Run to finish.
+	 * @param int    $grounded Number of grounded requests made.
+	 * @return void
+	 */
+	private function finish( Prompt $prompt, Run $run, int $grounded ): void {
+		$article = $this->generator->article( $run );
+
+		if ( is_wp_error( $article ) ) {
+			$this->generator->close( $run, $article, $grounded );
+			$this->conclude( $prompt, $run->attempt(), $article );
+
+			return;
+		}
+
+		$result = $this->generator->finalise( $prompt, $run, $article, null, new Pricing_Table(), $grounded );
+
+		$this->conclude( $prompt, $run->attempt(), is_wp_error( $result ) ? $result : null );
+	}
+
+	/**
+	 * Decides what happens after a run ends, however it ended.
+	 *
+	 * Every path that ends a run comes through here, which is the point: section
+	 * 4.3 requires the next occurrence to be armed whether the run succeeded or
+	 * failed, and a chain spread across several actions has many more ways to
+	 * end than one that ran in a single request did.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Prompt        $prompt  Prompt that ran.
+	 * @param int           $attempt Attempt number that just ended.
+	 * @param WP_Error|null $error   The failure, or null on success.
+	 * @return void
+	 */
+	private function conclude( Prompt $prompt, int $attempt, ?WP_Error $error ): void {
+		$prompt_id = $prompt->id();
+
+		if ( null !== $error && $this->policy->should_retry( $error, $attempt ) ) {
 			update_post_meta( $prompt_id, self::ATTEMPT_META, $attempt + 1 );
 			$this->scheduler->schedule_retry( $prompt_id, $this->policy->delay_seconds( $attempt ) );
 
@@ -111,8 +236,8 @@ final class Queued_Run_Handler {
 		 * branch above has already taken every failure that will be tried again.
 		 * Skips are outcomes rather than faults, so they are not mailed.
 		 */
-		if ( is_wp_error( $result ) && ! $this->is_skip( $result ) ) {
-			Generator::send_failure_notice( $prompt_id, $result );
+		if ( null !== $error && ! $this->is_skip( $error ) ) {
+			Generator::send_failure_notice( $prompt_id, $error );
 		}
 
 		delete_post_meta( $prompt_id, self::ATTEMPT_META );

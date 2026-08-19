@@ -137,6 +137,7 @@ final class Plugin {
 		add_action( 'init', array( $this->prompt_post_type, 'register' ) );
 
 		add_action( Scheduler::HOOK_RUN_PROMPT, array( $this->queued_runs, 'handle' ) );
+		add_action( Scheduler::HOOK_RUN_STEP, array( $this->queued_runs, 'handle_step' ) );
 		add_action( Run_Retention::HOOK, array( Run_Retention::class, 'handle' ) );
 		add_action( 'save_post_' . Prompt_Post_Type::POST_TYPE, array( $this, 'rearm_prompt' ) );
 		add_action( 'trashed_post', array( $this, 'cancel_prompt' ) );

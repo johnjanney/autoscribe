@@ -36,6 +36,19 @@ final class Scheduler {
 	public const HOOK_RUN_PROMPT = 'autoscribe_run_prompt';
 
 	/**
+	 * Hook advancing an open run by one step.
+	 *
+	 * Section 5 requires each step to be its own queued request. One hook rather
+	 * than one per step, with the position read from the run row: it keeps
+	 * cancel() able to clear a prompt's whole chain in a single call, and it
+	 * means the queue never holds routing that the run row could contradict.
+	 *
+	 * @since 1.1.0
+	 * @var string
+	 */
+	public const HOOK_RUN_STEP = 'autoscribe_run_step';
+
+	/**
 	 * Action Scheduler group, so the plugin's actions are filterable in admin.
 	 *
 	 * @since 0.4.0
@@ -169,6 +182,28 @@ final class Scheduler {
 
 		// A boolean true means an action is running now rather than pending.
 		return true === $timestamp ? time() : null;
+	}
+
+	/**
+	 * Arms the next step of an open run.
+	 *
+	 * Armed for now rather than for a delay: the split exists to shorten each
+	 * request, not to slow the run down. Action Scheduler will pick it up on its
+	 * next pass, which is where the extra wall-clock time comes from.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param int $run_id Run to advance.
+	 * @return true|WP_Error
+	 */
+	public function schedule_step( int $run_id ): bool|WP_Error {
+		if ( ! $this->is_available() ) {
+			return $this->unavailable();
+		}
+
+		as_schedule_single_action( time(), self::HOOK_RUN_STEP, array( 'run_id' => $run_id ), self::GROUP );
+
+		return true;
 	}
 
 	/**

@@ -163,6 +163,59 @@ final class Run {
 	}
 
 	/**
+	 * Reopens an existing run by ID.
+	 *
+	 * A queued action carries a run ID and nothing else, so the queue driver has
+	 * to be able to pick a run back up from that alone. Returns null when the row
+	 * is gone — the retention job in section 3.2 prunes old rows, and an action
+	 * can outlive the run it was armed for.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param int $id Row ID.
+	 * @return Run|null
+	 */
+	public static function load( int $id ): ?Run {
+		global $wpdb;
+
+		if ( $id <= 0 ) {
+			return null;
+		}
+
+		$found = $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT id FROM %i WHERE id = %d',
+				Activation::table_name(),
+				$id
+			)
+		);
+
+		return null === $found ? null : new self( $id );
+	}
+
+	/**
+	 * Returns the prompt this run belongs to.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return int
+	 */
+	public function prompt_id(): int {
+		return (int) $this->column( 'prompt_id' );
+	}
+
+	/**
+	 * Returns the attempt number this run represents.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return int
+	 */
+	public function attempt(): int {
+		return (int) $this->column( 'attempt' );
+	}
+
+	/**
 	 * Returns the row ID.
 	 *
 	 * @since 0.3.0
@@ -181,6 +234,23 @@ final class Run {
 	 * @return int|null
 	 */
 	public function post_id(): ?int {
+		if ( null !== $this->post_id ) {
+			return $this->post_id;
+		}
+
+		/*
+		 * Read the row when nothing is held in memory. Returning the property
+		 * alone was correct while a run only ever existed inside the request that
+		 * opened it; a run advanced one queued action at a time is a fresh object
+		 * each time, and every one of them would have reported "no post" for a
+		 * run that plainly had one.
+		 */
+		$stored = (int) $this->column( 'post_id' );
+
+		if ( $stored > 0 ) {
+			$this->post_id = $stored;
+		}
+
 		return $this->post_id;
 	}
 
