@@ -87,6 +87,25 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-08-19
+
+One more finding against the concurrency guard 1.1.1 introduced, and the last of
+five corrective rounds on it. Nothing else changed.
+
+### Fixed
+
+- **A stall sweep could close a run while a worker was performing a paid step.**
+  Re-asking the queue before giving up narrowed the window without closing it:
+  another sweep can record the final restart, this one can see the new count and
+  find no action queued, and that restart can be armed and claimed before this
+  one writes. Closing the run then cancelled a provider call already in flight.
+
+  The terminal write is now tied to the position the sweep observed, rather than
+  to a separate queue read taken beside it. A worker that has claimed the step
+  wins; one that has not claimed yet finds the run closed and stands down without
+  spending anything. Both outcomes are safe, which a check standing next to a
+  write could not guarantee however narrow the gap between them looked.
+
 ## [1.1.1] - 2026-08-19
 
 A third external review, against 1.1.0. Ten findings; nine confirmed and one

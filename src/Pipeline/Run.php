@@ -704,6 +704,33 @@ final class Run {
 	}
 
 	/**
+	 * Writes a terminal state, and only while the run is at a known position.
+	 *
+	 * @since 1.1.2
+	 *
+	 * @param array<string, mixed> $data          Columns to write, with finished_at.
+	 * @param string               $expected_step Position the caller observed.
+	 * @return bool True when this call is the one that closed the run.
+	 */
+	private function close_at( array $data, string $expected_step ): bool {
+		global $wpdb;
+
+		$updated = $wpdb->update(
+			Activation::table_name(),
+			$data,
+			array(
+				'id'     => $this->id,
+				'status' => self::STATUS_RUNNING,
+				'step'   => '' === $expected_step ? null : $expected_step,
+			),
+			array( '%s', '%s', '%d', '%s' ),
+			array( '%d', '%s', '%s' )
+		);
+
+		return is_numeric( $updated ) && (int) $updated > 0;
+	}
+
+	/**
 	 * Claims the right to perform one step of this run.
 	 *
 	 * The idempotency guards each step carries are reads followed by a paid call:
@@ -1446,14 +1473,30 @@ final class Run {
 	 *
 	 * @since 1.1.1
 	 *
-	 * @param array<string, mixed> $data    Columns to write, without finished_at.
-	 * @param string[]             $formats Formats, including one for finished_at.
+	 * @param array<string, mixed> $data          Columns to write, without finished_at.
+	 * @param string[]             $formats       Formats, including one for finished_at.
+	 * @param string|null          $expected_step Close only while the run is at
+	 *                                            this position, or null for any.
 	 * @return bool True when this call is the one that closed the run.
 	 */
-	private function close( array $data, array $formats ): bool {
+	private function close( array $data, array $formats, ?string $expected_step = null ): bool {
 		global $wpdb;
 
 		$data['finished_at'] = current_time( 'mysql', true );
+
+		/*
+		 * A caller acting on something it observed earlier can tie the close to
+		 * that observation. The stall sweeper does: it decides to give up on a run
+		 * from a scan that may be many pages old, and between the decision and
+		 * this write another sweep can have armed a restart whose worker is
+		 * already claiming the step. Requiring the position to be unchanged means
+		 * that worker's claim beats the stale close, and a queued worker that has
+		 * not claimed yet simply finds the run closed and stands down without
+		 * spending anything.
+		 */
+		if ( null !== $expected_step ) {
+			return $this->close_at( $data, $expected_step );
+		}
 
 		/*
 		 * A multi-column WHERE rather than hand-built SQL: wpdb::update() takes
@@ -1493,16 +1536,19 @@ final class Run {
 	 * @param string             $message        Human-readable failure reason.
 	 * @param Pricing_Table|null $pricing        Rate table, or null to build a default.
 	 * @param int                $grounded_calls Number of grounded requests made.
+	 * @param string|null        $expected_step  Close only while the run is still
+	 *                                           at this position, or null for any.
 	 * @return bool True when this call is the one that closed the run.
 	 */
-	public function fail( string $message, ?Pricing_Table $pricing = null, int $grounded_calls = 0 ): bool {
+	public function fail( string $message, ?Pricing_Table $pricing = null, int $grounded_calls = 0, ?string $expected_step = null ): bool {
 		return $this->close(
 			array(
 				'status'     => self::STATUS_FAILED,
 				'error'      => $message,
 				'cost_cents' => $this->measured_cents( $pricing, $grounded_calls ),
 			),
-			array( '%s', '%s', '%d', '%s' )
+			array( '%s', '%s', '%d', '%s' ),
+			$expected_step
 		);
 	}
 

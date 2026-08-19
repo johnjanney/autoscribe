@@ -341,16 +341,15 @@ final class Stall_Sweeper {
 		}
 
 		if ( null === $prompt ) {
-			$this->give_up(
+			return $this->give_up(
 				$run,
 				null,
 				new WP_Error(
 					'autoscribe_run_stalled',
-					__( 'This run stopped part-way and its prompt no longer exists, so it was closed and what it had reserved was released.', 'autoscribe' )
-				)
+					__( 'This run stopped part-way and its prompt has since been removed or switched off, so it was closed and what it had reserved was released.', 'autoscribe' )
+				),
+				$observed
 			);
-
-			return true;
 		}
 
 		/*
@@ -366,7 +365,7 @@ final class Stall_Sweeper {
 		}
 
 		if ( $run->sweeps() >= self::MAX_RESTARTS ) {
-			$this->give_up(
+			return $this->give_up(
 				$run,
 				$prompt,
 				new WP_Error(
@@ -376,10 +375,9 @@ final class Stall_Sweeper {
 						__( 'This run stopped part-way %d times and was given up on. Whatever it had reserved against the monthly cap has been released. The usual cause is a host ending requests before they finish: check this site\'s PHP max_execution_time and memory limit.', 'autoscribe' ),
 						self::MAX_RESTARTS
 					)
-				)
+				),
+				$observed
 			);
-
-			return true;
 		}
 
 		/*
@@ -411,7 +409,7 @@ final class Stall_Sweeper {
 		$armed = $this->scheduler->schedule_step( $run_id );
 
 		if ( is_wp_error( $armed ) ) {
-			$this->give_up( $run, $prompt, $armed );
+			$this->give_up( $run, $prompt, $armed, $run->raw_step() );
 		}
 
 		return true;
@@ -445,11 +443,21 @@ final class Stall_Sweeper {
 	 *
 	 * @param Run         $run    Run to close.
 	 * @param Prompt|null $prompt Its prompt, or null when it no longer exists.
-	 * @param WP_Error    $reason Why it was given up on.
-	 * @return void
+	 * @param WP_Error    $reason   Why it was given up on.
+	 * @param string      $observed Position this sweep saw the run at.
+	 * @return bool True when this sweep is the one that closed the run.
 	 */
-	private function give_up( Run $run, ?Prompt $prompt, WP_Error $reason ): void {
-		$run->fail( $reason->get_error_message(), null, $run->grounded_calls() );
+	private function give_up( Run $run, ?Prompt $prompt, WP_Error $reason, string $observed ): bool {
+		/*
+		 * Tied to the position this sweep observed. Another sweep can arm the
+		 * restart that reaches the limit between this one's scan and this write,
+		 * and its worker can already be claiming the step — closing the run then
+		 * would cancel a paid call in flight. If the position has moved, that
+		 * worker wins and this sweep leaves the run alone.
+		 */
+		if ( ! $run->fail( $reason->get_error_message(), null, $run->grounded_calls(), $observed ) ) {
+			return false;
+		}
 
 		// Nothing should wake up for a run that is finished with.
 		$this->scheduler->cancel_step_actions( $run->id() );
@@ -464,7 +472,7 @@ final class Stall_Sweeper {
 			Queued_Run_Handler::forget_attempts( $run->prompt_id() );
 			$this->scheduler->cancel( $run->prompt_id() );
 
-			return;
+			return true;
 		}
 
 		/*
@@ -474,5 +482,7 @@ final class Stall_Sweeper {
 		 * that ended badly.
 		 */
 		$this->handler->conclude_run( $prompt, $run->attempt(), $reason );
+
+		return true;
 	}
 }

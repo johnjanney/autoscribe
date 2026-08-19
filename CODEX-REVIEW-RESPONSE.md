@@ -1292,8 +1292,21 @@ introducing a lock into a system that did not have one:
   makes the interleaving reproducible in a single process, which is how the
   second attempt is verified and the first could not be.
 - *A run at its restart limit could be closed while a worker was on it.* The
-  limit was evaluated against a candidate scan that can be many pages old.
-  Activity is re-asked before anything terminal now.
+  limit was evaluated against a candidate scan that can be many pages old. This
+  took two attempts as well. Re-asking the queue before giving up narrowed the
+  window without closing it — another sweep can record the final restart, this
+  one can see the new count and find nothing queued, and the restart can be armed
+  and claimed before this one writes. The terminal write is now tied to the
+  position the sweep observed rather than to a separate read taken beside it, so
+  a worker holding the step wins and one that has not claimed yet finds the run
+  closed and stands down without spending.
+
+  Five corrective rounds on one guard is the headline number of this review, and
+  the reason is consistent: every version of it that was a *sequence* of checks
+  had a gap between two of its steps, and each review found the next one. The
+  versions that hold are the ones expressed as a single conditional update —
+  claim, release, and now the terminal close. That is the lesson worth keeping
+  from this cycle rather than any individual defect.
 - *A refused release spent one of the run's restarts.* The restart it armed was
   guaranteed to lose an unchanged claim, so two failures gave up on a recoverable
   run.

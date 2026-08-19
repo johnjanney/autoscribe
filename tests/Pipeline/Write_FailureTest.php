@@ -564,6 +564,56 @@ final class Write_FailureTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A stale decision to give up loses to a worker that has taken the step.
+	 *
+	 * Re-asking the queue before giving up narrowed the window without closing
+	 * it: another sweep can record the final restart, this one can see the new
+	 * count and find no action, and the restart can be armed and claimed before
+	 * this one writes. Closing the run then cancels a paid call in flight.
+	 *
+	 * The close is tied to the position this sweep saw instead, so a worker that
+	 * has claimed the step wins — and one that has not claimed yet finds the run
+	 * closed and stands down without spending.
+	 *
+	 * @since 1.1.2
+	 *
+	 * @return void
+	 */
+	public function test_a_stale_give_up_loses_to_a_worker_that_took_the_step(): void {
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+
+		$run_id = $run->id();
+
+		$run->merge_payload( array( 'sweeps' => Stall_Sweeper::MAX_RESTARTS ) );
+
+		global $wpdb;
+
+		$wpdb->update(
+			\AutoScribe\Activation::table_name(),
+			array( 'started_at' => gmdate( 'Y-m-d H:i:s', time() - ( Stall_Sweeper::threshold() * 2 ) ) ),
+			array( 'id' => $run_id ),
+			array( '%s' ),
+			array( '%d' )
+		);
+
+		// A restart armed by another sweep, whose worker has taken the step.
+		$this->assertTrue( Run::load( $run_id )->claim_step( '' ) );
+
+		$sweeper = new Stall_Sweeper( new Scheduler(), $this->handler() );
+
+		// This sweep still holds the position it saw before that claim existed.
+		$this->assertFalse( $sweeper->recover( $run_id, '' ) );
+
+		$this->assertSame(
+			Run::STATUS_RUNNING,
+			Run::load( $run_id )->status(),
+			'A worker holding the step must beat a decision taken before it claimed.'
+		);
+	}
+
+	/**
 	 * Builds the queued handler under test.
 	 *
 	 * @since 1.1.1
