@@ -1,7 +1,9 @@
 # Scope — splitting the generation pipeline across queue steps
 
 **Answers:** FR-05 / AS-02, the last unmet requirement of section 5 of the brief.
-**Status:** Scope only. No code written. Decisions marked ❓ need your call before implementation starts.
+**Status:** Complete, shipped as 1.1.0. Every phase is done; the ✅ notes in §6
+record what each one actually found, which was not always what it expected to.
+The four ❓ decisions in §9 were answered — see the notes there.
 **Written against:** `697d754`, version 1.0.5.
 
 ---
@@ -210,7 +212,7 @@ Each phase is independently landable and leaves the plugin working.
 | 3b | ✅ Dispatcher, `autoscribe_run_step` hook, queued path advances one step per action | Medium | Done. `Run::post_id()` had to start reading the row — it returned an in-memory property that only the object which wrote it ever had |
 | 4 | ✅ Re-arm on every terminal path | Small | Done. The finalise *step* turned out to need no work — see below |
 | 5 | ✅ **Stall sweeper** + reservation release on give-up | Medium | Done. Staleness is decided by whether anything is queued to advance the run, not by age — age alone cannot tell a stalled run from a slow one |
-| 6 | Docs: `DECISIONS.md` D-10, README known-limitations, `INSTRUCTIONS.md` on latency | Small | |
+| 6 | ✅ Docs: `DECISIONS.md` D-10 and D-09b, README known-limitations, `INSTRUCTIONS.md` on latency and filters | Small | Done, and shipped as 1.1.0 |
 
 Phases 1 and 2 are worth doing whether or not the rest follows.
 
@@ -248,19 +250,23 @@ run, or make the pipeline faster; it makes it slower in wall-clock terms.
 
 ---
 
-## 9. Decisions needed before implementation ❓
+## 9. Decisions, and how they were answered
 
-1. **Sweeper threshold.** How long may a run sit in `running` before it is
-   considered stalled? It must exceed the longest legitimate step (a 120-second
-   provider timeout plus queue latency). Suggest 15 minutes, filterable.
-2. **Sweeper give-up policy.** Re-dispatch the stalled run at its recorded step,
-   or fail it outright and let the normal retry path handle it? Re-dispatch is
-   the point of the exercise, but it needs a cap — suggest two re-dispatches,
-   then fail and release the reservation.
-3. ~~**Run-now latency.**~~ **Decided: keep the synchronous path.** The concern
+1. ~~**Sweeper threshold.**~~ **15 minutes, filterable** through
+   `autoscribe_stall_threshold`, with a two-minute floor. In the end the
+   threshold turned out not to be the important part: age cannot tell a stalled
+   run from a slow one, so staleness is decided by whether anything is queued to
+   advance the run, and age only keeps the sweeper away from runs too young to
+   judge.
+2. ~~**Sweeper give-up policy.**~~ **Two restarts, then fail and release**, as
+   suggested. Restarts are counted *before* being armed: a restart recorded and
+   then not armed is swept again and counted again, converging on giving up,
+   while one armed and then not recorded would restart for ever.
+3. ~~**Run-now latency.**~~ **Kept the synchronous path.** The concern
    was two sequencers drifting apart, so there is only one — `Pipeline` owns the
    order and both drivers advance it. `Generator` loops it inside one request;
    the queue driver advances it one action at a time. Neither knows the order.
-4. **Ship as 1.1.0.** New hooks, a changed retry model, and a new recurring
-   action are more than a patch. The version policy in `CHANGELOG.md` supports
-   this reading.
+4. ~~**Ship as 1.1.0.**~~ **Shipped as 1.1.0.** Two new hooks
+   (`autoscribe_run_step`, `autoscribe_sweep_runs`), a new filter, and a new
+   recurring action. The retry model turned out *not* to change — see the note on
+   D-10 in `DECISIONS.md`.
