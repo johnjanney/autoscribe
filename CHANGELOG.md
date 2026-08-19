@@ -103,12 +103,22 @@ the stall sweeper — are what make the split worth having.
   `Run::merge_payload()`, which merges at the top level. The grounding sources
   recorded under section 7.1 were the data that would have been lost.
 
+- **A grounded call the run could not record was not charged for.** The marker's
+  own failure path undid its purpose: the grounded response had arrived and been
+  paid for, the write remembering it was refused, and settlement then read back a
+  zero and dropped the surcharge. The run now remembers the call in memory
+  whether or not the write lands — a refused write does not un-make a request the
+  provider has already answered — and the action that fails the run is the action
+  that made it.
 - **Abandoning a run left the prompt's attempt counter raised.** The counter
   lives on the prompt because a retry opens a new run and the count has to
   survive across rows. Every terminal path clears it except the two that abandon
   a run when the prompt is gone or switched off, so a prompt disabled part-way
   through a retry series and later switched back on resumed mid-series and
-  quietly got fewer attempts than it should.
+  quietly got fewer attempts than it should. The cleanup is shared with the
+  prompt's own lifecycle, because the ordinary way a prompt is switched off is
+  while nothing is executing — the only queued action is a pending retry, saving
+  the prompt cancels it, and no queue callback runs at all.
 - **A prompt deleted mid-chain killed the queue action instead of closing the
   run.** The branch that handles a removed prompt went on to ask that prompt
   whether grounding was enabled, which is a fatal when there is no prompt left.

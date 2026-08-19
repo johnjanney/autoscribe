@@ -110,6 +110,16 @@
 	</rule>
 
 	<!--
+	The queued-run tests fire save_post_autoscribe_prompt directly, to exercise
+	the prompt lifecycle the way WordPress does. It is a core hook rather than one
+	this plugin invents, and the sniff cannot tell the difference from the call
+	site. Scoped to that one file.
+	-->
+	<rule ref="WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound">
+		<exclude-pattern>*/tests/Pipeline/Queued_RunTest.php</exclude-pattern>
+	</rule>
+
+	<!--
 	The capability sniff only knows WordPress core capabilities, so it reports the
 	plugin's own as possible typos. This is the property the sniff documents for
 	the purpose; it teaches the sniff the real names rather than switching it off,

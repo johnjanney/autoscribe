@@ -168,8 +168,12 @@ final class Step_Generate_Body {
 		 * knows, and only at the moment it calls.
 		 *
 		 * The repair call is sent ungrounded, so this is at most one per run.
+		 *
+		 * A refused write still ends the run, because a later action would have
+		 * no way to know — but the run remembers the call for as long as this
+		 * request lasts, which is long enough to settle it for what it spent.
 		 */
-		if ( $grounding && ! $run->merge_payload( array( 'grounded_calls' => 1 ) ) ) {
+		if ( $grounding && ! $run->record_grounded_call() ) {
 			return new WP_Error(
 				'autoscribe_state_not_recorded',
 				__( 'The run log could not record that this article used web search, so the run was stopped rather than finishing with a cost that understates what it spent.', 'autoscribe' )
