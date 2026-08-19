@@ -90,6 +90,12 @@
 		API in the plugin to serve the test suite.
 		-->
 		<exclude-pattern>*/tests/Pipeline/Cost_AccountingTest.php</exclude-pattern>
+		<!--
+		The payload tests read the payload column directly on purpose. Reading it
+		back through Run::payload() would let a cache that disagrees with the
+		column pass the test, which is the failure the tests exist to catch.
+		-->
+		<exclude-pattern>*/tests/Pipeline/Run_PayloadTest.php</exclude-pattern>
 	</rule>
 
 	<!--

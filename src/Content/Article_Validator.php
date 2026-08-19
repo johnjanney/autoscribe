@@ -104,6 +104,27 @@ final class Article_Validator {
 			);
 		}
 
+		return $this->from_array( $decoded );
+	}
+
+	/**
+	 * Validates already-decoded fields and builds an article from them.
+	 *
+	 * Split out of validate() so that an article can be rebuilt from storage
+	 * without going back through a JSON string. The queue steps in section 5
+	 * hand their work to each other through runs.payload, so the article has to
+	 * survive a round trip out of the database — and the class invariant has to
+	 * survive it too. An Article exists only where the schema was satisfied, and
+	 * a payload row that was truncated, hand-edited, or written by an older
+	 * version of this plugin is exactly the case where that stops being true on
+	 * its own. Rebuilding therefore re-validates rather than trusting the store.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param array<string, mixed> $decoded Decoded payload fields.
+	 * @return Article|WP_Error Article on success, error naming the fault otherwise.
+	 */
+	public function from_array( array $decoded ): Article|WP_Error {
 		$missing = array();
 		$wrong   = array();
 

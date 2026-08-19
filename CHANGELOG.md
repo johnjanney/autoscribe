@@ -87,6 +87,31 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+Phase 1 of the pipeline split scoped in `docs/PIPELINE-SPLIT.md`. Groundwork
+only: no behaviour changes, and nothing here is visible to a site running the
+plugin. It is on `main` rather than in a release because the phases it prepares
+for are what earn the version bump.
+
+### Fixed
+
+- **A second writer to `runs.payload` would have destroyed the first one's
+  data.** `Run::record_sources()` encoded a fresh single-key object over
+  whatever the column held — correct while it was the only writer, and silently
+  destructive the moment it was not. Section 5 makes a second writer the design
+  rather than an accident, so every payload write now goes through
+  `Run::merge_payload()`, which merges at the top level. The grounding sources
+  recorded under section 7.1 were the data that would have been lost.
+
+### Added
+
+- `Run::merge_payload()` and `Run::payload()`, the read and write side of the
+  document the split pipeline will pass step state through.
+- `Article::to_array()` and `Article_Validator::from_array()`, so an article can
+  be stored and rebuilt. Rebuilding re-validates rather than trusting the store:
+  an `Article` exists only where the schema was satisfied, and a payload row that
+  was truncated or written by an older version of the plugin is exactly where
+  that stops being true on its own.
+
 ## [1.0.5] - 2026-08-19
 
 Version 1.0.4 handled a failed draft adoption by carrying on and trusting

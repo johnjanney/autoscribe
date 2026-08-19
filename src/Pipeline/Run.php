@@ -91,6 +91,14 @@ final class Run {
 	private ?array $sources = null;
 
 	/**
+	 * Cached payload document, or null when it has not been read yet.
+	 *
+	 * @since 1.1.0
+	 * @var array<string, mixed>|null
+	 */
+	private ?array $payload = null;
+
+	/**
 	 * Usage accumulated during this run, for the final cost calculation.
 	 *
 	 * @since 0.5.0
@@ -279,9 +287,8 @@ final class Run {
 	 * worth being able to audit after the fact when a grounded article turns out
 	 * to be wrong.
 	 *
-	 * Stored in the payload column, which section 3.2 reserves for a run's
-	 * intermediate state and which nothing else writes to: the pipeline runs
-	 * inside a single action, so there is no inter-step state to keep there.
+	 * Stored under the sources key of the payload column, which section 3.2
+	 * reserves for a run's intermediate state.
 	 *
 	 * @since 0.8.0
 	 *
@@ -303,10 +310,69 @@ final class Run {
 
 		$this->sources = $clean;
 
-		$this->update(
-			array( 'payload' => (string) wp_json_encode( array( 'sources' => $clean ) ) ),
+		$this->merge_payload( array( 'sources' => $clean ) );
+	}
+
+	/**
+	 * Merges a patch into the run's payload document.
+	 *
+	 * Every write to the payload column goes through here, and that is the whole
+	 * point of the method existing. Until 1.1.0 the column had exactly one
+	 * writer — record_sources() — which encoded a fresh single-key object over
+	 * whatever was there. That was correct while it was the only writer and
+	 * silently destructive the moment it was not, which is the state section 5's
+	 * split pipeline puts it in: each step reads its input from the payload and
+	 * writes its output back, so a second writer is the design rather than an
+	 * accident.
+	 *
+	 * Top-level keys are replaced rather than merged recursively. A step owns its
+	 * key outright and rewrites it whole; merging into a step's own output would
+	 * mean a retry could leave half of the previous attempt's data underneath the
+	 * new one.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param array<string, mixed> $patch Keys to write.
+	 * @return bool True when the write reached the database.
+	 */
+	public function merge_payload( array $patch ): bool {
+		$payload = array_merge( $this->payload(), $patch );
+
+		$this->payload = $payload;
+
+		return $this->update(
+			array( 'payload' => (string) wp_json_encode( $payload ) ),
 			array( '%s' )
 		);
+	}
+
+	/**
+	 * Returns the run's payload document.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return array<string, mixed>
+	 */
+	public function payload(): array {
+		if ( null !== $this->payload ) {
+			return $this->payload;
+		}
+
+		global $wpdb;
+
+		$stored = $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT payload FROM %i WHERE id = %d',
+				Activation::table_name(),
+				$this->id
+			)
+		);
+
+		$decoded = json_decode( (string) $stored, true );
+
+		$this->payload = is_array( $decoded ) ? $decoded : array();
+
+		return $this->payload;
 	}
 
 	/**
@@ -321,21 +387,9 @@ final class Run {
 			return $this->sources;
 		}
 
-		global $wpdb;
+		$stored = $this->payload()['sources'] ?? array();
 
-		$payload = $wpdb->get_var(
-			$wpdb->prepare(
-				'SELECT payload FROM %i WHERE id = %d',
-				Activation::table_name(),
-				$this->id
-			)
-		);
-
-		$decoded = json_decode( (string) $payload, true );
-
-		$this->sources = ( is_array( $decoded ) && isset( $decoded['sources'] ) && is_array( $decoded['sources'] ) )
-			? array_map( 'strval', $decoded['sources'] )
-			: array();
+		$this->sources = is_array( $stored ) ? array_map( 'strval', $stored ) : array();
 
 		return $this->sources;
 	}
