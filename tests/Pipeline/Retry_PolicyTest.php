@@ -66,12 +66,78 @@ final class Retry_PolicyTest extends WP_UnitTestCase {
 	 * @return void
 	 */
 	public function test_permanent_failures_are_not_retried(): void {
-		foreach ( $this->policy->permanent_codes() as $code ) {
+		$codes = array(
+			'autoscribe_provider_auth',
+			'autoscribe_provider_model_not_found',
+			'autoscribe_provider_refusal',
+			'autoscribe_provider_error',
+			'autoscribe_key_missing',
+			'autoscribe_key_stale',
+			'autoscribe_key_unsafe',
+			'autoscribe_key_corrupt',
+			'autoscribe_unknown_provider',
+			'autoscribe_unknown_prompt',
+			'autoscribe_missing_model',
+			'autoscribe_unsafe_body',
+			'autoscribe_empty_body',
+			'autoscribe_invalid_schedule_parameter',
+			'autoscribe_invalid_schedule_type',
+			'autoscribe_grounding_unsupported',
+			'autoscribe_run_not_recorded',
+			'autoscribe_reservation_failed',
+			'autoscribe_image_too_large',
+			'autoscribe_image_invalid',
+			'autoscribe_upload_failed',
+		);
+
+		foreach ( $codes as $code ) {
 			$this->assertFalse(
 				$this->policy->should_retry( new WP_Error( $code, 'x' ), 1 ),
 				$code
 			);
 		}
+	}
+
+	/**
+	 * A code nobody has classified is permanent, not retryable.
+	 *
+	 * This is the whole point of the 1.0.2 change from a denylist to an
+	 * allowlist. Under the old list an error code that had not been thought of
+	 * yet — including every code added by a later release, and every code a
+	 * provider starts returning without warning — was retried three times,
+	 * paying for the same answer each time.
+	 *
+	 * @since 1.0.2
+	 *
+	 * @return void
+	 */
+	public function test_an_unknown_code_is_not_retried(): void {
+		$this->assertFalse(
+			$this->policy->should_retry( new WP_Error( 'autoscribe_something_nobody_has_written_yet', 'x' ), 1 )
+		);
+	}
+
+	/**
+	 * A site can add a transient code without waiting for a release.
+	 *
+	 * @since 1.0.2
+	 *
+	 * @return void
+	 */
+	public function test_the_transient_list_is_filterable(): void {
+		$filter = static function ( array $codes ): array {
+			$codes[] = 'autoscribe_something_nobody_has_written_yet';
+
+			return $codes;
+		};
+
+		add_filter( 'autoscribe_transient_error_codes', $filter );
+
+		$retried = $this->policy->should_retry( new WP_Error( 'autoscribe_something_nobody_has_written_yet', 'x' ), 1 );
+
+		remove_filter( 'autoscribe_transient_error_codes', $filter );
+
+		$this->assertTrue( $retried );
 	}
 
 	/**

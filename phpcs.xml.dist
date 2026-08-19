@@ -66,6 +66,11 @@
 		<exclude-pattern>/uninstall.php</exclude-pattern>
 		<exclude-pattern>*/src/Pipeline/Run.php</exclude-pattern>
 		<exclude-pattern>*/src/Cost/Budget_Guard.php</exclude-pattern>
+		<!--
+		Spend_Lock takes a named MySQL lock. GET_LOCK has no wpdb wrapper, and
+		caching a lock would defeat the point of taking one.
+		-->
+		<exclude-pattern>*/src/Cost/Spend_Lock.php</exclude-pattern>
 		<exclude-pattern>*/src/Content/Topic_Deduplicator.php</exclude-pattern>
 		<!--
 		The run log tests need rows with specific started_at values to exercise

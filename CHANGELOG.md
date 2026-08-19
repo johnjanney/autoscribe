@@ -87,7 +87,116 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-08-18
+
+A second Codex review of the 1.0.1 release found that four of its fixes were
+narrower than the release notes claimed, and that one of them introduced a
+regression. This release makes those fixes hold, and corrects the claims that
+did not.
+
+Two of the follow-up findings were checked against the code and the provider's
+own documentation and are recorded as rejected rather than fixed. Both, and the
+evidence, are in `CODEX-REVIEW-RESPONSE.md`.
+
+### Fixed
+
+- **The monthly cap still had a concurrency bypass.** Version 1.0.1 replaced a
+  read-then-write race with an ordering trick — re-read the total, count only
+  rows up to the reserving run's own ID — and claimed it bounded the overshoot to
+  one run. It did not. A row's ID is assigned when the run is inserted, not when
+  its reservation is written, so the auto-increment does not order the
+  reservations: a later run that reserves and re-reads before an earlier one
+  reserves at all sees nothing, and so does the earlier one when its turn comes.
+  Both spend. The check and the reservation now happen inside a named MySQL lock
+  (`Spend_Lock`), which makes them atomic across processes. The ordering pass is
+  kept only for databases where the lock cannot be taken, and is described as the
+  weaker fallback it is.
+- **A reservation that failed to write did not stop the run.** `$wpdb->update()`
+  can return false, and the result was discarded, so a run could proceed to spend
+  real money against a cap with no record of the spending. A failed reservation
+  now ends the run before the first provider call.
+- **An image could be generated without being reserved for.** The preflight
+  estimate resolved the image model without the adapter's suggestions while
+  generation resolved it with them, so a prompt with no image model and no site
+  default priced the image under the *text* model — and the seeded Claude rows
+  carry a zero per-image rate. A Claude article with an OpenAI picture and the
+  model fields left alone reserved nothing at all for the image.
+- **Draft adoption could overwrite an old or human-edited draft.** Adoption was
+  written as "the newest failed run of this prompt that still has a post", with
+  no tie to the retry that created it. Once retries were exhausted the draft
+  stayed adoptable indefinitely, so the next ordinary scheduled occurrence — a
+  different article, days later — overwrote it, and a reviewer part-way through
+  editing it lost the work. Adoption now requires a retry, the immediately
+  preceding row, a matching attempt number, an intact run link, and a post
+  untouched since the run that created it closed.
+- **A retry collided with its own abandoned draft.** Adoption was resolved after
+  the body call, so duplicate detection had already counted the previous
+  attempt's draft as a topic covered — meaning a retry after a successful body
+  call was skipped as a duplicate of itself and adoption was unreachable in
+  practice. The draft this run will overwrite is now resolved first and excluded
+  from the covered list and the title check.
+- **Retry classification was open by default.** The policy was a denylist of
+  permanent codes, so any error nobody had classified yet — including every code
+  a later release or a provider might introduce — was retried three times, paying
+  for the same answer each time. It is now an allowlist of transport-level
+  failures, filterable through `autoscribe_transient_error_codes`, and an
+  unrecognised code is permanent.
+- **The image size limit was applied after the download.** `download_url()`
+  streamed the whole response to a temporary file with no ceiling, and the file
+  was read whole into memory, before the 20 MB check ran. The limit protected the
+  uploads directory and nothing else. The fetch now passes the limit to the HTTP
+  layer, so it bounds bandwidth, disk, and memory.
+- **Weak-salt key records survived the upgrade.** Version 1.0.1 refused to *store*
+  a key where `AUTH_KEY` and `SECURE_AUTH_KEY` are absent or placeholders, but
+  went on reading and using keys 1.0.0 had already stored that way — so the
+  exposure the check was added to prevent continued on every site that already
+  had it. Such records are now refused on read and reported on the Settings
+  screen. They are left in the database rather than deleted; the screen asks for
+  the key again once real salts are installed.
+- **"Queue last processed" reported the scheduled time, not the completion time.**
+  The query ordered by Action Scheduler's `date`, which is `scheduled_date_gmt`,
+  and read the schedule object's own date, which is the time the action was armed
+  for. A job due last Tuesday and run a moment ago was shown as last processed
+  last Tuesday — inverting the panel's purpose, since a queue catching up looked
+  stalest exactly when it was recovering.
+- **Model-supplied text was still pasted into prompts as prose.** The agreed
+  title went into the body call's instructions, and a response that failed
+  validation went into the repair call's instructions, both unfenced. A proposal
+  that had itself been steered carried the steering forward. Both now go in
+  labelled, JSON-encoded untrusted-data blocks, as the already-covered list
+  already did. So does the collision reason sent on a re-ask, which quotes an
+  existing post title.
+
+### Changed
+
+- `Retry_Policy::permanent_codes()` is replaced by `transient_codes()`. The list
+  it returns now means the opposite, so the name had to change with it.
+- `Run::adoptable_draft()` takes the running attempt number, and
+  `Topic_Deduplicator::recent_topics()` and `collision_reason()` take a post to
+  exclude.
+- The `DECISIONS.md` note on duplicate detection said the similarity threshold
+  was 82 percent, as the brief specifies. The code has defaulted to 78 since
+  0.5.0 for a stated reason; the document now records the deviation instead of
+  repeating the brief.
+- The README no longer claims the budget overshoot is bounded to one run, no
+  longer calls the release a release candidate while the tag says otherwise, and
+  counts the missing screenshot among the unmet requirements rather than
+  contradicting itself two paragraphs later.
+
+### Added
+
+- Tests for draft adoption in both directions, for the reservation failure path,
+  for image pricing with no model configured, for the bounded image download,
+  and for the retry allowlist rejecting an unclassified code.
+
 ## [1.0.1] - 2026-08-17
+
+> **Correction, 18 August 2026.** Four claims in this entry were broader than the
+> code. The concurrency race was narrowed, not closed. The image size limit was
+> applied after the download rather than bounding it. Weak-salt protection
+> covered new writes only. And the retry fix named specific codes while leaving
+> everything unclassified retryable. Version 1.0.2 fixes all four; read that
+> entry rather than this one for the current state.
 
 An external audit of the 1.0.0 release found defects in cost accounting, retry
 behaviour, one provider contract, and several admin features that existed in

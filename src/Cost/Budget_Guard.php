@@ -10,6 +10,7 @@ namespace AutoScribe\Cost;
 use AutoScribe\Activation;
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Providers\Model_Resolver;
+use AutoScribe\Providers\Provider_Registry;
 use DateTimeImmutable;
 use DateTimeZone;
 use WP_Error;
@@ -33,6 +34,10 @@ defined( 'ABSPATH' ) || exit;
  * contributed to, all pass, and all spend. Writing the estimate onto the run row
  * before the paid call means later runs in the same batch can see it. The run
  * row is the reservation; no extra storage is needed.
+ *
+ * Reading the total and writing the reservation are still two statements, so the
+ * caller takes a Spend_Lock around both. See that class for why the ordering
+ * trick this class used in 1.0.1 was not the equivalent it claimed to be.
  *
  * @since 0.5.0
  */
@@ -100,14 +105,24 @@ final class Budget_Guard {
 	private Pricing_Table $pricing;
 
 	/**
+	 * Provider registry, used to resolve the models a run will really use.
+	 *
+	 * @since 1.0.2
+	 * @var Provider_Registry|null
+	 */
+	private ?Provider_Registry $providers;
+
+	/**
 	 * Builds the guard.
 	 *
 	 * @since 0.5.0
 	 *
-	 * @param Pricing_Table|null $pricing Pricing table, or null to build a default.
+	 * @param Pricing_Table|null     $pricing   Pricing table, or null to build a default.
+	 * @param Provider_Registry|null $providers Registry, or null to build one on first use.
 	 */
-	public function __construct( ?Pricing_Table $pricing = null ) {
-		$this->pricing = $pricing instanceof Pricing_Table ? $pricing : new Pricing_Table();
+	public function __construct( ?Pricing_Table $pricing = null, ?Provider_Registry $providers = null ) {
+		$this->pricing   = $pricing instanceof Pricing_Table ? $pricing : new Pricing_Table();
+		$this->providers = $providers;
 	}
 
 	/**
@@ -168,20 +183,20 @@ final class Budget_Guard {
 	/**
 	 * Re-checks the caps once this run's reservation is on the table.
 	 *
-	 * The check() method reads the month total and returns; the caller then
-	 * writes its reservation. Between those two statements a concurrent worker reads the
-	 * same total, so both pass and both spend. Action Scheduler runs a batch of
-	 * actions at once, which makes that window ordinary rather than theoretical.
+	 * This is the fallback path, used only when Spend_Lock could not take the
+	 * named lock that normally makes the check and the reservation atomic.
 	 *
-	 * This second pass closes it without a lock or a transaction. It counts only
-	 * rows up to and including this run's own ID, so two runs that reserved
-	 * concurrently reach different answers: the earlier row sees only itself and
-	 * proceeds, the later row sees both and stands down. The ordering is total
-	 * and comes from the database's own auto-increment, so there is no tie.
+	 * It counts only rows up to and including this run's own ID, so two runs that
+	 * reserved concurrently usually reach different answers: the earlier row sees
+	 * only itself and proceeds, the later row sees both and stands down.
 	 *
-	 * The remaining overshoot bound is one run's estimate: a run already past
-	 * this point cannot be recalled. No client-side cap can do better, and none
-	 * replaces a provider-side spending limit.
+	 * "Usually" is the whole of its weakness, and 1.0.1 claimed more than that.
+	 * A row's ID is assigned when the run is inserted, not when its reservation
+	 * is written, so the auto-increment does not order the reservations. If the
+	 * later run reserves and re-reads before the earlier run reserves at all,
+	 * neither sees the other and both pass. This pass narrows the window; it does
+	 * not close it, and it does not bound the overshoot to one run. Only the lock
+	 * does that, and only a provider-side spending limit is a hard ceiling.
 	 *
 	 * @since 1.0.1
 	 *
@@ -314,13 +329,73 @@ final class Budget_Guard {
 		$grounded = $prompt->grounding_enabled() ? 1 : 0;
 
 		return $this->pricing->cost_cents(
-			Model_Resolver::resolve( $prompt->text_model(), $prompt->text_provider() ),
+			$this->text_model( $prompt ),
 			$input_tokens,
 			$output_tokens,
-			Model_Resolver::resolve( $prompt->image_model(), $prompt->image_provider() ),
+			$images > 0 ? $this->image_model( $prompt ) : '',
 			$images,
 			$grounded
 		);
+	}
+
+	/**
+	 * Resolves the text model the run will actually use.
+	 *
+	 * @since 1.0.2
+	 *
+	 * @param Prompt $prompt Prompt about to run.
+	 * @return string
+	 */
+	private function text_model( Prompt $prompt ): string {
+		$provider = $this->providers()->text_provider( $prompt->text_provider() );
+
+		return Model_Resolver::resolve(
+			$prompt->text_model(),
+			$prompt->text_provider(),
+			null === $provider ? array() : $provider->suggested_models()
+		);
+	}
+
+	/**
+	 * Resolves the image model the run will actually use.
+	 *
+	 * The estimate has to resolve models exactly as generation does. It did not:
+	 * generation passes the adapter's own suggestions to Model_Resolver, and the
+	 * estimate did not, so a prompt with no image model and no site default
+	 * resolved to an empty string here and to a real model at generation time.
+	 * An empty string makes Pricing_Table fall back to the text model's rates,
+	 * and the seeded Claude rows carry a zero per-image rate — so a Claude text
+	 * prompt with an unset image model reserved nothing at all for the image it
+	 * was about to generate.
+	 *
+	 * @since 1.0.2
+	 *
+	 * @param Prompt $prompt Prompt about to run.
+	 * @return string
+	 */
+	private function image_model( Prompt $prompt ): string {
+		$provider = $this->providers()->image_provider( $prompt->image_provider() );
+
+		return Model_Resolver::resolve(
+			$prompt->image_model(),
+			$prompt->image_provider(),
+			null === $provider ? array() : $provider->suggested_models()
+		);
+	}
+
+	/**
+	 * Returns the provider registry, building it on first use.
+	 *
+	 * @since 1.0.2
+	 *
+	 * @return Provider_Registry
+	 */
+	private function providers(): Provider_Registry {
+		if ( ! $this->providers instanceof Provider_Registry ) {
+			$this->providers = new Provider_Registry();
+		}
+
+		return $this->providers;
 	}
 
 	/**

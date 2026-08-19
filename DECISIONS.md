@@ -190,9 +190,15 @@ the right direction to be wrong in.
 does not retry failed actions — it records the failure and stops.
 
 `Retry_Policy` plus an `_autoscribe_attempt` meta key on the prompt: backoff at
-5 minutes, 30 minutes, then hourly, capped at three attempts. Errors that will
-never succeed on a retry — bad key, retired model, refusal, unsafe body — are
-classified permanent and not retried at all.
+5 minutes, 30 minutes, then hourly, capped at three attempts.
+
+Classification is an **allowlist** of transient codes — transport failure, rate
+limit, provider unavailable — and anything else is permanent. It was a denylist
+of permanent codes until 1.0.2, which meant every code nobody had classified yet
+was retried three times by default, including every code a later release or a
+provider might introduce. Getting the default wrong in that direction costs
+money; getting it wrong in this one fails a run that was going to fail anyway.
+`autoscribe_transient_error_codes` filters the list.
 
 *Consequence:* the attempt counter lives on the prompt rather than the run,
 because a retry opens a new run row (D-10) and the count has to survive across
@@ -225,8 +231,15 @@ WP-CLI context — calling it there is a fatal error, in the exact context the
 plugin runs in.
 
 Title collision is checked with the plugin's own query instead. The other two
-checks (exact key match, `similar_text()` above the filterable 82% threshold)
-are as specified.
+checks are exact key match and `similar_text()` above a filterable threshold.
+That threshold defaults to **78, not the 82 §7.2 names** — a deviation this
+document previously did not admit, because it went on quoting 82 after the code
+had settled on 78. `similar_text()` compares characters rather than meaning, and
+on hyphenated slugs it scores unrelated articles low and neighbouring ones high;
+the real defence is the already-covered list injected into the proposal prompt,
+so the numeric backstop is set slightly wider. §7.2 asks for the threshold to be
+filterable and `autoscribe_topic_similarity_threshold` is, so a site that wants
+the brief's 82 can have it in one line.
 
 ### D-13
 **Executable blocks are stripped with their contents, before `wp_kses_post()`.** ⚠️

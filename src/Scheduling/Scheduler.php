@@ -204,43 +204,49 @@ final class Scheduler {
 	 * has actually run for a week, which is exactly the state a health panel
 	 * exists to reveal.
 	 *
+	 * Getting the right time out of Action Scheduler takes some care, and 1.0.1
+	 * got it wrong. Its query ordered by 'date' and read the schedule's own date,
+	 * and both of those are the time the action was *due*: the store maps 'date'
+	 * onto scheduled_date_gmt, and a schedule object holds the time it was armed
+	 * for. An action due last Tuesday and run a moment ago was reported as having
+	 * run last Tuesday — precisely inverting the panel's purpose, since a badly
+	 * backed-up queue looked stalest exactly when it was catching up.
+	 *
+	 * 'modified' orders by last_attempt_gmt instead, and the store's get_date()
+	 * returns last_attempt_gmt for any action that is no longer pending. That is
+	 * the completion time.
+	 *
 	 * @since 1.0.1
 	 *
 	 * @return int|null Unix timestamp, or null when nothing has completed or the
 	 *                  queue cannot be queried.
 	 */
 	public function last_processed(): ?int {
-		if ( ! function_exists( 'as_get_scheduled_actions' ) ) {
+		if ( ! function_exists( 'as_get_scheduled_actions' ) || ! class_exists( 'ActionScheduler' ) ) {
 			return null;
 		}
 
-		$actions = as_get_scheduled_actions(
+		$ids = as_get_scheduled_actions(
 			array(
 				'group'    => self::GROUP,
 				'status'   => 'complete',
 				'per_page' => 1,
-				'orderby'  => 'date',
+				'orderby'  => 'modified',
 				'order'    => 'DESC',
-			)
+			),
+			'ids'
 		);
 
-		if ( ! is_array( $actions ) || array() === $actions ) {
+		if ( ! is_array( $ids ) || array() === $ids ) {
 			return null;
 		}
 
-		$action = reset( $actions );
-
-		if ( ! is_object( $action ) || ! method_exists( $action, 'get_schedule' ) ) {
+		try {
+			$date = \ActionScheduler::store()->get_date( (int) reset( $ids ) );
+		} catch ( \Exception $e ) {
+			// The row can be pruned between the query and the lookup.
 			return null;
 		}
-
-		$schedule = $action->get_schedule();
-
-		if ( ! is_object( $schedule ) || ! method_exists( $schedule, 'get_date' ) ) {
-			return null;
-		}
-
-		$date = $schedule->get_date();
 
 		return $date instanceof \DateTimeInterface ? $date->getTimestamp() : null;
 	}

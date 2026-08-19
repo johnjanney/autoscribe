@@ -316,8 +316,13 @@ Statuses:
 | `skipped_duplicate` | The topic was already covered, so the article was never written |
 
 A failed run is retried automatically up to three times, after 5 minutes, then
-30 minutes, then an hour. Failures that will never succeed on a retry — a bad
-API key, a retired model, a refusal — are not retried at all.
+30 minutes, then an hour — but only when the failure was a transport-level one:
+the network dropped, the provider rate-limited the request, or the provider was
+unavailable. Everything else is treated as permanent and not retried, including
+anything the plugin does not recognise, because a retry costs money and most
+failures cost the same money to reach the same answer. A bad API key, a retired
+model, a refusal, a duplicate topic, and a budget breach are all in that group.
+Use the **Retry** action in the Run Log when you have fixed the cause yourself.
 
 Run history is pruned after 90 days by default. Change that under **Settings →
 Housekeeping**; zero keeps everything.

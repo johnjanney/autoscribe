@@ -551,6 +551,9 @@ final class Settings_Page {
 			case Key_Store::SOURCE_STALE:
 				return __( 'A key is stored but can no longer be decrypted, which happens when the site salts are rotated. Enter it again.', 'autoscribe' );
 
+			case Key_Store::SOURCE_UNSAFE:
+				return __( 'A key is stored, but this site has no usable AUTH_KEY and SECURE_AUTH_KEY, so it was encrypted with a key anyone could derive. It will not be used. Generate fresh WordPress salts, then enter the key again — or set it as a wp-config.php constant instead.', 'autoscribe' );
+
 			default:
 				return __( 'No key set.', 'autoscribe' );
 		}

@@ -146,9 +146,26 @@ final class Generator {
 
 		$run->record_step( 'budget_check' );
 
+		/*
+		 * The attempt immediately before this one may have got as far as a draft
+		 * before failing. Bind it to this run so assembly updates that draft
+		 * instead of adding a second one. Run::adoptable_draft() refuses anything
+		 * that is not the previous attempt of this retry series, and anything a
+		 * person has touched since.
+		 *
+		 * This is resolved before the proposal call, not after the body call, so
+		 * that duplicate detection can be told to ignore the draft this run is
+		 * about to overwrite.
+		 */
+		$inherited = Run::adoptable_draft( $prompt_id, $run->id(), $attempt );
+
+		if ( null !== $inherited ) {
+			$run->record_post( $inherited );
+		}
+
 		// Section 7.2: a cheap proposal call, so a duplicate is caught before
 		// paying to write an article that would be discarded.
-		$topic = $this->topic_step->run( $prompt, $run );
+		$topic = $this->topic_step->run( $prompt, $run, (int) $inherited );
 
 		if ( is_wp_error( $topic ) ) {
 			if ( 'autoscribe_duplicate_topic' !== $topic->get_error_code() ) {
@@ -169,17 +186,6 @@ final class Generator {
 		}
 
 		$run->record_step( 'generate_body' );
-
-		/*
-		 * A previous attempt may have got as far as a draft before failing. Bind
-		 * it to this run so assembly updates that draft instead of adding a
-		 * second one for the same prompt.
-		 */
-		$inherited = Run::adoptable_draft( $prompt_id, $run->id() );
-
-		if ( null !== $inherited ) {
-			$run->record_post( $inherited );
-		}
 
 		$post_id = $this->assemble_step->run( $prompt, $article, $run );
 

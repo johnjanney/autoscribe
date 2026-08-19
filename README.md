@@ -191,36 +191,57 @@ way to tell it apart from the rest of the site.
 
 ## Status and known limitations
 
-Version 1.0.1, a release candidate rather than a settled stable release. Almost
-everything in the project brief is implemented and covered by tests, but one
-requirement is knowingly not met — the first item below. 200 tests run against
-PHP 8.1, 8.2, and 8.3 on every push.
+Version 1.0.2. Two external audits have been run against this plugin, and both
+found real defects; the findings, the fixes, and the two findings rejected with
+evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 215 tests run
+against PHP 8.1, 8.2, and 8.3 on every push.
 
-The first two items are the ones to read before enabling unattended publishing.
-The rest are real but minor:
+Three brief requirements are knowingly not met: the single-action pipeline, the
+live next-run readout, and the screenshot. They are listed below with everything
+else worth knowing before you enable unattended publishing.
+
+The first two items are the ones that matter most:
 
 - **The generation pipeline runs as one Action Scheduler action, not one action
   per step as section 5 of the brief requires.** A run takes 30 to 120 seconds
   inside a single PHP request, so a host with a short `max_execution_time` can
   terminate it part-way, and the queue cannot resume from the step that was
-  interrupted — a retry re-runs from the beginning. A draft left behind by a
-  failed run is adopted by the retry rather than duplicated, so this costs you
-  repeated provider calls, not repeated posts.
-- **The monthly budget cap is enforced by reservation and re-check, not by a
-  lock.** The worst-case overshoot is one run's estimated cost, because a run
-  already past the check cannot be recalled. Your provider's own spending limit
-  is the only hard ceiling; treat this cap as a brake, not a wall.
+  interrupted — a retry re-runs from the beginning, and pays for it. A draft left
+  behind by a failed run is adopted by that run's own retry rather than
+  duplicated, so this costs you repeated provider calls, not repeated posts. This
+  is the one outstanding architectural gap, and it is planned work rather than a
+  decision to skip.
+- **The monthly budget cap is enforced by a named database lock around the check
+  and the reservation.** Concurrent workers on the same database serialise
+  through it, so the cap holds against the batch execution Action Scheduler
+  performs. Two limits remain: a run already past the check cannot be recalled,
+  and the reserved figure is an estimate, so a run that costs more than estimated
+  overshoots by the difference. On a database where the lock cannot be taken the
+  plugin falls back to a weaker row-order re-check that narrows the race without
+  closing it. Your provider's own spending limit is the only hard ceiling; treat
+  this cap as a brake, not a wall.
 - The Settings screen's save path and its connection-test controls have no
   automated coverage. The prompt editor's save path does.
 - The "Next run" readout in the prompt editor reflects the *saved* schedule. It
   does not update as you change the schedule controls — save to see the effect.
+  Section 9.2 asks for a live readout.
+- The duplicate-topic similarity threshold defaults to 78 percent, where section
+  7.2 names 82. `similar_text()` compares characters rather than meaning, so the
+  numeric check is a backstop behind the already-covered list sent to the model;
+  it is set slightly wider on purpose. The `autoscribe_topic_similarity_threshold`
+  filter sets it to anything you like.
+- Key storage refuses to run where `AUTH_KEY` and `SECURE_AUTH_KEY` are missing
+  or still placeholders, and refuses to *read* records stored that way by version
+  1.0.0. That path has no automated coverage, because the salts are PHP constants
+  and a test cannot un-define them.
 - No test drives Action Scheduler itself; the queued run handler is tested by
   calling it directly.
 - CI runs against MySQL only. A MySQL/MariaDB divergence was found and fixed
   during development; nothing guards against the reverse.
 - Spend figures are estimates computed from reported token usage against a
   pricing table you maintain. They are not billing data.
-- There is no screenshot in this README yet, which the brief asks for.
+- There is no screenshot in this README yet, which section 12 of the brief asks
+  for.
 
 ---
 

@@ -384,7 +384,7 @@ final class Run {
 	}
 
 	/**
-	 * Returns a draft left behind by this prompt's previous failed run.
+	 * Returns a draft left behind by the attempt immediately before this one.
 	 *
 	 * A retry re-runs the whole pipeline, and post assembly happens before image
 	 * generation so that section 6's "required" mode has a draft to leave behind.
@@ -393,38 +393,102 @@ final class Run {
 	 * the others. Adopting the previous attempt's draft means the retry updates it
 	 * rather than adding another.
 	 *
-	 * Only a draft still carrying its run link is adopted. A post someone has
-	 * since published, moved, or edited into shape is not the plugin's to
-	 * overwrite.
+	 * Version 1.0.1 asked only for "the newest failed run of this prompt that has
+	 * a post", which is a much wider net than a retry. Once retries were exhausted
+	 * that failed draft stayed adoptable for ever, so the next ordinary scheduled
+	 * occurrence — a different article, days later — overwrote it, and so did the
+	 * one after that. A reviewer who had started editing the draft lost the edit.
+	 *
+	 * Five conditions now have to hold, and every one of them exists to keep a
+	 * later run from overwriting work that is not its own:
+	 *
+	 * - this is a retry, not a first attempt;
+	 * - the candidate is the row immediately before this one for this prompt, so
+	 *   an unrelated run in between ends the series;
+	 * - that row failed, and its attempt number is exactly one lower than this
+	 *   one, so the two belong to the same retry series;
+	 * - the post still carries that row's ID in its run meta, so a post relinked
+	 *   or created by something else is left alone;
+	 * - the post has not been touched since that run finished, so a human edit
+	 *   ends adoption even while the post is still a draft.
 	 *
 	 * @since 1.0.1
 	 *
-	 * @param int $prompt_id      Prompt being run.
-	 * @param int $exclude_run_id Run currently executing.
+	 * @param int $prompt_id Prompt being run.
+	 * @param int $run_id    Run currently executing.
+	 * @param int $attempt   Attempt number of the run currently executing.
 	 * @return int|null Post ID, or null when there is nothing to adopt.
 	 */
-	public static function adoptable_draft( int $prompt_id, int $exclude_run_id ): ?int {
+	public static function adoptable_draft( int $prompt_id, int $run_id, int $attempt ): ?int {
 		global $wpdb;
 
-		$post_id = (int) $wpdb->get_var(
+		if ( $attempt < 2 ) {
+			return null;
+		}
+
+		$previous = $wpdb->get_row(
 			$wpdb->prepare(
-				'SELECT post_id FROM %i
-				WHERE prompt_id = %d AND id <> %d AND status = %s AND post_id IS NOT NULL AND post_id > 0
+				'SELECT id, post_id, status, attempt, finished_at FROM %i
+				WHERE prompt_id = %d AND id < %d
 				ORDER BY id DESC LIMIT 1',
 				Activation::table_name(),
 				$prompt_id,
-				$exclude_run_id,
-				self::STATUS_FAILED
-			)
+				$run_id
+			),
+			ARRAY_A
 		);
+
+		if ( ! is_array( $previous ) ) {
+			return null;
+		}
+
+		if ( self::STATUS_FAILED !== (string) $previous['status'] ) {
+			return null;
+		}
+
+		if ( (int) $previous['attempt'] !== $attempt - 1 ) {
+			return null;
+		}
+
+		$post_id = (int) $previous['post_id'];
 
 		if ( $post_id <= 0 || 'draft' !== get_post_status( $post_id ) ) {
 			return null;
 		}
 
-		$linked = (string) get_post_meta( $post_id, Step_Assemble_Post::RUN_ID_META, true );
+		if ( (int) get_post_meta( $post_id, Step_Assemble_Post::RUN_ID_META, true ) !== (int) $previous['id'] ) {
+			return null;
+		}
 
-		return '' === $linked ? null : $post_id;
+		return self::untouched_since( $post_id, (string) $previous['finished_at'] ) ? $post_id : null;
+	}
+
+	/**
+	 * Whether a post has stood still since the given UTC timestamp.
+	 *
+	 * The failed run wrote the draft and then closed itself, so its finished_at
+	 * is always at or after the draft's own last modification. Anything later
+	 * than that came from somewhere else, and the only somewhere else is a
+	 * person.
+	 *
+	 * @since 1.0.2
+	 *
+	 * @param int    $post_id     Post to inspect.
+	 * @param string $finished_at UTC MySQL timestamp the run closed at.
+	 * @return bool
+	 */
+	private static function untouched_since( int $post_id, string $finished_at ): bool {
+		if ( '' === $finished_at || '0000-00-00 00:00:00' === $finished_at ) {
+			return false;
+		}
+
+		$modified = (string) get_post_field( 'post_modified_gmt', $post_id );
+
+		if ( '' === $modified ) {
+			return false;
+		}
+
+		return strtotime( $modified . ' UTC' ) <= strtotime( $finished_at . ' UTC' );
 	}
 
 	/**
@@ -601,10 +665,10 @@ final class Run {
 	 * @since 0.5.0
 	 *
 	 * @param int $cents Estimated cost.
-	 * @return void
+	 * @return bool True when the reservation reached the database.
 	 */
-	public function reserve_cost( int $cents ): void {
-		$this->update( array( 'cost_cents' => $cents ), array( '%d' ) );
+	public function reserve_cost( int $cents ): bool {
+		return $this->update( array( 'cost_cents' => $cents ), array( '%d' ) );
 	}
 
 	/**
@@ -746,17 +810,26 @@ final class Run {
 	 *
 	 * @param array<string, mixed> $data    Column values.
 	 * @param string[]             $formats Column formats.
-	 * @return void
+	 * @return bool True when the write succeeded.
 	 */
-	private function update( array $data, array $formats ): void {
+	private function update( array $data, array $formats ): bool {
 		global $wpdb;
 
-		$wpdb->update(
+		$updated = $wpdb->update(
 			Activation::table_name(),
 			$data,
 			array( 'id' => $this->id ),
 			$formats,
 			array( '%d' )
 		);
+
+		/*
+		 * update() returns the number of affected rows, and zero is ambiguous: it
+		 * means either that the row is missing or that the values were already
+		 * what was written. Only an explicit false is a failed write, and only the
+		 * reservation currently acts on it, because that is the write whose loss
+		 * costs money rather than a log entry.
+		 */
+		return false !== $updated;
 	}
 }
