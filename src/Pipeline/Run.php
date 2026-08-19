@@ -497,6 +497,60 @@ final class Run {
 	}
 
 	/**
+	 * Returns the last step this run completed.
+	 *
+	 * Empty when the run has not completed one yet. The sequencer reads this to
+	 * work out what to do next, which is why it is a column rather than a
+	 * variable held across a single request: a run that is being advanced one
+	 * queued action at a time has nowhere else to keep its place.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return string
+	 */
+	public function step(): string {
+		return (string) $this->column( 'step' );
+	}
+
+	/**
+	 * Returns the run's current status.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return string One of the STATUS_* constants.
+	 */
+	public function status(): string {
+		return (string) $this->column( 'status' );
+	}
+
+	/**
+	 * Reads one column from the run row.
+	 *
+	 * Deliberately not cached. Both callers ask about state a step may have
+	 * changed a moment ago, and a stale answer would have the sequencer running
+	 * a step twice or closing a run that has already closed itself.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param string $column Column name.
+	 * @return string|null
+	 */
+	private function column( string $column ): ?string {
+		global $wpdb;
+
+		$value = $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT %i FROM %i WHERE id = %d',
+				$column,
+				Activation::table_name(),
+				$this->id
+			)
+		);
+
+		return null === $value ? null : (string) $value;
+	}
+
+	/**
 	 * Returns the most recent run row for a prompt.
 	 *
 	 * The Run Log in section 9.3 reads runs back out; this is the accessor it

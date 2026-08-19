@@ -87,7 +87,7 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
-Phases 1 and 2 of the pipeline split scoped in `docs/PIPELINE-SPLIT.md`.
+Phases 1 to 3a of the pipeline split scoped in `docs/PIPELINE-SPLIT.md`.
 Groundwork: nothing here changes what a site sees today, because the pipeline
 still runs as one action and no step is ever re-entered. It is on `main` rather
 than in a release because the phases it prepares for are what earn the version
@@ -214,6 +214,19 @@ time.
   a second one beside it. The run stands down as a duplicate instead.
 
 ### Changed
+
+- **The step order moved out of `Generator` and into a `Pipeline` class.**
+  Section 5 needs a run to be resumable from its row alone, because a queued
+  action arrives knowing only a run ID — and an order expressed as a sequence of
+  statements inside one method cannot be resumed, only restarted. `Pipeline`
+  holds the list and executes one step at a time, taking every step's input from
+  the run rather than from a local variable, which is what phases 1 and 2 were
+  building towards.
+
+  `Generator` keeps the synchronous path that "Run now" and Preview need, and
+  drives the same sequence in a loop. There is deliberately one list and two
+  drivers: two lists would be two descriptions of one order, and the one that
+  drifts is the one nobody is looking at.
 
 - The featured image work — the provider call, the sideload, the thumbnail, and
   the decision about what to do when no image can be had — moved out of

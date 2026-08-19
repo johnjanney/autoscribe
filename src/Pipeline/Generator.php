@@ -10,13 +10,10 @@ namespace AutoScribe\Pipeline;
 use AutoScribe\Admin\Settings;
 use AutoScribe\Content\Article;
 use AutoScribe\Content\Article_Validator;
-use AutoScribe\Content\Taxonomy_Applier;
-use AutoScribe\Content\Topic_Deduplicator;
+use AutoScribe\Cost\Budget_Guard;
 use AutoScribe\Cost\Pricing_Table;
-use AutoScribe\SEO\SEO_Adapter_Factory;
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Providers\Provider_Registry;
-use AutoScribe\Security\Content_Sanitizer;
 use WP_Error;
 
 defined( 'ABSPATH' ) || exit;
@@ -24,54 +21,42 @@ defined( 'ABSPATH' ) || exit;
 /**
  * Runs one prompt from instruction to published post, in a single request.
  *
- * Phase 4 replaces the body of run() with Action Scheduler dispatch across the
- * same steps. The steps themselves are written to be movable: each takes what
- * it needs and returns a value or a WP_Error, with no shared mutable state
- * beyond the Run row.
+ * One of the two drivers of Pipeline, and the synchronous one. It opens the run,
+ * advances every step in a loop, and finishes the post off. "Run now" and
+ * Preview both want an answer in the request that asked for it, so this driver
+ * stays whatever else changes.
+ *
+ * What it no longer contains is the order of the steps. That moved to Pipeline
+ * when the queue driver arrived, because two descriptions of one sequence drift,
+ * and the one that drifts is the one nobody is looking at.
  *
  * @since 0.3.0
  */
 final class Generator {
 
 	/**
-	 * Budget check step, which runs before anything is spent.
+	 * The ordered generation sequence.
 	 *
-	 * @since 0.5.0
-	 * @var Step_Budget_Check
+	 * @since 1.1.0
+	 * @var Pipeline
 	 */
-	private Step_Budget_Check $budget_step;
+	private Pipeline $pipeline;
 
 	/**
-	 * Topic proposal step, which catches duplicates before the body call.
+	 * Budget guard, kept so the section 7.4 warning email can still be sent.
 	 *
-	 * @since 0.5.0
-	 * @var Step_Propose_Topic
+	 * @since 1.1.0
+	 * @var Budget_Guard
 	 */
-	private Step_Propose_Topic $topic_step;
+	private Budget_Guard $guard;
 
 	/**
-	 * Body generation step.
+	 * Article validator, used to read the finished article back off the run.
 	 *
-	 * @since 0.3.0
-	 * @var Step_Generate_Body
+	 * @since 1.1.0
+	 * @var Article_Validator
 	 */
-	private Step_Generate_Body $body_step;
-
-	/**
-	 * Image generation step.
-	 *
-	 * @since 0.3.0
-	 * @var Step_Generate_Image
-	 */
-	private Step_Generate_Image $image_step;
-
-	/**
-	 * Post assembly step.
-	 *
-	 * @since 0.3.0
-	 * @var Step_Assemble_Post
-	 */
-	private Step_Assemble_Post $assemble_step;
+	private Article_Validator $validator;
 
 	/**
 	 * Builds the orchestrator.
@@ -81,15 +66,9 @@ final class Generator {
 	 * @param Provider_Registry $registry Provider registry.
 	 */
 	public function __construct( Provider_Registry $registry ) {
-		$this->budget_step   = new Step_Budget_Check();
-		$this->topic_step    = new Step_Propose_Topic( $registry, new Topic_Deduplicator() );
-		$this->body_step     = new Step_Generate_Body( $registry, new Article_Validator() );
-		$this->image_step    = new Step_Generate_Image( $registry );
-		$this->assemble_step = new Step_Assemble_Post(
-			new Content_Sanitizer(),
-			new SEO_Adapter_Factory(),
-			new Taxonomy_Applier()
-		);
+		$this->pipeline  = new Pipeline( $registry );
+		$this->guard     = new Budget_Guard();
+		$this->validator = new Article_Validator();
 	}
 
 	/**
@@ -125,101 +104,43 @@ final class Generator {
 		$grounded = $prompt->grounding_enabled() ? 1 : 0;
 		$pricing  = new Pricing_Table();
 
-		// Section 7.4: first, and before any paid call. On a breach the run is
-		// abandoned rather than partially executed.
-		$budget = $this->budget_step->run( $prompt, $run );
+		$adopted = $this->adopt( $prompt_id, $run, $attempt );
 
-		if ( is_wp_error( $budget ) ) {
-			return $budget;
+		if ( is_wp_error( $adopted ) ) {
+			return $adopted;
 		}
 
-		$run->record_step( 'budget_check' );
-
 		/*
-		 * The attempt immediately before this one may have got as far as a draft
-		 * before failing. Bind it to this run so assembly updates that draft
-		 * instead of adding a second one. Run::adoptable_draft() refuses anything
-		 * that is not the previous attempt of this retry series, and anything a
-		 * person has touched since.
-		 *
-		 * This is resolved before the proposal call, not after the body call, so
-		 * that duplicate detection can be told to ignore the draft this run is
-		 * about to overwrite.
+		 * The sequence itself lives in Pipeline, and this loop is one of its two
+		 * drivers: it advances every step inside a single request, which is what
+		 * "Run now" wants and what the tests drive. The queue driver advances the
+		 * same sequence one action at a time. Neither knows the order — that is
+		 * the point of there being only one list.
 		 */
-		$inherited = Run::adoptable_draft( $prompt_id, $run->id(), $attempt );
+		while ( true ) {
+			$step = $this->pipeline->advance( $prompt, $run );
 
-		/*
-		 * Adoption is all or nothing, and a refused ownership write leaves the
-		 * draft with its previous owner. There is no safe way to carry on from
-		 * there. Version 1.0.4 cleared the inherited ID and continued, reasoning
-		 * that duplicate detection would see the abandoned draft and stand the
-		 * run down — which had the mechanism backwards. The covered list is
-		 * injected precisely so the model proposes something *different*, so the
-		 * collision check passes, the body is paid for, and assembly writes a
-		 * second draft beside the orphaned one. That is the pile-up adoption
-		 * exists to prevent, reached by a longer route and with a provider bill
-		 * attached.
-		 *
-		 * The run stops here instead, before the first paid call.
-		 */
-		if ( null !== $inherited && ! $run->adopt_post( $inherited ) ) {
-			$error = new WP_Error(
-				'autoscribe_adoption_failed',
-				sprintf(
-					/* translators: %d: post ID of the draft. */
-					__( 'The draft left by the previous attempt (post %d) could not be bound to this run, so continuing would have created a second draft beside it. The run was stopped before any provider call.', 'autoscribe' ),
-					$inherited
-				)
-			);
-
-			$run->fail( $error->get_error_message() );
-
-			return $error;
-		}
-
-		// Section 7.2: a cheap proposal call, so a duplicate is caught before
-		// paying to write an article that would be discarded.
-		$topic = $this->topic_step->run( $prompt, $run, (int) $inherited );
-
-		if ( is_wp_error( $topic ) ) {
-			if ( 'autoscribe_duplicate_topic' !== $topic->get_error_code() ) {
-				$run->fail( $topic->get_error_message(), $pricing, $grounded );
+			if ( null === $step ) {
+				break;
 			}
 
-			return $topic;
+			if ( is_wp_error( $step ) ) {
+				$this->close_failed( $run, $step, $pricing, $grounded );
+
+				return $step;
+			}
 		}
 
-		$run->record_step( 'propose_topic' );
-
-		$article = $this->body_step->run( $prompt, $run, $topic );
+		$article = $this->pipeline_article( $run );
 
 		if ( is_wp_error( $article ) ) {
-			$run->fail( $article->get_error_message(), $pricing, $grounded );
+			$this->close_failed( $run, $article, $pricing, $grounded );
 
 			return $article;
 		}
 
-		$run->record_step( 'generate_body' );
-
-		$post_id = $this->assemble_step->run( $prompt, $article, $run );
-
-		if ( is_wp_error( $post_id ) ) {
-			$run->fail( $post_id->get_error_message(), $pricing, $grounded );
-
-			return $post_id;
-		}
-
-		$run->record_step( 'assemble_post' );
-
-		$attachment_id = $this->image_step->attach( $prompt, $article, $run, $post_id );
-
-		if ( is_wp_error( $attachment_id ) ) {
-			$run->fail( $attachment_id->get_error_message(), $pricing, $grounded );
-
-			return $attachment_id;
-		}
-
-		$run->record_step( 'generate_image' );
+		$post_id       = (int) $run->post_id();
+		$attachment_id = (int) ( $run->payload()['image']['attachment_id'] ?? 0 );
 
 		$status = $this->final_status( $prompt, $status_override );
 
@@ -255,7 +176,7 @@ final class Generator {
 			$this->send_review_notice( $article, $post_id );
 		}
 
-		if ( $this->budget_step->guard()->should_send_warning() ) {
+		if ( $this->guard->should_send_warning() ) {
 			$this->send_budget_warning();
 		}
 
@@ -266,6 +187,106 @@ final class Generator {
 			'status'        => $status,
 			'cost_cents'    => $cost,
 		);
+	}
+
+	/**
+	 * Binds the previous attempt's draft to this run, if there is one to bind.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param int $prompt_id Prompt being run.
+	 * @param Run $run       Run recording progress.
+	 * @param int $attempt   Attempt number this run represents.
+	 * @return true|WP_Error
+	 */
+	private function adopt( int $prompt_id, Run $run, int $attempt ): bool|WP_Error {
+		/*
+		 * The attempt immediately before this one may have got as far as a draft
+		 * before failing. Bind it to this run so assembly updates that draft
+		 * instead of adding a second one. Run::adoptable_draft() refuses anything
+		 * that is not the previous attempt of this retry series, and anything a
+		 * person has touched since.
+		 *
+		 * This happens before the first step rather than after the body call, so
+		 * that duplicate detection can be told to ignore the draft this run is
+		 * about to overwrite.
+		 */
+		$inherited = Run::adoptable_draft( $prompt_id, $run->id(), $attempt );
+
+		if ( null === $inherited ) {
+			return true;
+		}
+
+		if ( $run->adopt_post( $inherited ) ) {
+			return true;
+		}
+
+		/*
+		 * Adoption is all or nothing, and a refused ownership write leaves the
+		 * draft with its previous owner. There is no safe way to carry on from
+		 * there: the covered list is injected precisely so the model proposes
+		 * something different, so the collision check would pass, the body would
+		 * be paid for, and assembly would write a second draft beside the
+		 * orphaned one. The run stops here instead, before the first paid call.
+		 */
+		$error = new WP_Error(
+			'autoscribe_adoption_failed',
+			sprintf(
+				/* translators: %d: post ID of the draft. */
+				__( 'The draft left by the previous attempt (post %d) could not be bound to this run, so continuing would have created a second draft beside it. The run was stopped before any provider call.', 'autoscribe' ),
+				$inherited
+			)
+		);
+
+		$run->fail( $error->get_error_message() );
+
+		return $error;
+	}
+
+	/**
+	 * Closes a run that a step has failed, unless the step closed it already.
+	 *
+	 * A budget breach and a duplicate topic are outcomes rather than faults, and
+	 * the steps that produce them close the run themselves — as does a refused
+	 * reservation. Asking the row what state it is in is more durable than
+	 * keeping a list of the error codes that mean "already dealt with", because
+	 * the list is one release away from being incomplete.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Run           $run      Run to close.
+	 * @param WP_Error      $error    Why it failed.
+	 * @param Pricing_Table $pricing  Rate table for settling the cost.
+	 * @param int           $grounded Number of grounded requests made.
+	 * @return void
+	 */
+	private function close_failed( Run $run, WP_Error $error, Pricing_Table $pricing, int $grounded ): void {
+		if ( Run::STATUS_RUNNING !== $run->status() ) {
+			return;
+		}
+
+		$run->fail( $error->get_error_message(), $pricing, $grounded );
+	}
+
+	/**
+	 * Reads the finished article back off the run.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Run $run Run recording progress.
+	 * @return Article|WP_Error
+	 */
+	private function pipeline_article( Run $run ): Article|WP_Error {
+		$stored = $run->payload()['article'] ?? null;
+
+		if ( ! is_array( $stored ) ) {
+			return new WP_Error(
+				'autoscribe_state_not_recorded',
+				__( 'This run produced no article, so there is nothing to publish.', 'autoscribe' )
+			);
+		}
+
+		return $this->validator->from_array( $stored );
 	}
 
 	/**
