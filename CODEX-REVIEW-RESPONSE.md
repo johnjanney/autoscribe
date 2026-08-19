@@ -433,3 +433,426 @@ awaiting a decision rather than a patch.
 release. The three things a user needs in order to judge it for themselves — the
 single-action pipeline, the cap's overshoot bound, and the missing screenshot —
 are stated plainly in the README rather than inferred from a passing test count.
+
+---
+---
+
+# Response to the Codex follow-up review
+
+**Responding to:** the follow-up section of [CODEX-REVIEW.md](CODEX-REVIEW.md),
+dated 18 August 2026 against `6f844ce` (tag `v1.0.1`)
+**Response date:** 18 August 2026
+**Release under response:** 1.0.1 → 1.0.2
+
+---
+
+## Summary
+
+Eleven follow-up findings. Every one was checked against the code, and against
+first-party documentation where the claim was about an external contract.
+
+**Nine are confirmed. Two are rejected on evidence.** Eight of the nine confirmed
+findings are fixed here; the ninth is FR-05, the single-action pipeline, which
+remains a deliberate deferral for the reasons given below.
+
+Verifying FR-02 also turned up a defect neither review found: adoption was
+resolved after the body call, so duplicate detection counted the previous
+attempt's own draft as a topic already covered. Every retry that got as far as a
+body call was therefore skipped as a duplicate of itself, which made adoption
+unreachable in practice. It is fixed here and covered by a test.
+
+| Finding | Verdict | Status |
+|---|---|---|
+| FR-01 Cap concurrency, lost reservation, image estimate | Confirmed, all three | Fixed |
+| FR-02 Draft adoption overwrites unrelated work | Confirmed | Fixed |
+| FR-03 `gemini-3.7-flash` unverified | **Rejected** — documented as GA | No change |
+| FR-04 Text and image defaults collide | **Rejected** — the slugs differ | No change |
+| FR-05 Single-action pipeline | Confirmed | **Not fixed — deferred, documented** |
+| FR-06 Retry classification open by default | Confirmed | Fixed |
+| FR-07 Prompt-injection mitigation incomplete | Confirmed | Fixed for the two in-scope cases |
+| FR-08 Image byte limit applied after download | Confirmed | Fixed |
+| FR-09 Weak-salt records readable after upgrade | Confirmed | Fixed |
+| FR-10 "Queue last processed" reports scheduled time | Confirmed | Fixed |
+| FR-11 Changelog and release-status claims | Confirmed in part | Fixed |
+
+Also accepted from the follow-up's "corrections to the audit response":
+
+- **The similarity-threshold rebuttal is withdrawn.** The brief does name 82, and
+  78 is a deviation whether or not the value is filterable. `DECISIONS.md` was
+  worse than the code: it went on quoting 82 after the code had settled on 78.
+  The value is unchanged and the reasoning is unchanged; both documents now state
+  the deviation instead of hiding it.
+- **The release-candidate framing is withdrawn.** A stable tag, a dated changelog
+  section, and a GitHub release marked neither draft nor pre-release make it a
+  release. Calling it a candidate in the README while shipping it as a release
+  was the kind of drift the audit exists to catch.
+
+**Verification after the changes:** PHPCS passes with zero errors and zero
+warnings across 102 files. PHPUnit passes 215 tests and 782 assertions, up from
+200 and 741. No test contacts a live provider; the bootstrap tripwire still fails
+any request that reaches the network.
+
+---
+
+## FR-01 — Confirmed, all three parts. Fixed.
+
+### The race is real, and the 1.0.1 reasoning was wrong
+
+The follow-up's demonstration holds, and the mechanism is worth stating exactly,
+because 1.0.1's comment argued the opposite in some detail.
+
+`confirm_reservation()` counts rows with `id <= $run_id`. The argument was that
+the auto-increment gives a total order over reservations, so of two concurrent
+runs the earlier row sees only itself and the later row sees both. **A row's ID
+is assigned when the run is inserted, not when its reservation is written**, so
+the auto-increment orders the *inserts* and nothing else. Interleave it this way:
+
+1. A and B both insert. A gets the lower ID.
+2. B writes its reservation and re-reads with `id <= B`. A's row exists but still
+   carries `cost_cents = 0`, so B sees only its own reservation. B passes.
+3. A writes its reservation and re-reads with `id <= A`. That bound excludes B
+   entirely. A sees only its own reservation. A passes.
+
+Both spend. Reversing the ID order lets more than two through. The claimed
+one-run overshoot bound was not a bound.
+
+**Fix.** `Spend_Lock` (`src/Cost/Spend_Lock.php`) takes a named MySQL lock —
+`GET_LOCK`, scoped by database name and table prefix so sites on a shared server
+do not serialise against each other — and `Step_Budget_Check` performs the whole
+read-check-reserve inside it. `GET_LOCK` is held by the connection rather than by
+a row, so it works across processes without a schema change or a transaction.
+Where the lock cannot be taken — a server that does not implement it, or a
+ten-second wait that expires — the run falls back to the 1.0.1 ordering pass,
+which is now documented in both the class and the README as a narrowing rather
+than an equivalent.
+
+The README's one-run claim is removed. What replaces it says what is actually
+true: a run already past the check cannot be recalled, and the reserved figure is
+an estimate, so a run that costs more than estimated overshoots by the
+difference.
+
+### The lost reservation
+
+Confirmed. `Run::update()` discarded `$wpdb->update()`'s return value, so a
+reservation that never reached the database left the run spending against a cap
+that could not see it. `update()` now returns whether the write succeeded — false
+only, since zero affected rows is ambiguous — `reserve_cost()` passes that up,
+and `Step_Budget_Check` fails the run with `autoscribe_reservation_failed` before
+the first provider call.
+
+### The missing image cost
+
+Confirmed, and the practical case is worse than the finding states. Generation
+resolves the image model as prompt → site default → *the adapter's own
+suggestions*; the estimate resolved it as prompt → site default → empty string.
+An empty string makes `Pricing_Table` fall back to the text model's rates, and
+the seeded Claude rows carry a zero per-image rate. So the configuration that
+reserved nothing for its image was not an exotic one — it was a Claude article
+with an OpenAI picture and both model fields left alone, which is the default
+state of a new prompt.
+
+`Budget_Guard` now resolves both models through the registry exactly as
+generation does. `test_an_image_is_priced_even_when_no_image_model_is_set()`
+covers it.
+
+### Tests
+
+A multi-process concurrency test is still not possible in a single-process
+PHPUnit suite, and the follow-up is right that its absence is a gap. What is
+covered: that the lock is genuinely available on the test database rather than
+silently failing to every run's fallback path, that a failed reservation stops
+the run before any provider call — the bootstrap tripwire is the proof of that
+second half — and the image-estimate regression.
+
+---
+
+## FR-02 — Confirmed. Fixed, and a further defect fixed with it.
+
+Every stated fact checks out. `adoptable_draft()` was called on every run rather
+than only on retries; the query asked only for the newest failed run of the
+prompt with a post; and the safety check tested that the post was a draft and
+that its run meta was non-empty, without testing that the meta matched the row it
+had just selected.
+
+The consequence is as described. After retries are exhausted the abandoned draft
+stays adoptable for ever, so the next ordinary scheduled occurrence — a different
+article, days later — overwrites it. A reviewer who edits a failed draft and
+leaves it in draft status loses the edit to the next run.
+
+**Fix.** Five conditions now have to hold, and each one closes a different way of
+destroying work that is not this run's:
+
+- `attempt > 1`, so a scheduled occurrence never adopts;
+- the candidate is the row immediately before this one for this prompt, so an
+  unrelated or overlapping run in between ends the series;
+- that row failed, and its attempt number is exactly one lower;
+- the post still carries *that row's* ID in `_autoscribe_run_id`;
+- `post_modified_gmt` is at or before the failed run's `finished_at`. The failed
+  run wrote the draft and then closed itself, so anything later came from a
+  person.
+
+**The defect found while testing this.** Adoption was resolved after the body
+call, which put it after duplicate detection — and duplicate detection counts
+drafts. A retry therefore proposed a topic, found its own abandoned draft in the
+already-covered list, and was skipped as `skipped_duplicate` before it could
+adopt anything. Adoption after a successful body call was unreachable in
+practice, which is presumably why neither review's reading of the code caught it:
+the code path is plainly there, it just never runs. The adoptable draft is now
+resolved before the proposal call and excluded from both the covered list and the
+title check.
+
+Six tests cover the boundary in both directions: a retry adopts; a later
+scheduled run does not; an edited draft is refused; a published post is refused;
+an intervening run ends the series; a relinked post is refused.
+
+---
+
+## FR-03 — Rejected. `gemini-3.7-flash` is documented as generally available.
+
+The follow-up records this as **"Not found in documents"** and cites Google's
+latest-model page as identifying `gemini-3.6-flash` and `gemini-3.5-flash-lite`
+as the current GA Flash models.
+
+That page says the opposite. Retrieved 18 August 2026:
+
+- **[Gemini API — latest model](https://ai.google.dev/gemini-api/docs/latest-model)**
+  is *about* `gemini-3.7-flash`. It states that "Gemini 3.7 Flash
+  (`gemini-3.7-flash`) is generally available (GA)", describes it as ready for
+  production use, and names `gemini-3.6-flash` as a migration *alternative* — the
+  older model, not the current one.
+- **[Gemini API — models](https://ai.google.dev/gemini-api/docs/models)** lists
+  `gemini-3.7-flash` among the stable text models, alongside `gemini-3.6-flash`
+  and `gemini-3.5-flash-lite`.
+
+The 1.0.1 response was right on the substance and wrong to assert it without a
+URL; that omission is what left the claim unverifiable, and the citations are
+above so it is not repeated. The adapter's suggestion order is unchanged.
+
+Two things in the finding are accepted regardless: no live model-list call has
+been made against a funded key, and both conclusions rest on documentation. And
+the underlying risk the finding is pointing at is real — which is why section 2.2
+of the brief makes model IDs editable configuration, why the field is a text box
+with a dropdown rather than a fixed list, and why `Model_Resolver` puts the
+adapter's suggestion last, behind the prompt field and the site default.
+
+---
+
+## FR-04 — Rejected. The text and image adapters do not share a slug.
+
+The finding's chain of consequences all depends on its first premise, that
+"OpenAI and Google use the same slug for their text and image adapters." They do
+not:
+
+| Adapter | `slug()` |
+|---|---|
+| `Text/OpenAI` | `openai` |
+| `Image/OpenAI_Image` | `openai_image` |
+| `Text/Google` | `google` |
+| `Image/Google_Image` | `google_image` |
+
+Because the slugs differ, each consequence falls with the premise:
+
+- Defaults are keyed by slug, so `openai` and `openai_image` are separate
+  settings and separate form rows. There is no collision to split.
+- `Settings_Page::all_providers()` builds its map from those slugs, so writing
+  image adapters after text adapters adds four rows; it does not overwrite two.
+- `Actions::test_connection()` reads
+  `text_provider( $slug ) ?? image_provider( $slug )`. No text adapter answers to
+  `openai_image` or `google_image`, so the image adapter is what the null
+  coalescing reaches, and the image connection test is reachable for both.
+
+Keys are stored per slug too, so the two capabilities also hold independent API
+keys — which is what section 2.1 of the brief requires, since a user must be able
+to run Claude for text and Google for pictures.
+
+No change. The requested "OpenAI and Google tests that leave both prompt model
+fields blank" is a fair ask on its own merits, and `Model_ResolverTest` plus the
+new `test_an_image_is_priced_even_when_no_image_model_is_set()` cover the blank
+case for the path where it mattered.
+
+---
+
+## FR-05 — Confirmed. Still not fixed. Still documented.
+
+Nothing here is disputed. One request can contain up to four text calls at a
+120-second timeout each, an image generation call, a bounded image download,
+attachment metadata generation, and a post write. There is no step state, so a
+retry re-runs from the beginning and pays for it again.
+
+It is not fixed for the same reason as last time, and the reason has not got any
+better with age: this is a rewrite of the pipeline into six queued actions with
+serialised state in `runs.payload`, plus idempotency keyed by `run_id` at each
+boundary, plus a resume path, plus the tests to prove a step never runs twice. It
+is the largest single piece of work left in the plugin and it is not a patch.
+
+What has changed is the surrounding claim. The README no longer describes the
+plugin as brief-complete, lists this as the one outstanding architectural gap,
+and states plainly that a retry re-runs from the beginning and pays for it.
+
+---
+
+## FR-06 — Confirmed. Fixed.
+
+The class comment said only transient transport failures were retried; the
+implementation retried everything absent from a denylist. The follow-up's point
+about direction is the important one: under a denylist, every error code that had
+not yet been thought of — including every code a later release adds, and every
+code a provider starts returning without warning — was retried three times,
+paying for the same answer each time.
+
+`Retry_Policy` now holds a `TRANSIENT` allowlist of three codes:
+`autoscribe_transport_error`, `autoscribe_provider_rate_limited`, and
+`autoscribe_provider_unavailable`. Everything else is permanent, whether or not
+anyone has classified it. The list is filterable through
+`autoscribe_transient_error_codes`, because a provider can start returning a
+transport-level failure under a code this plugin does not know and waiting for a
+release to retry it would be worse than letting a site say so itself.
+
+`permanent_codes()` is replaced by `transient_codes()`. The list means the
+opposite now, so the name had to change with it.
+`test_an_unknown_code_is_not_retried()` is the test the finding asked for.
+
+---
+
+## FR-07 — Confirmed. Fixed for the two cases inside the plugin's control.
+
+Both stated paths are real, and both are fixed by extending the same control
+1.0.1 built for the already-covered list. `Security\Untrusted_Block` now holds
+the markers and the "this is data, not instructions" preamble in one place, and
+three call sites use it:
+
+- the agreed title and topic key sent to the body call, which were previously
+  interpolated into plain instruction text;
+- the rejected response and the validation error sent to the repair call, which
+  were previously pasted mid-sentence — and a response that failed validation is
+  precisely the one most likely to contain something other than an article;
+- the collision reason sent on a proposal re-ask, which the finding does not
+  mention but which quotes an existing post title and so has the same shape.
+
+The third path — server-side search results — is not fixable from here, and the
+finding says so. The provider's model reads them after the request leaves; the
+plugin never sees them and cannot delimit them. `INSTRUCTIONS.md` states this and
+the README's recommendation stands: keep review mode on wherever grounding is on.
+
+The finding's assessment of impact is accepted as written. This is a content
+integrity problem — unwanted titles, claims, or links in automatically published
+posts — not server code execution.
+
+---
+
+## FR-08 — Confirmed. Fixed.
+
+`download_url()` streams the whole response to a temporary file with no
+caller-supplied ceiling, the file was then read whole into memory, and only then
+was `MAX_IMAGE_BYTES` consulted. The check protected the uploads directory and
+nothing before it.
+
+The fetch no longer uses `download_url()`. It uses `wp_safe_remote_get()` with
+`limit_response_size` set to the limit plus one byte, so the transfer stops at
+the ceiling and the bound covers bandwidth, disk, and memory. `wp_safe_remote_get()`
+rather than `wp_remote_get()`, because the URL arrives in a provider response and
+should not be able to reach the site's private network. The existing file-type
+and pixel checks are unchanged and still run after the write.
+
+Four tests were added, covering the previously untested URL branch entirely: the
+limit and timeout actually reach the transport, an oversized response is
+rejected, an error status is reported, and a valid URL image is attached with its
+alt text.
+
+---
+
+## FR-09 — Confirmed. Fixed.
+
+Accurate, including the sharp edge: 1.0.1 stopped new keys being written under
+unusable salts and left every key 1.0.0 had already written that way in place and
+in use. On any site that had the problem, the fix changed nothing.
+
+`source()` now returns a new `SOURCE_UNSAFE` when a stored record exists and the
+salts are unusable, and `get()` refuses it with `autoscribe_key_unsafe` rather
+than decrypting under the predictable key. The Settings screen describes the
+state and asks for the key again once real salts are installed, or for a
+`wp-config.php` constant instead.
+
+The record is refused, not deleted. Deleting an administrator's credential
+without being asked is its own kind of damage, and the follow-up asks for the
+record to be marked unsafe rather than removed.
+
+**Not covered by a test, and this is a real gap.** The salts are PHP constants
+defined by `wp-config.php` before the plugin loads, and a test cannot un-define
+them; the only seam would be a filter existing solely so the suite could lie
+about the environment, which is production API in service of a test. It is listed
+in the README's known limitations rather than left implied.
+
+---
+
+## FR-10 — Confirmed. Fixed.
+
+Both halves of the mechanism are as described: `ActionScheduler_DBStore` maps
+`orderby => 'date'` onto `scheduled_date_gmt`, and a schedule object's
+`get_date()` returns the time the action was armed for. The result was that an
+action due last Tuesday and executed a moment ago was reported as last processed
+last Tuesday — which inverts the panel's whole purpose, since a queue that is
+badly backed up and catching up looked stalest exactly when it was recovering.
+
+The query now orders by `modified`, which the store maps onto `last_attempt_gmt`,
+and reads the completion time through `ActionScheduler::store()->get_date()`,
+which returns `last_attempt_gmt` for any action that is not pending. The lookup
+is wrapped, because Action Scheduler throws if the row is pruned between the
+query and the read.
+
+---
+
+## FR-11 — Confirmed in part. Fixed.
+
+Accepted and corrected:
+
+- **The 1.0.1 changelog claims are too broad.** The published 1.0.1 entry now
+  carries a dated correction notice naming the four claims that were wider than
+  the code, and pointing at 1.0.2.
+- **The README contradicted itself.** It said one requirement was knowingly
+  unmet and then listed three. It now names all three up front: the single-action
+  pipeline, the live next-run readout, and the screenshot.
+- **The 82-percent threshold.** Covered above. The code keeps 78 for its stated
+  reason; `DECISIONS.md` and the README now record the deviation rather than
+  quoting the brief back.
+- **Release-candidate status.** Withdrawn. 1.0.2 is a normal patch release and is
+  described as one.
+
+One item is not accepted as drift: "plain-clone installation". `vendor/` is
+committed, which is what section 12 of the brief asks for, and a plain
+`git clone` into `wp-content/plugins` produces a working plugin.
+
+**On the GitHub release.** The `v1.0.1` release remains published as a normal
+release, and I have not altered it — editing a published release is the
+repository owner's call, not something to do inside a review response. If the
+intent was for it to be a pre-release, that flag needs setting by hand.
+
+---
+
+## What is still not covered by a test
+
+Carried forward from the previous response, minus what is now covered:
+
+- Concurrent budget checks across processes. The lock is exercised; mutual
+  exclusion between two workers is not provokable in a single-process suite.
+- Key storage and reading under unusable salts. See FR-09.
+- An Action Scheduler dispatch test from scheduled action through completion.
+- Settings save behaviour and the connection-test buttons.
+- Recorded first-party provider contract fixtures, and a live model-list smoke
+  test. Both need funded keys, and FR-03 would have been settled in one call.
+- MariaDB in CI, and a smoke test that activates the built zip.
+
+---
+
+## Where this leaves the release
+
+Of the eleven follow-up findings, nine are confirmed and two are rejected on
+evidence. Eight of the nine are fixed here with tests. The ninth, FR-05, is the
+pipeline rewrite, and it remains the one thing standing between this plugin and
+an honest claim of brief completeness.
+
+1.0.2 is a normal patch release, described as one, with the three unmet brief
+requirements named in the README rather than inferred from a passing test count.
+The recommendation for unattended publishing is unchanged and is in the README:
+keep review mode on, and set a spending limit at the provider, because no
+client-side cap is a hard ceiling.

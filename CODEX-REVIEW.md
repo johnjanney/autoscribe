@@ -5,6 +5,389 @@
 **Release under review:** 1.0.0  
 **Audit result:** **Conditional fail. Do not treat this release as production-ready.**
 
+> **Follow-up:** The section below reviews revision `6f844ce`, tagged and
+> published as version 1.0.1. It supersedes the original executive result where
+> the two sections differ. The original 1.0.0 audit remains below as a historical
+> record.
+
+## Follow-up review — version 1.0.1
+
+**Follow-up date:** 18 August 2026
+
+**Reviewed revision:** `6f844ce` on `main`, tag `v1.0.1`
+
+**Documents reviewed:** `CODEX-REVIEW-RESPONSE.md`, `CHANGELOG.md`, `README.md`,
+`INSTRUCTIONS.md`, `DECISIONS.md`, and the 1.0.1 code and tests
+
+**Current result:** **Conditional fail. Version 1.0.1 is improved, but it is not
+production-ready.**
+
+**Current quality score:** **6.5/10**
+
+### Follow-up conclusion
+
+The 1.0.1 work fixes many real defects. It fixes the Google structured-output
+field, accumulated token accounting, visible Preview output, review and failure
+mail, grounding capability checks, weak-salt checks for new key writes, several
+write-error paths, and CI action pinning. The full test suite passes.
+
+The response and changelog overstate the result. Four release blockers remain:
+
+1. The budget reservation is still not concurrency-safe. The stated one-run
+   overshoot bound is false.
+2. Draft adoption can overwrite an old or human-edited draft on any later run,
+   not only on the retry that created it.
+3. `gemini-3.7-flash` remains the first Google default, but it is not in the
+   current first-party Google model documents reviewed for this follow-up.
+4. The full generation pipeline still runs in one long queue request.
+
+There is no evidence of a critical unauthenticated RCE, SQL injection, stored
+XSS, or CSRF defect in the changed code. The highest security issue remains the
+budget-control failure. The main content-integrity risk remains prompt injection
+when grounding and automatic publication are both enabled.
+
+### Follow-up verification
+
+| Check | Result | Evidence |
+|---|---:|---|
+| Git revision | Pass | `main`, `origin/main`, and annotated tag `v1.0.1` resolve to `6f844ce`. |
+| Composer manifest | Pass | `composer validate --no-check-publish` reports a valid manifest. |
+| Dependency advisories | Pass | `composer audit --locked` reports no known advisory. |
+| WordPress coding standards | Pass | PHPCS checks 98 files with no error. |
+| PHPUnit | Pass | 200 tests and 741 assertions pass on PHP 8.1 with WordPress and MySQL 8. |
+| Release archive | Pass | `build/autoscribe-1.0.1.zip` passes `unzip -t`, contains runtime autoload files, and excludes the review files, tests, project docs, and root Composer files. |
+| Live provider calls | Not run | No funded provider key was supplied. No project or prompt data was sent to a provider. |
+| Google documentation | Partial fail | The corrected `response_format` shape matches current Google documentation. The suggested `gemini-3.7-flash` identifier was not found. See FR-03. |
+| Action Scheduler dispatch | Not covered | Tests call the queue handler directly. They do not dispatch the bundled queue. |
+| Concurrent reservation | Not covered | No multi-process test exists. The current algorithm fails by inspection. See FR-01. |
+
+The GitHub release is published as a normal release. It is not marked as a
+pre-release ([AutoScribe 1.0.1 release](https://github.com/johnjanney/autoscribe/releases/tag/v1.0.1)).
+
+### Corrections to the audit response
+
+The response correctly identifies one error in the original audit, but two of
+its own rebuttals are not supported.
+
+1. **Original Google test statement — correction accepted.** The original audit
+   said that the old Google test asserted the obsolete structured-output shape.
+   That was wrong. The test did not assert those fields. The defect survived
+   because the contract was not tested. The new test now asserts the correct
+   top-level `response_format` ([GoogleTest](tests/Providers/GoogleTest.php#L99)).
+2. **`gemini-3.7-flash` rebuttal — not verified.** The response says that Google
+   documents this model as generally available, but it gives no URL. **Not found
+   in documents.** Google's current latest-model page identifies
+   `gemini-3.6-flash` and `gemini-3.5-flash-lite` as the current GA Flash models,
+   and its current Interactions migration examples use `gemini-3.6-flash`
+   ([Google latest models](https://ai.google.dev/gemini-api/docs/latest-model),
+   [Google Interactions migration](https://ai.google.dev/gemini-api/docs/migrate-to-interactions)).
+   No live-key model-list request was run, so this conclusion is limited to
+   current first-party documents.
+3. **Similarity-threshold rebuttal — rejected.** The response says that the brief
+   requires only a filterable threshold. The brief says that similarity must
+   exceed 82 percent and then says to make “the 82 percent threshold” filterable
+   ([project brief](docs/PROJECT-BRIEF.md#L441)). The code default is 78
+   ([Topic_Deduplicator](src/Content/Topic_Deduplicator.php#L38)). A reasoned and
+   filterable change is still a deviation. `DECISIONS.md` also continues to call
+   it 82 percent ([DECISIONS](DECISIONS.md#L228)).
+4. **Release-candidate status — contradicted by release state.** The response and
+   README call 1.0.1 a release candidate. The repository has a stable-form
+   `v1.0.1` tag, the changelog has a dated release section, and GitHub marks the
+   release as neither draft nor pre-release. This is a normal published release,
+   not a release candidate.
+
+### Follow-up status of the original findings
+
+| Finding | Follow-up status | Assessment |
+|---|---|---|
+| AS-01 Google contract | **Partial** | The structured-output fields are fixed and tested. The first suggested model is still unsupported by the first-party documents reviewed. |
+| AS-02 single-action pipeline | **Open** | It remains a deliberate deviation and a release blocker. Documentation does not satisfy the requirement or remove the timeout risk. |
+| AS-03 cost and cap | **Partial; high risk remains** | Token accumulation and several settlement defects are fixed. Concurrency, image estimation, update-failure handling, and some grounded-call accounting remain wrong. |
+| AS-04 retries and duplicate drafts | **Partial; regression added** | More errors are permanent and attempt numbers are stored. Draft adoption can overwrite unrelated prior work. Step resume is absent. |
+| AS-05 defaults and connection tests | **Partial** | The paths are reachable, but one slug-keyed default cannot represent separate text and image defaults for OpenAI or Google. The image connection path is not reachable for those slugs. |
+| AS-06 Preview | **Mostly fixed** | Output is visible and sanitized. Preview remains synchronous and reserves image cost even though it creates no image. |
+| AS-07 notifications | **Fixed in code, untested** | Draft and final-failure mail paths exist. Their return values and complete delivery paths have no automated coverage. |
+| AS-08 grounding capability | **Fixed** | The client, save, and run-time paths now enforce the provider capability. |
+| AS-09 release and requirements drift | **Open** | The documents are more honest, but they still contradict the brief and the published release state. |
+| SEC-01 budget cap | **Open, High** | The new confirmation algorithm does not close the race. |
+| SEC-02 prompt injection | **Partial** | Local titles are fenced in the proposal call. Generated proposal and repair data are still reintroduced as instructions. Grounded data remains outside plugin control. |
+| SEC-03 response limits | **Partial** | JSON and inline image responses are bounded. URL image downloads are bounded only after the full file is downloaded and read into memory. |
+| SEC-04 weak key derivation | **Partial** | New weak-salt writes are refused. Existing 1.0.0 ciphertext made under weak salts remains readable and stored. |
+| SEC-05 mutable CI actions | **Fixed** | Both actions are pinned to existing full commit SHAs. |
+
+## Follow-up findings in criticality order
+
+### FR-01 — High — The budget cap still has a concurrency bypass and can omit image cost
+
+**Category:** Security business logic, financial control, correctness
+
+**Verified facts**
+
+- `Step_Budget_Check` still performs a read, an independent reservation update,
+  and a second read ([Step_Budget_Check](src/Pipeline/Step_Budget_Check.php#L59)).
+- `confirm_reservation()` counts rows whose ID is less than or equal to the
+  current run ID ([Budget_Guard](src/Cost/Budget_Guard.php#L192)). Run IDs are
+  assigned when the run row is inserted, not when the reservation is written.
+- The reservation update and all other `Run` updates ignore `$wpdb->update()`
+  failure ([Run](src/Pipeline/Run.php#L595), [Run](src/Pipeline/Run.php#L742)).
+- The estimate resolves model settings without passing provider suggestions
+  ([Budget_Guard](src/Cost/Budget_Guard.php#L305)). Generation does pass those
+  suggestions ([Step_Generate_Image](src/Pipeline/Step_Generate_Image.php#L81)).
+- If the image model and site default are blank, `cost_cents()` prices the image
+  under the text model ([Pricing_Table](src/Cost/Pricing_Table.php#L180)). The
+  seeded Claude text models have a zero image rate. A prompt with an explicit or
+  site-default Claude text model and a blank OpenAI image model/default can
+  therefore reserve no image cost.
+- No test calls `confirm_reservation()`. No test covers an image provider with a
+  blank prompt model and blank site default.
+
+**Demonstrable race**
+
+Create run A with the lower ID and run B with the higher ID. Let both initial
+checks pass. Pause A. Let B write its reservation and confirm before A writes.
+B sees only its own reservation and passes. Then let A write and confirm. A's
+`id <= A` query excludes B, so A also sees only its own reservation and passes.
+The same reverse-ID order can let more than two workers pass. The overshoot is
+therefore not bounded to one run, contrary to the README
+([README](README.md#L209)) and the changelog claim
+([CHANGELOG](CHANGELOG.md#L117)).
+
+**Impact**
+
+Unattended work can exceed both the per-prompt and global caps. A failed
+reservation update can also let a run proceed with no visible reservation. An
+image can be generated without its estimated cost appearing in the preflight
+amount.
+
+**Required correction**
+
+- Use a transaction and row lock, or use one atomic conditional update against
+  a monthly ledger row.
+- Make reservation writes return an error and stop before the first provider
+  call if the write fails.
+- Resolve the actual image adapter suggestion when the prompt and site defaults
+  are blank.
+- Add a multi-process concurrency test and an image-estimate regression test.
+- Remove the one-run overshoot claim until the bound is proved.
+
+### FR-02 — High — Draft adoption can overwrite old or human-edited content
+
+**Category:** Data integrity, retry correctness, regression
+
+**Verified facts**
+
+- Every generation run calls `adoptable_draft()`. The call is not limited to
+  attempts greater than one ([Generator](src/Pipeline/Generator.php#L173)).
+- The query selects the newest failed run for the prompt that has a post ID. It
+  has no retry-series, time, immediately-previous-run, or attempt constraint
+  ([Run](src/Pipeline/Run.php#L386)).
+- The safety check requires only that the post is still a draft and that its run
+  metadata is non-empty. It does not verify that the metadata matches the failed
+  row. It does not detect a human edit.
+- `Step_Assemble_Post` updates the adopted draft with newly generated title,
+  body, excerpt, SEO data, and taxonomy ([Step_Assemble_Post](src/Pipeline/Step_Assemble_Post.php#L140)).
+- No test covers `adoptable_draft()` or an image failure followed by a retry.
+
+**Impact**
+
+After retries are exhausted, the next normal scheduled occurrence can overwrite
+the old failed draft with a different article. A reviewer can edit a failed
+draft and leave it in draft status; a later run can overwrite those edits. Two
+overlapping runs can also adopt the same draft.
+
+**Required correction**
+
+- Adopt only on `attempt > 1` and only from the immediately preceding attempt in
+  the same retry series.
+- Store a retry-series ID or previous-run ID.
+- Record a content hash and modification timestamp. Refuse adoption after a
+  human edit.
+- Add integration tests for exhausted retries, the next scheduled occurrence,
+  human edits, and overlapping runs.
+
+### FR-03 — High — The Google structured-output fix is valid, but the default model remains unverified
+
+**Category:** Provider compatibility, release blocker
+
+The new top-level `response_format` object matches Google's current Interactions
+contract ([Google migration guide](https://ai.google.dev/gemini-api/docs/interactions-breaking-changes-may-2026)).
+That part of AS-01 is fixed.
+
+The first suggestion remains `gemini-3.7-flash`
+([Google adapter](src/Providers/Text/Google.php#L82)). **Not found in documents.**
+Current first-party Google material identifies `gemini-3.6-flash` as the GA
+Flash model and uses it in current REST examples
+([Google latest models](https://ai.google.dev/gemini-api/docs/latest-model)). A
+blank prompt and blank site default select the first suggestion, so the
+unverified identifier is an operational default, not an optional example.
+
+Replace the first suggestion with a documented current model, or prove the ID
+with a first-party model page and a live model-list smoke test. Do not describe
+the model as GA without a source.
+
+### FR-04 — Medium — Text and image defaults collide for OpenAI and Google
+
+**Category:** Functional correctness, admin design
+
+**Verified facts**
+
+- Settings store defaults by provider slug only
+  ([Settings](src/Admin/Settings.php#L117)).
+- OpenAI and Google use the same slug for their text and image adapters.
+- The settings provider map writes image adapters after text adapters, so image
+  labels replace text labels for those slugs
+  ([Settings_Page](src/Admin/Settings_Page.php#L503)).
+- Text and image generation both read the same default through `Model_Resolver`.
+- The connection test selects the text adapter first. The image adapter is never
+  tested for a slug that also has a text adapter
+  ([Actions](src/Admin/Actions.php#L358)).
+
+**Impact**
+
+One OpenAI default cannot be both a text model such as a GPT model and an image
+model such as `gpt-image-2`. Setting either value can make the other capability
+fail when its prompt field is blank. A row labelled as an image provider can run
+the text connection test.
+
+**Required correction**
+
+Store separate text and image defaults, such as `text:openai` and
+`image:openai`. Render separate controls and test the selected capability. Add
+OpenAI and Google tests that leave both prompt model fields blank.
+
+### FR-05 — High — The single-action pipeline remains a release blocker
+
+The response confirms AS-02 and deliberately does not fix it
+([audit response](CODEX-REVIEW-RESPONSE.md#L110)). This is transparent, but it
+does not change the result. The brief requires separate queue steps
+([project brief](docs/PROJECT-BRIEF.md#L303)). One request can still contain
+several provider calls with 120-second timeouts, post writes, image download,
+and image processing. There is no saved step state. A retry repeats paid work.
+
+This remains a high performance and reliability risk on shared hosting. Treat
+it as planned architecture work, but do not call the plugin brief-complete or
+production-ready before it is done.
+
+### FR-06 — Medium — Retry classification is still open by default
+
+The class comment says that only transient transport failures are retried
+([Retry_Policy](src/Pipeline/Retry_Policy.php#L14)). The implementation does the
+opposite: it retries every error code that is not in a permanent denylist
+([Retry_Policy](src/Pipeline/Retry_Policy.php#L97)). New permanent errors are
+retryable until a developer remembers to add them. Current examples include
+invalid or oversized image results and several local write failures.
+
+Use a retry allowlist for known transient codes, such as transport failure,
+rate limit, and provider unavailability. Treat unknown codes as permanent. Add
+a test that proves an unknown code is not retried.
+
+### FR-07 — Medium — Prompt-injection mitigation is useful but incomplete
+
+The new labelled JSON block is a useful control for locally supplied titles
+([Step_Propose_Topic](src/Pipeline/Step_Propose_Topic.php#L230)). It does not make
+SEC-02 fixed.
+
+- A compromised proposal can put instruction-like text in its `title`. The body
+  step inserts that title into plain instruction text
+  ([Step_Generate_Body](src/Pipeline/Step_Generate_Body.php#L227)).
+- A failed model response is inserted into the repair prompt as plain text
+  ([Step_Generate_Body](src/Pipeline/Step_Generate_Body.php#L240)).
+- The plugin cannot inspect or delimit server-side search results before the
+  provider model reads them. The updated instructions now state this correctly
+  ([INSTRUCTIONS](INSTRUCTIONS.md#L211)).
+
+The likely impact remains unwanted titles, claims, or links in automatically
+published content. It is not direct server code execution. Put proposal and
+repair data in labelled structured blocks, add system-level untrusted-data
+rules to both calls, and keep review mode on for grounded content.
+
+### FR-08 — Low — The URL image byte limit is applied after the unbounded download
+
+`download_url()` writes the complete response to a temporary file. The plugin
+then reads the complete file into memory and only after that checks
+`MAX_IMAGE_BYTES` ([Image_Sideloader](src/Media/Image_Sideloader.php#L174)). The
+20 MB check therefore protects the uploads directory and later image processing,
+but it does not bound temporary disk use, download bandwidth, or the memory used
+by `get_contents()`. WordPress documents `download_url()` as a streamed download
+with a timeout, but it has no caller-supplied maximum byte argument
+([WordPress `download_url()`](https://developer.wordpress.org/reference/functions/download_url/)).
+
+Use a safe streamed request with `limit_response_size`, or reject by content
+length and stop the stream at the limit. Keep the existing file-type and pixel
+checks.
+
+### FR-09 — Low — Existing weak-salt key records are not remediated on upgrade
+
+`Key_Store::set()` now refuses new storage when the salts are unusable. That is
+good. `source()` and `get()` do not make the same check
+([Key_Store](src/Security/Key_Store.php#L94)). A key stored by 1.0.0 under missing
+or placeholder salts remains in the database and remains decryptable under the
+predictable key after upgrade.
+
+Refuse reads while salts are unusable. Mark existing records as unsafe and ask
+the administrator to replace them after valid salts are installed. Do not claim
+the old exposure is fixed until the upgrade path handles existing ciphertext.
+
+### FR-10 — Low — “Queue last processed” reports the scheduled time
+
+`Scheduler::last_processed()` orders completed actions by `date` and returns
+`get_schedule()->get_date()` ([Scheduler](src/Scheduling/Scheduler.php#L198)). In
+the bundled Action Scheduler, `date` orders by `scheduled_date_gmt`, and
+`get_date()` returns the scheduled date
+([Action Scheduler DB store](vendor/woocommerce/action-scheduler/classes/data-stores/ActionScheduler_DBStore.php#L589),
+[schedule object](vendor/woocommerce/action-scheduler/classes/abstracts/ActionScheduler_Abstract_Schedule.php#L61)).
+It does not return completion time.
+
+A job due one week ago but processed now will be shown as last processed one week
+ago. Query by the last-attempt or modified time, or read the completion log.
+
+### FR-11 — Medium — Changelog and release-status claims remain inaccurate
+
+The 1.0.1 changelog says the concurrency issue is fixed, response and image size
+limits are fixed, and the release documentation is corrected
+([CHANGELOG](CHANGELOG.md#L90)). FR-01 and FR-08 show that those statements are
+too broad.
+
+Other verified drift remains:
+
+- README says only one brief requirement is knowingly unmet, but the same section
+  lists the required screenshot as missing ([README](README.md#L192)).
+- The live next-run readout, streamed Run now result, plain-clone installation,
+  and default 82-percent threshold remain deviations
+  ([project brief](docs/PROJECT-BRIEF.md#L560),
+  [project brief](docs/PROJECT-BRIEF.md#L656)).
+- The response calls 1.0.1 a release candidate, but the public GitHub release is
+  not marked as a pre-release.
+
+Add a correction notice to the published 1.0.1 entry. Put the remaining fixes
+under `Unreleased`, and publish a corrected patch only after the release blockers
+and regression tests are complete. If a build is a release candidate, use an
+explicit pre-release version and mark the GitHub release as a pre-release.
+
+### Follow-up security order
+
+1. **High:** FR-01, budget-cap bypass and omitted reservations or image cost.
+2. **Medium:** FR-07, residual prompt-injection and automatic-publication risk.
+3. **Low:** FR-08, unbounded URL-image download before the size check.
+4. **Low:** FR-09, legacy weak-salt ciphertext remains readable.
+
+FR-02 is also a high data-integrity defect. It is not an unauthenticated attack
+path, but it can destroy reviewer work and prior draft content.
+
+### Follow-up remediation order
+
+1. Replace the reservation algorithm with an atomic ledger operation and fix
+   image-model estimation.
+2. Remove broad draft adoption until retry-series and human-edit guards exist.
+3. Replace or prove the Google default model ID.
+4. Split text and image defaults and their connection tests.
+5. Split the pipeline into persistent queue steps.
+6. Change retry classification to a transient allowlist.
+7. Complete the URL-download cap and the weak-key upgrade path.
+8. Correct the queue-health time, threshold documentation, changelog, README,
+   and GitHub release status.
+9. Add tests for every item above, then publish a new release.
+
 ## Executive assessment
 
 ### Direct answers
@@ -59,7 +442,7 @@ This audit did not use live provider keys. A live generation call would spend mo
 | Action Scheduler end-to-end dispatch | Not covered | The repository also states that no test drives Action Scheduler itself ([README](README.md#L202)). |
 | Settings save and connection UI | Not covered | The repository records this test gap ([README](README.md#L198)). The connection control is also absent from the rendered page. |
 
-The passing suite is useful. It is not proof of external compatibility. For example, the Google test asserts a request shape that no longer matches the current Google contract.
+The passing suite is useful. It is not proof of external compatibility. For example, the original Google test did not assert the structured-output fields, so the contract defect was outside its coverage. The 1.0.1 follow-up corrects the original audit's inaccurate statement that the test asserted the obsolete shape.
 
 ## Objective coverage matrix
 
@@ -426,7 +809,7 @@ The following controls were present and correctly placed in the reviewed paths:
 ### Weaknesses
 
 - Many comments state stronger properties than the code supplies. Examples include atomic budget reservation, both-call estimates, complete idempotency, and grounding delimiters.
-- The suite tests internal assumptions more than external contracts. The Google request test is the clearest example.
+- The suite tests internal assumptions more than external contracts. In 1.0.0, the Google request test omitted the structured-output fields entirely. It did not assert the obsolete shape, as the first audit incorrectly stated.
 - Several methods have no reachable product path. `test_connection()` and the preview transient are examples.
 - The central `Generator` method owns too much state and too many side effects.
 - Return values from some WordPress writes are ignored. For example, the final `wp_update_post()` result is not checked ([Generator](src/Pipeline/Generator.php#L185)). A failed publish transition can still produce a successful run result.

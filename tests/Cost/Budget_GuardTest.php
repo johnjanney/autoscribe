@@ -9,8 +9,11 @@ namespace AutoScribe\Tests\Cost;
 
 use AutoScribe\Cost\Budget_Guard;
 use AutoScribe\Cost\Pricing_Table;
+use AutoScribe\Cost\Spend_Lock;
+use AutoScribe\Pipeline\Step_Budget_Check;
 use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Run;
+use AutoScribe\Prompts\Prompt;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Tests\Support\Creates_Prompts;
 use WP_UnitTestCase;
@@ -114,7 +117,7 @@ final class Budget_GuardTest extends WP_UnitTestCase {
 	 * @return void
 	 */
 	public function test_run_within_budget_passes_the_guard(): void {
-		$prompt = \AutoScribe\Prompts\Prompt::load( $this->create_prompt( array( 'monthly_budget_cents' => 100000 ) ) );
+		$prompt = Prompt::load( $this->create_prompt( array( 'monthly_budget_cents' => 100000 ) ) );
 		$guard  = new Budget_Guard();
 
 		$this->assertTrue( $guard->check( $prompt, $guard->estimate_cents( $prompt ) ) );
@@ -205,5 +208,107 @@ final class Budget_GuardTest extends WP_UnitTestCase {
 			0,
 			( new Pricing_Table() )->cost_cents( 'some-model-released-next-year', 100000, 100000 )
 		);
+	}
+
+	/**
+	 * An image with no model set anywhere is still reserved for.
+	 *
+	 * Generation resolves a blank image model through the adapter's own
+	 * suggestions and gets a real model. Until 1.0.2 the estimate did not, so it
+	 * resolved to an empty string, Pricing_Table fell back to the text model's
+	 * rates, and the seeded Claude rows carry a zero per-image rate. The result
+	 * was a run that reserved nothing for an image it was about to generate — a
+	 * hole in the cap that opened on the most ordinary configuration there is,
+	 * a Claude article with an OpenAI picture and the model fields left alone.
+	 *
+	 * @since 1.0.2
+	 *
+	 * @return void
+	 */
+	public function test_an_image_is_priced_even_when_no_image_model_is_set(): void {
+		$text_only = $this->create_prompt(
+			array(
+				'image_mode' => 'none',
+			)
+		);
+
+		$with_image = $this->create_prompt(
+			array(
+				'image_mode'     => 'optional',
+				'image_provider' => 'openai_image',
+				'image_model'    => '',
+			)
+		);
+
+		$guard = new Budget_Guard();
+
+		$this->assertGreaterThan(
+			$guard->estimate_cents( Prompt::load( $text_only ) ),
+			$guard->estimate_cents( Prompt::load( $with_image ) ),
+			'A prompt that will generate an image must reserve more than one that will not.'
+		);
+	}
+
+	/**
+	 * The spend lock can be taken and released.
+	 *
+	 * The lock is what makes the read-check-reserve sequence atomic, and 1.0.1
+	 * shipped an ordering trick in its place that did not close the race. A unit
+	 * test cannot prove mutual exclusion across processes, so this asserts the
+	 * one thing it can: the lock is really taken on this database rather than
+	 * silently failing and leaving every run on the weaker fallback path.
+	 *
+	 * @since 1.0.2
+	 *
+	 * @return void
+	 */
+	public function test_the_spend_lock_is_available(): void {
+		$lock = new Spend_Lock();
+
+		$this->assertTrue( $lock->acquire(), 'GET_LOCK should be available on the test database.' );
+		$this->assertTrue( $lock->held() );
+
+		$lock->release();
+
+		$this->assertFalse( $lock->held() );
+	}
+
+	/**
+	 * A run whose reservation cannot be written never reaches a provider.
+	 *
+	 * Until 1.0.2 the write result was discarded, so a failed reservation left
+	 * the run spending real money against a cap that could not see the spending.
+	 * The reservation UPDATE is redirected to a table that does not exist, which
+	 * is the same shape of failure a corrupt or missing runs table would produce.
+	 * The tripwire in the bootstrap is what proves no provider was contacted.
+	 *
+	 * @since 1.0.2
+	 *
+	 * @return void
+	 */
+	public function test_a_failed_reservation_stops_the_run(): void {
+		global $wpdb;
+
+		$prompt = Prompt::load( $this->create_prompt() );
+		$run    = Run::start( $prompt->id() );
+
+		$this->assertNotWPError( $run );
+
+		$break = static function ( $query ) {
+			return str_contains( (string) $query, 'cost_cents' ) && str_starts_with( ltrim( (string) $query ), 'UPDATE' )
+				? 'UPDATE autoscribe_no_such_table SET cost_cents = 1 WHERE id = 1'
+				: $query;
+		};
+
+		add_filter( 'query', $break );
+		$wpdb->suppress_errors( true );
+
+		$verdict = ( new Step_Budget_Check() )->run( $prompt, $run );
+
+		$wpdb->suppress_errors( false );
+		remove_filter( 'query', $break );
+
+		$this->assertWPError( $verdict );
+		$this->assertSame( 'autoscribe_reservation_failed', $verdict->get_error_code() );
 	}
 }

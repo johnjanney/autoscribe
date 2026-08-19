@@ -27,7 +27,8 @@ defined( 'ABSPATH' ) || exit;
  *
  * Not every failure deserves a retry. A revoked API key will be just as revoked
  * in five minutes, and retrying a content-safety rejection spends money to be
- * refused again. Only transient transport-level failures are retried.
+ * refused again. Only transient transport-level failures are retried, and the
+ * TRANSIENT list is what decides that: an unrecognised code is permanent.
  *
  * @since 0.4.0
  */
@@ -42,47 +43,30 @@ final class Retry_Policy {
 	public const MAX_ATTEMPTS = 3;
 
 	/**
-	 * Error codes that will never succeed on a retry.
+	 * Error codes that are worth trying again.
 	 *
-	 * @since 0.4.0
+	 * This is an allowlist, and the direction matters. Until 1.0.2 it was a
+	 * denylist of permanent codes, so anything not yet named was retried by
+	 * default — including codes that had not been written when the list was
+	 * drawn up. The class had always claimed the opposite in its own comment,
+	 * and the claim was the safer of the two: a new failure mode that costs a
+	 * paid call is retried three times before anyone notices the omission, while
+	 * a new transient one merely fails a run that was going to fail anyway.
+	 *
+	 * Only transport-level failures qualify. A network fault, a rate limit, and
+	 * a provider outage all describe a call that never produced an answer and
+	 * plausibly will in five minutes. Everything else — a rejected request, a
+	 * refusal, a bad key, an unusable response, a local write failure, and every
+	 * outcome that has already been paid for — is permanent, whether or not it is
+	 * named here.
+	 *
+	 * @since 1.0.2
 	 * @var string[]
 	 */
-	private const PERMANENT = array(
-		'autoscribe_provider_auth',
-		'autoscribe_provider_model_not_found',
-		'autoscribe_provider_refusal',
-		'autoscribe_key_missing',
-		'autoscribe_key_stale',
-		'autoscribe_key_corrupt',
-		'autoscribe_unknown_provider',
-		'autoscribe_unknown_prompt',
-		'autoscribe_missing_model',
-		'autoscribe_unsafe_body',
-		'autoscribe_empty_body',
-		'autoscribe_invalid_schedule_parameter',
-		'autoscribe_invalid_schedule_type',
-		'autoscribe_grounding_unsupported',
-		'autoscribe_run_not_recorded',
-
-		/*
-		 * These three are outcomes, not faults, and retrying each one costs money
-		 * to reach the same answer.
-		 *
-		 * A duplicate topic has already paid for the two proposal calls section
-		 * 7.2 allows; a queue retry pays for two more and the topic is no less
-		 * covered than it was. A budget breach will still be a breach in five
-		 * minutes, because the total only ever climbs within a month. And a body
-		 * that fails validation has already had the single repair section 5.1
-		 * permits — letting the queue retry it twice more turns a documented
-		 * one-repair limit into six paid calls.
-		 */
-		'autoscribe_duplicate_topic',
-		'autoscribe_budget_exceeded',
-		'autoscribe_empty_payload',
-		'autoscribe_invalid_json',
-		'autoscribe_missing_fields',
-		'autoscribe_wrong_types',
-		'autoscribe_empty_fields',
+	private const TRANSIENT = array(
+		'autoscribe_transport_error',
+		'autoscribe_provider_rate_limited',
+		'autoscribe_provider_unavailable',
 	);
 
 	/**
@@ -99,7 +83,7 @@ final class Retry_Policy {
 			return false;
 		}
 
-		return ! in_array( $error->get_error_code(), self::PERMANENT, true );
+		return in_array( $error->get_error_code(), $this->transient_codes(), true );
 	}
 
 	/**
@@ -123,13 +107,28 @@ final class Retry_Policy {
 	}
 
 	/**
-	 * Returns the codes that are never retried.
+	 * Returns the codes that are worth trying again.
 	 *
-	 * @since 0.4.0
+	 * Filterable because a provider can start returning a transport-level
+	 * failure under a code this plugin does not yet know, and waiting for a
+	 * release to retry it is worse than letting a site say so itself. Adding a
+	 * code here is a decision to spend money on a repeat call, so the default
+	 * list stays short.
+	 *
+	 * @since 1.0.2
 	 *
 	 * @return string[]
 	 */
-	public function permanent_codes(): array {
-		return self::PERMANENT;
+	public function transient_codes(): array {
+		/**
+		 * Filters the error codes treated as transient and therefore retryable.
+		 *
+		 * @since 1.0.2
+		 *
+		 * @param string[] $codes Error codes worth retrying.
+		 */
+		$codes = apply_filters( 'autoscribe_transient_error_codes', self::TRANSIENT );
+
+		return is_array( $codes ) ? array_map( 'strval', $codes ) : self::TRANSIENT;
 	}
 }

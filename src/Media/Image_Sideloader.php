@@ -7,6 +7,7 @@
 
 namespace AutoScribe\Media;
 
+use AutoScribe\Providers\Http;
 use AutoScribe\Providers\Response\Image_Result;
 use WP_Error;
 
@@ -19,7 +20,8 @@ defined( 'ABSPATH' ) || exit;
  * wp_update_attachment_metadata, and set_post_thumbnail, but omits the step
  * that puts the file on disk in the first place. All of those functions assume
  * a file already exists inside the uploads directory, so wp_upload_bits() runs
- * first for inline data and download_url() for a short-lived URL.
+ * first, over inline data or over a bounded fetch of the short-lived URL some
+ * providers return instead.
  *
  * @since 0.3.0
  */
@@ -38,7 +40,9 @@ final class Image_Sideloader {
 	 *
 	 * The bytes are held in memory and then written to the uploads directory, so
 	 * an unbounded response is both a memory and a disk problem. Twenty megabytes
-	 * is generous for a featured image from any of the providers.
+	 * is generous for a featured image from any of the providers. For a URL
+	 * result the limit is passed to the HTTP layer, so the transfer stops at the
+	 * ceiling rather than being measured after it has already arrived.
 	 *
 	 * @since 1.0.1
 	 * @var int
@@ -61,9 +65,11 @@ final class Image_Sideloader {
 	/**
 	 * Timeout for fetching an image from a provider URL, in seconds.
 	 *
-	 * WordPress otherwise defaults download_url() to 300 seconds, which is longer
-	 * than the whole generation budget and long enough for a stalled connection
-	 * to hold a queue worker open on its own.
+	 * WordPress otherwise defaults an HTTP request to 5 seconds and download_url()
+	 * to 300, and neither is right here: the first is too short for a large image
+	 * over a slow link, and the second is longer than the whole generation budget
+	 * and long enough for a stalled connection to hold a queue worker open on its
+	 * own.
 	 *
 	 * @since 1.0.1
 	 * @var int
@@ -187,22 +193,53 @@ final class Image_Sideloader {
 			);
 		}
 
-		$temp = download_url( $url, self::DOWNLOAD_TIMEOUT );
+		/*
+		 * Not download_url(). That function streams the whole response to a
+		 * temporary file with no caller-supplied ceiling, so a provider — or
+		 * anything that has managed to put a URL in front of this code — could
+		 * fill the disk and then the request's memory, and the size check would
+		 * only run afterwards, once the damage was done. Version 1.0.1 checked
+		 * the twenty-megabyte limit in exactly that position.
+		 *
+		 * limit_response_size stops the transfer at the limit instead, so the
+		 * ceiling applies to bandwidth, disk, and memory rather than only to what
+		 * reaches the uploads directory. One byte over the limit is requested so
+		 * that a file exactly at the limit still passes and anything larger is
+		 * visibly truncated rather than silently accepted.
+		 *
+		 * wp_safe_remote_get() rather than wp_remote_get(), because the URL comes
+		 * from a provider response and should not be able to reach the site's own
+		 * private network.
+		 */
+		$response = wp_safe_remote_get(
+			$url,
+			array(
+				'timeout'             => self::DOWNLOAD_TIMEOUT,
+				'limit_response_size' => self::MAX_IMAGE_BYTES + 1,
+				'user-agent'          => Http::user_agent(),
+			)
+		);
 
-		if ( is_wp_error( $temp ) ) {
-			return $temp;
+		if ( is_wp_error( $response ) ) {
+			return $response;
 		}
 
-		global $wp_filesystem;
+		$status = (int) wp_remote_retrieve_response_code( $response );
 
-		if ( ! $wp_filesystem instanceof \WP_Filesystem_Base ) {
-			WP_Filesystem();
+		if ( $status < 200 || $status > 299 ) {
+			return new WP_Error(
+				'autoscribe_image_empty',
+				sprintf(
+					/* translators: %d: HTTP status code. */
+					__( 'The image URL returned HTTP status %d.', 'autoscribe' ),
+					$status
+				)
+			);
 		}
 
-		$contents = $wp_filesystem->get_contents( $temp );
-		wp_delete_file( $temp );
+		$contents = (string) wp_remote_retrieve_body( $response );
 
-		if ( false === $contents || '' === $contents ) {
+		if ( '' === $contents ) {
 			return new WP_Error(
 				'autoscribe_image_empty',
 				__( 'The downloaded image was empty.', 'autoscribe' )

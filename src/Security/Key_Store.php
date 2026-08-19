@@ -72,6 +72,27 @@ final class Key_Store {
 	public const SOURCE_MISSING = 'missing';
 
 	/**
+	 * Status returned when a stored key exists but the salts protecting it do not.
+	 *
+	 * Version 1.0.1 stopped new keys being written under missing or placeholder
+	 * salts, which is where the protection would be worthless. It did nothing
+	 * about keys already written that way by 1.0.0. Those records stayed in the
+	 * database, encrypted under a key derived from a value an attacker can guess,
+	 * and the plugin went on reading and using them — so the exposure the write
+	 * check was added to prevent survived the upgrade in every site that already
+	 * had it.
+	 *
+	 * The record is now refused rather than read. It is left in place rather than
+	 * deleted, because deleting an administrator's credential without being asked
+	 * is its own kind of damage; the settings screen says what happened and asks
+	 * for the key again once real salts are installed.
+	 *
+	 * @since 1.0.2
+	 * @var string
+	 */
+	public const SOURCE_UNSAFE = 'unsafe';
+
+	/**
 	 * Returns the constant name a provider's key would be read from.
 	 *
 	 * @since 0.2.0
@@ -104,6 +125,10 @@ final class Key_Store {
 			return self::SOURCE_MISSING;
 		}
 
+		if ( ! self::salts_are_usable() ) {
+			return self::SOURCE_UNSAFE;
+		}
+
 		if ( ( $stored['fingerprint'] ?? '' ) !== self::salt_fingerprint() ) {
 			return self::SOURCE_STALE;
 		}
@@ -132,6 +157,17 @@ final class Key_Store {
 				sprintf(
 					/* translators: %s: provider slug. */
 					__( 'No API key is configured for %s.', 'autoscribe' ),
+					$slug
+				)
+			);
+		}
+
+		if ( self::SOURCE_UNSAFE === $source ) {
+			return new WP_Error(
+				'autoscribe_key_unsafe',
+				sprintf(
+					/* translators: %s: provider slug. */
+					__( 'A %s key is stored in this database, but this site has no usable AUTH_KEY and SECURE_AUTH_KEY, so it was encrypted with a key anyone could derive. AutoScribe will not use it. Generate fresh WordPress salts, then either enter the key again or set it as a wp-config.php constant.', 'autoscribe' ),
 					$slug
 				)
 			);

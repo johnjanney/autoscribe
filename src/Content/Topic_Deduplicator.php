@@ -35,6 +35,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class Topic_Deduplicator {
 
+
 	/**
 	 * Default similarity percentage at which two topics are treated as the same.
 	 *
@@ -85,12 +86,13 @@ final class Topic_Deduplicator {
 	 * would be a slow meta query, and would also change the meaning of the
 	 * lookback from "the last N posts" to "the last N generated posts".
 	 *
-	 * @param string $post_type    Post type generated posts are created as.
-	 * @param int[]  $category_ids Restrict to these categories, or empty for all.
-	 * @param int    $lookback     Maximum number of posts to consider.
+	 * @param string $post_type       Post type generated posts are created as.
+	 * @param int[]  $category_ids    Restrict to these categories, or empty for all.
+	 * @param int    $lookback        Maximum number of posts to consider.
+	 * @param int    $exclude_post_id Post to ignore, such as a draft this run will overwrite.
 	 * @return array<string, string> Topic key mapped to post title.
 	 */
-	public function recent_topics( string $post_type, array $category_ids, int $lookback ): array {
+	public function recent_topics( string $post_type, array $category_ids, int $lookback, int $exclude_post_id = 0 ): array {
 		$args = array(
 			'post_type'              => $post_type,
 			'post_status'            => self::COUNTED_STATUSES,
@@ -104,6 +106,10 @@ final class Topic_Deduplicator {
 
 		if ( array() !== $category_ids ) {
 			$args['category__in'] = array_map( 'intval', $category_ids );
+		}
+
+		if ( $exclude_post_id > 0 ) {
+			$args['post__not_in'] = array( $exclude_post_id );
 		}
 
 		$topics = array();
@@ -128,9 +134,10 @@ final class Topic_Deduplicator {
 	 * @param string                $title     Proposed title.
 	 * @param array<string, string> $existing  Existing topics from recent_topics().
 	 * @param string                $post_type Post type to check titles against.
+	 * @param int                   $exclude   Post to ignore, such as a draft this run will overwrite.
 	 * @return string|null Human-readable reason, or null when the topic is new.
 	 */
-	public function collision_reason( string $topic_key, string $title, array $existing, string $post_type = 'post' ): ?string {
+	public function collision_reason( string $topic_key, string $title, array $existing, string $post_type = 'post', int $exclude = 0 ): ?string {
 		if ( '' !== $topic_key && array_key_exists( $topic_key, $existing ) ) {
 			return sprintf(
 				/* translators: %s: the topic key that already exists. */
@@ -156,7 +163,7 @@ final class Topic_Deduplicator {
 			}
 		}
 
-		if ( '' !== $title && $this->title_exists( $title, $post_type ) ) {
+		if ( '' !== $title && $this->title_exists( $title, $post_type, $exclude ) ) {
 			return sprintf(
 				/* translators: %s: the duplicate title. */
 				__( 'A post titled "%s" already exists.', 'autoscribe' ),
@@ -176,16 +183,18 @@ final class Topic_Deduplicator {
 	 *
 	 * @param string $title     Title to look for.
 	 * @param string $post_type Post type to search.
+	 * @param int    $exclude   Post to ignore, or 0 to consider every post.
 	 * @return bool
 	 */
-	private function title_exists( string $title, string $post_type ): bool {
+	private function title_exists( string $title, string $post_type, int $exclude = 0 ): bool {
 		global $wpdb;
 
 		$found = $wpdb->get_var(
 			$wpdb->prepare(
-				"SELECT ID FROM {$wpdb->posts} WHERE post_title = %s AND post_type = %s AND post_status != 'trash' LIMIT 1",
+				"SELECT ID FROM {$wpdb->posts} WHERE post_title = %s AND post_type = %s AND post_status != 'trash' AND ID <> %d LIMIT 1",
 				$title,
-				$post_type
+				$post_type,
+				$exclude
 			)
 		);
 
