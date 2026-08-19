@@ -106,6 +106,24 @@ has the mechanism backwards, and it is right.
 
   The run now ends with `autoscribe_adoption_failed` at the adoption site, before
   the first paid call.
+- **The translation template had been stale since 1.0.0.** Regenerating it is in
+  the release checklist, and a checklist is only as good as the last person to
+  read it: twenty-nine strings added across 1.0.1 to 1.0.5 were missing from
+  `languages/autoscribe.pot`, including both notification emails, the whole
+  health panel, every image validation error, the grounding refusals, the
+  weak-salt messages, and all four untrusted-data blocks. A localised site
+  displayed all twenty-nine in English, and a translator had no way to fix it
+  because the strings were not in the template they work from. Two strings that
+  no longer exist were still asking to be translated.
+
+### Added
+
+- A test that fails when a translatable string in the code is absent from the
+  template. The checklist is no longer the only thing standing between a new
+  string and a site that cannot translate it. It does not compare the file to a
+  fresh build — the header carries a timestamp and the version, so that would
+  fail on every release for no reason — it asserts the property a translator
+  depends on: if the plugin can say it, the template contains it.
 
 ## [1.0.4] - 2026-08-19
 
