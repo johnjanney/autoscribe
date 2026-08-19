@@ -159,8 +159,16 @@ final class Generator {
 		 */
 		$inherited = Run::adoptable_draft( $prompt_id, $run->id(), $attempt );
 
-		if ( null !== $inherited ) {
-			$run->adopt_post( $inherited );
+		/*
+		 * Adoption is all or nothing, and a refused ownership write leaves the
+		 * draft with its previous owner. Carrying on as though it had been
+		 * adopted would hide that draft from duplicate detection and then write a
+		 * second one beside it, so a failed adoption is treated as no adoption:
+		 * the old draft still counts as covering its topic, and this run stands
+		 * down as a duplicate rather than adding to the pile.
+		 */
+		if ( null !== $inherited && ! $run->adopt_post( $inherited ) ) {
+			$inherited = null;
 		}
 
 		// Section 7.2: a cheap proposal call, so a duplicate is caught before

@@ -349,12 +349,12 @@ final class Run {
 	 * @since 0.3.0
 	 *
 	 * @param int $post_id Created post ID.
-	 * @return void
+	 * @return bool True when the write reached the database.
 	 */
-	public function record_post( int $post_id ): void {
+	public function record_post( int $post_id ): bool {
 		$this->post_id = $post_id;
 
-		$this->update( array( 'post_id' => $post_id ), array( '%d' ) );
+		return $this->update( array( 'post_id' => $post_id ), array( '%d' ) );
 	}
 
 	/**
@@ -376,15 +376,44 @@ final class Run {
 	 * Updating meta does not touch post_modified, so the human-edit guard in
 	 * adoptable_draft() is unaffected by this write.
 	 *
+	 * Two writes make a state that can be half-reached, so this is all or
+	 * nothing. Version 1.0.3 discarded both results and bound the run row first,
+	 * which meant a refused meta write — a database error, or a filter on
+	 * update_post_metadata short-circuiting it — reproduced the very state 1.0.3
+	 * had been written to fix.
+	 *
+	 * The order is now the other way round, because the cheaper failure is the
+	 * one that changes nothing. The ownership write goes first and is verified by
+	 * reading it back rather than by trusting its return value, since
+	 * update_post_meta() also returns false when the stored value already matches.
+	 * Only then is the run row bound, and if that write fails the ownership is
+	 * put back where it was.
+	 *
 	 * @since 1.0.3
 	 *
 	 * @param int $post_id Draft being adopted.
-	 * @return void
+	 * @return bool True when the draft now belongs to this run, and nothing
+	 *              changed at all when it does not.
 	 */
-	public function adopt_post( int $post_id ): void {
-		$this->record_post( $post_id );
+	public function adopt_post( int $post_id ): bool {
+		$previous_owner = get_post_meta( $post_id, Step_Assemble_Post::RUN_ID_META, true );
 
 		update_post_meta( $post_id, Step_Assemble_Post::RUN_ID_META, $this->id );
+
+		if ( (int) get_post_meta( $post_id, Step_Assemble_Post::RUN_ID_META, true ) !== $this->id ) {
+			// The run row was never touched, so the draft is exactly as it was.
+			return false;
+		}
+
+		if ( $this->record_post( $post_id ) ) {
+			return true;
+		}
+
+		update_post_meta( $post_id, Step_Assemble_Post::RUN_ID_META, $previous_owner );
+
+		$this->post_id = null;
+
+		return false;
 	}
 
 	/**

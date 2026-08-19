@@ -87,6 +87,36 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-08-19
+
+A follow-on from 1.0.3. The same automated review pointed out that the fix made
+adoption depend on two writes without checking either, so a failure in the second
+one reproduced the state the fix was for. Confirmed, and closed properly this
+time.
+
+### Fixed
+
+- **A refused ownership write left a half-adopted draft.** `update_post_meta()`
+  can fail — a database error, or a filter on `update_post_metadata`
+  short-circuiting the write — and 1.0.3 discarded the result. It also bound the
+  run row *before* moving the post's run link, so a failure left the run naming
+  the draft while the draft still named the attempt before it: exactly the
+  mismatch that makes the next attempt refuse the draft and build a duplicate.
+
+  Adoption is now all or nothing. The ownership write goes first, so the cheaper
+  failure changes nothing at all, and it is verified by reading it back rather
+  than by trusting a return value that is also false when the stored value
+  already matches. The run row is bound only after that, and its own failure puts
+  the ownership back.
+- **A failed adoption is now treated as no adoption.** Carrying on as though it
+  had succeeded would hide the old draft from duplicate detection and then write
+  a second one beside it. The run stands down as a duplicate instead.
+
+### Changed
+
+- `Run::adopt_post()` and `Run::record_post()` return whether their writes
+  reached the database.
+
 ## [1.0.3] - 2026-08-19
 
 An automated Codex review of the 1.0.2 pull request found a narrow regression in
