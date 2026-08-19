@@ -273,6 +273,69 @@ final class GroundingTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A grounded run stops when its sources cannot be recorded.
+	 *
+	 * Section 7.1 keeps the source URLs because they are the only record of what
+	 * third-party text entered the model context — the thing worth being able to
+	 * audit when a grounded article turns out to be wrong. Until this test the
+	 * write's result was discarded, so a refused write published the article
+	 * anyway: without its Sources block if the prompt asked for one, and with no
+	 * provenance record either way.
+	 *
+	 * Failing here costs the article that was already paid for. That is the right
+	 * trade: the refusal is the runs row rejecting writes, and every remaining
+	 * step — assembly, cost settlement, closing the run — writes to that same
+	 * row, so the run cannot complete correctly whatever happens next. It matches
+	 * what a refused budget reservation and a refused draft adoption already do.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_a_run_stops_when_its_sources_cannot_be_recorded(): void {
+		global $wpdb;
+
+		$this->mock_provider_success( array(), array( 'content' => self::SEARCH_BLOCKS ) );
+
+		$prompt_id = $this->create_prompt(
+			array(
+				'grounding_enabled' => 1,
+				'append_sources'    => 1,
+			)
+		);
+
+		$break = static function ( $query ) {
+			return str_contains( (string) $query, 'payload' ) && str_starts_with( ltrim( (string) $query ), 'UPDATE' )
+				? 'UPDATE autoscribe_no_such_table SET payload = 1 WHERE id = 1'
+				: $query;
+		};
+
+		add_filter( 'query', $break );
+		$wpdb->suppress_errors( true );
+
+		$result = ( new Generator( new Provider_Registry() ) )->run( $prompt_id );
+
+		$wpdb->suppress_errors( false );
+		remove_filter( 'query', $break );
+
+		$this->assertWPError( $result );
+		$this->assertSame( 'autoscribe_sources_not_recorded', $result->get_error_code() );
+
+		$this->assertCount(
+			0,
+			get_posts(
+				array(
+					'post_type'   => 'post',
+					'post_status' => 'any',
+					'fields'      => 'ids',
+					'numberposts' => -1,
+				)
+			),
+			'Nothing should be published when the provenance record was lost.'
+		);
+	}
+
+	/**
 	 * The Sources list is appended only when the prompt asks for it.
 	 *
 	 * @since 0.8.0

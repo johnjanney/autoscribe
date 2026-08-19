@@ -148,11 +148,30 @@ final class Step_Generate_Body {
 
 		$run->record_text_usage( $result->model(), $result->usage()->input_tokens(), $result->usage()->output_tokens() );
 
-		// Section 7.1: keep what the grounded call actually read. Recorded here
-		// rather than returned, because this step returns the article and the
-		// sources belong to the run, not to the article.
-		if ( array() !== $result->sources() ) {
-			$run->record_sources( $result->sources() );
+		/*
+		 * Section 7.1: keep what the grounded call actually read. Recorded here
+		 * rather than returned, because this step returns the article and the
+		 * sources belong to the run, not to the article.
+		 *
+		 * A refused write ends the run. These URLs are the only record of what
+		 * third-party text entered the model context — the thing worth being able
+		 * to audit when a grounded article turns out to be wrong — so publishing
+		 * without them means publishing something whose provenance nobody can
+		 * reconstruct, and, where the prompt asks for a Sources block, quietly
+		 * dropping the citations from the post as well.
+		 *
+		 * This costs an article that has already been paid for, which is the
+		 * right trade rather than a reluctant one: the refusal is the runs row
+		 * rejecting writes, and assembly, cost settlement, and closing the run all
+		 * write to that same row. The run cannot complete correctly whatever
+		 * happens next. A refused budget reservation and a refused draft adoption
+		 * already stop for the same reason.
+		 */
+		if ( array() !== $result->sources() && ! $run->record_sources( $result->sources() ) ) {
+			return new WP_Error(
+				'autoscribe_sources_not_recorded',
+				__( 'The web search sources this article was based on could not be written to the run log. The run was stopped rather than publishing an article with no record of what it read.', 'autoscribe' )
+			);
 		}
 
 		$article = $this->validator->validate( $result->text() );
