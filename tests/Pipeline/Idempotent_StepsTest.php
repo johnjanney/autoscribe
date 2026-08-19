@@ -48,6 +48,24 @@ final class Idempotent_StepsTest extends WP_UnitTestCase {
 	use Mocks_Provider;
 
 	/**
+	 * A grounded response carrying one source URL.
+	 *
+	 * @since 1.1.0
+	 * @var array<int, array<string, mixed>>
+	 */
+	private const SEARCH_BLOCKS_FOR_REPAIR = array(
+		array(
+			'type'    => 'web_search_tool_result',
+			'content' => array(
+				array(
+					'type' => 'web_search_result',
+					'url'  => 'https://example.com/informed-the-article',
+				),
+			),
+		),
+	);
+
+	/**
 	 * Gives the providers a key so the steps reach their calls.
 	 *
 	 * @since 1.1.0
@@ -160,6 +178,88 @@ final class Idempotent_StepsTest extends WP_UnitTestCase {
 		$this->assertNotWPError( $article );
 		$this->assertNotSame( '', $article->raw_content_html() );
 		$this->assertGreaterThan( $calls, count( $this->captured_requests() ), 'A damaged row should be regenerated, not trusted.' );
+	}
+
+	/**
+	 * A discarded article does not leave its sources behind.
+	 *
+	 * The regeneration path drops a stored article that no longer satisfies the
+	 * schema. Anything else in the payload that described that article has to go
+	 * with it: its source URLs belong to text the replacement never read, and
+	 * Step_Assemble_Post would otherwise append them to the new article as its
+	 * citations — publishing a provenance record for an article that was thrown
+	 * away.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_a_discarded_article_does_not_leave_its_sources_behind(): void {
+		$this->mock_provider_success();
+
+		$prompt = Prompt::load( $this->create_prompt() );
+		$run    = $this->start_run( $prompt );
+		$step   = new Step_Generate_Body( new Provider_Registry(), new Article_Validator() );
+
+		$damaged = $this->article_payload();
+		unset( $damaged['content_html'] );
+
+		$run->merge_payload( array( 'article' => $damaged ) );
+		$run->record_sources( array( 'https://example.com/read-by-the-discarded-article' ) );
+
+		$article = $step->run( $prompt, $run, null );
+
+		$this->assertNotWPError( $article );
+		$this->assertSame( array(), $run->sources(), 'The discarded article\'s sources must not survive it.' );
+	}
+
+	/**
+	 * A repair call does not wipe the sources the first call reported.
+	 *
+	 * The counterpart to the test above, and the reason the clearing happens
+	 * where it does. A repair is part of generating the same article: section 5.1
+	 * sends it with grounding off, so it reports no sources of its own, and
+	 * clearing on every empty result would throw away the reading that genuinely
+	 * informed the article.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_a_repair_call_keeps_the_first_calls_sources(): void {
+		$article = $this->article_payload();
+		$first   = true;
+
+		$this->install_responder(
+			function ( $args ) use ( $article, &$first ) {
+				unset( $args );
+
+				if ( $first ) {
+					$first = false;
+
+					// Grounded, with sources, but the payload will not validate.
+					return $this->anthropic_response(
+						array( 'title' => 'Only a title' ),
+						array( 'content' => self::SEARCH_BLOCKS_FOR_REPAIR )
+					);
+				}
+
+				return $this->anthropic_response( $article );
+			}
+		);
+
+		$prompt = Prompt::load( $this->create_prompt( array( 'grounding_enabled' => 1 ) ) );
+		$run    = $this->start_run( $prompt );
+		$step   = new Step_Generate_Body( new Provider_Registry(), new Article_Validator() );
+
+		$repaired = $step->run( $prompt, $run, null );
+
+		$this->assertNotWPError( $repaired );
+		$this->assertSame(
+			array( 'https://example.com/informed-the-article' ),
+			$run->sources(),
+			'A repair call must not discard what the first call read.'
+		);
 	}
 
 	/**

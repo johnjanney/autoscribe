@@ -73,7 +73,11 @@ final class Step_Generate_Body {
 	public function run( Prompt $prompt, Run $run, ?array $topic = null ): Article|WP_Error {
 		$written = $this->written_article( $run );
 
-		if ( null !== $written ) {
+		if ( $written instanceof Article ) {
+			return $written;
+		}
+
+		if ( is_wp_error( $written ) ) {
 			return $written;
 		}
 
@@ -231,9 +235,10 @@ final class Step_Generate_Body {
 	 * @since 1.1.0
 	 *
 	 * @param Run $run Run recording progress.
-	 * @return Article|null
+	 * @return Article|WP_Error|null Article to reuse, an error when stale state
+	 *                               could not be cleared, or null to generate.
 	 */
-	private function written_article( Run $run ): ?Article {
+	private function written_article( Run $run ): Article|WP_Error|null {
 		$stored = $run->payload()['article'] ?? null;
 
 		if ( ! is_array( $stored ) ) {
@@ -242,7 +247,32 @@ final class Step_Generate_Body {
 
 		$article = $this->validator->from_array( $stored );
 
-		return is_wp_error( $article ) ? null : $article;
+		if ( ! is_wp_error( $article ) ) {
+			return $article;
+		}
+
+		/*
+		 * The stored article is unusable and the step is about to generate a
+		 * replacement. Anything else in the payload that described it has to go
+		 * with it, and the sources are the case that matters: they name text the
+		 * replacement never read, and Step_Assemble_Post would append them to the
+		 * new article as its citations — a provenance record for an article that
+		 * was thrown away.
+		 *
+		 * Clearing here rather than when the new sources are written is the whole
+		 * point. A repair call is sent with grounding off and so reports no
+		 * sources of its own, but it is part of generating the same article, and
+		 * treating every empty result as a signal to clear would throw away the
+		 * reading that genuinely informed it.
+		 */
+		if ( ! $run->record_sources( array() ) ) {
+			return new WP_Error(
+				'autoscribe_state_not_recorded',
+				__( 'The sources belonging to a discarded article could not be cleared from the run log, so the run was stopped rather than risking them being published as the new article\'s citations.', 'autoscribe' )
+			);
+		}
+
+		return null;
 	}
 
 	/**

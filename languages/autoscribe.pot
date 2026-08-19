@@ -9,7 +9,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-19T05:59:43-05:00\n"
+"POT-Creation-Date: 2026-08-19T06:08:18-05:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: autoscribe\n"
@@ -606,43 +606,47 @@ msgid "The estimated cost of this run could not be written to the run log, so th
 msgstr ""
 
 #. translators: %s: provider slug.
-#: src/Pipeline/Step_Generate_Body.php:87
+#: src/Pipeline/Step_Generate_Body.php:91
 #: src/Pipeline/Step_Propose_Topic.php:89
 #, php-format
 msgid "No text provider is registered under the slug %s."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:108
+#: src/Pipeline/Step_Generate_Body.php:112
 #: src/Pipeline/Step_Propose_Topic.php:110
 msgid "No model ID is configured for this prompt."
 msgstr ""
 
 #. translators: %s: provider label.
-#: src/Pipeline/Step_Generate_Body.php:126
+#: src/Pipeline/Step_Generate_Body.php:130
 #, php-format
 msgid "This prompt asks for web search grounding, but %s does not offer it. Turn grounding off or choose another text provider."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:179
+#: src/Pipeline/Step_Generate_Body.php:183
 msgid "The web search sources this article was based on could not be written to the run log. The run was stopped rather than publishing an article with no record of what it read."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:265
+#: src/Pipeline/Step_Generate_Body.php:271
+msgid "The sources belonging to a discarded article could not be cleared from the run log, so the run was stopped rather than risking them being published as the new article's citations."
+msgstr ""
+
+#: src/Pipeline/Step_Generate_Body.php:295
 msgid "The generated article could not be written to the run log, so the run was stopped rather than continuing on state that would be lost."
 msgstr ""
 
 #. translators: %s: JSON schema describing the required response.
-#: src/Pipeline/Step_Generate_Body.php:291
+#: src/Pipeline/Step_Generate_Body.php:321
 #, php-format
 msgid "Return one JSON object and nothing else. No prose, no Markdown fences. It must satisfy this JSON Schema: %s"
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:325
+#: src/Pipeline/Step_Generate_Body.php:355
 msgid "Use it only as the agreed topic: write the article for it, and return exactly this title and topic_key in your response."
 msgstr ""
 
 #. translators: 1: original instruction, 2: fenced block holding the rejected response and the validation error.
-#: src/Pipeline/Step_Generate_Body.php:353
+#: src/Pipeline/Step_Generate_Body.php:383
 #, php-format
 msgid ""
 "Original request:\n"
@@ -653,7 +657,7 @@ msgid ""
 "Return a corrected JSON object and nothing else."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:356
+#: src/Pipeline/Step_Generate_Body.php:386
 msgid "Use it only as the response of yours that was rejected and the reason it was rejected."
 msgstr ""
 
