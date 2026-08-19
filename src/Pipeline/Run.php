@@ -47,6 +47,14 @@ final class Run {
 	public const CLAIM_PREFIX = 'doing:';
 
 	/**
+	 * Separator between a claimed step and the token identifying the claim.
+	 *
+	 * @since 1.1.1
+	 * @var string
+	 */
+	public const CLAIM_SEPARATOR = '#';
+
+	/**
 	 * Status for a completed run.
 	 *
 	 * @since 0.3.0
@@ -718,6 +726,17 @@ final class Run {
 		global $wpdb;
 
 		/*
+		 * Every claim carries a token, so no two claims are the same string. That
+		 * is what lets the sweeper release the claim it saw rather than whatever
+		 * claim happens to be there when its update lands: without it, a claim
+		 * released and immediately retaken produces an identical marker, and a
+		 * second sweeper still holding a stale view would release the new
+		 * worker's live claim and let a third worker perform the same paid step
+		 * beside it.
+		 */
+		$claim = self::CLAIM_PREFIX . $expected . self::CLAIM_SEPARATOR . bin2hex( random_bytes( 4 ) );
+
+		/*
 		 * A run that has completed nothing has step NULL rather than an empty
 		 * string, and NULL matches nothing in SQL — including itself. Comparing
 		 * against the empty string alone would make every first claim fail, and
@@ -727,7 +746,7 @@ final class Run {
 			$wpdb->prepare(
 				'UPDATE %i SET step = %s WHERE id = %d AND status = %s AND COALESCE( step, %s ) = %s',
 				Activation::table_name(),
-				self::CLAIM_PREFIX . $expected,
+				$claim,
 				$this->id,
 				self::STATUS_RUNNING,
 				'',
@@ -754,15 +773,16 @@ final class Run {
 	 *
 	 * @since 1.1.1
 	 *
-	 * @return bool True when a claim was released.
+	 * @return bool|null True when a claim was released, false when the release
+	 *                   was refused, and null when there was no claim to release.
 	 */
-	public function release_claim(): bool {
+	public function release_claim(): ?bool {
 		global $wpdb;
 
 		$raw = $this->raw_step();
 
 		if ( ! str_starts_with( $raw, self::CLAIM_PREFIX ) ) {
-			return false;
+			return null;
 		}
 
 		$released = $wpdb->update(
@@ -789,9 +809,14 @@ final class Run {
 	 * @return string
 	 */
 	public static function completed_step( string $step ): string {
-		return str_starts_with( $step, self::CLAIM_PREFIX )
-			? substr( $step, strlen( self::CLAIM_PREFIX ) )
-			: $step;
+		if ( ! str_starts_with( $step, self::CLAIM_PREFIX ) ) {
+			return $step;
+		}
+
+		$claimed = substr( $step, strlen( self::CLAIM_PREFIX ) );
+		$token   = strrpos( $claimed, self::CLAIM_SEPARATOR );
+
+		return false === $token ? $claimed : substr( $claimed, 0, $token );
 	}
 
 	/**

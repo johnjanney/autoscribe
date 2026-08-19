@@ -1282,6 +1282,16 @@ introducing a lock into a system that did not have one:
   the review mail and armed the next occurrence; the loser's error then had the
   handler send a failure notice and re-arm on top. The duplicate announcement the
   CR-05 check exists to prevent, arriving by the other door.
+- *A concurrent sweep could free a live claim.* The release re-read the column,
+  and a released-then-retaken claim produced an identical marker, so a second
+  sweeper acting on a stale view freed a live worker's claim. Claims now carry a
+  token, and the sweeper re-asks whether anything is queued immediately before
+  releasing. The re-check is defence against an interleaving the suite cannot
+  stage in one process; it is documented in the test rather than claimed as
+  covered.
+- *A refused release spent one of the run's restarts.* The restart it armed was
+  guaranteed to lose an unchanged claim, so two failures gave up on a recoverable
+  run.
 - *An abandoned claim could never be taken again.* A worker killed mid-step leaves
   the marker behind, and the next worker reads the position with the marker
   stripped — so it asked to claim a value the column no longer held, and failed

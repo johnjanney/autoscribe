@@ -137,6 +137,18 @@ already returned a value, so the ones still returning `void` were never in it.
   have killed the run it was meant to protect. Force review is governed by that
   rule alone; the fingerprint covers the settings where continuing under a
   changed value is simply wrong.
+- **A concurrent sweep could free a live worker's claim.** Two sweeps overlap;
+  the first releases an abandoned claim and arms a restart; the restart takes the
+  step; and the second, still acting on what it saw, releases that live claim and
+  lets a third worker perform the same paid step beside it. It matched because a
+  released and retaken claim produced an identical marker. Claims now carry a
+  token, and the sweeper re-asks whether anything is queued immediately before
+  releasing rather than trusting a scan taken pages earlier.
+- **A release the database refused still spent one of the run's restarts.** The
+  restart it armed was guaranteed to lose an unchanged claim, so two such
+  failures gave up on a run that was recoverable. A refused release is now
+  distinguished from having nothing to release, and leaves the run for the next
+  sweep.
 - **Losing the race to close a run was reported as a failure.** The winner had
   already sent the review mail and armed the next occurrence, and the loser's
   error then had the handler send a failure notice and re-arm on top — the

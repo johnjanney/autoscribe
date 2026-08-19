@@ -402,6 +402,109 @@ final class Write_FailureTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A second sweeper cannot release a claim taken since it looked.
+	 *
+	 * Two sweeps can overlap. The first releases an abandoned claim and arms a
+	 * restart; that restart claims the step; and the second sweeper — still
+	 * acting on what it saw — releases the *live* claim, letting a third worker
+	 * perform the same paid step beside the one already doing it. It matched
+	 * because a released and retaken claim produced an identical marker.
+	 *
+	 * Two changes address it: each claim now carries a token, so no two claims
+	 * are the same string, and the sweeper re-asks whether anything is queued
+	 * immediately before releasing rather than trusting the page scan.
+	 *
+	 * This test asserts the outcome — a live claim survives a concurrent sweep —
+	 * and does not isolate the second guard. Reaching it needs an action armed
+	 * between one sweep's page scan and its release, which two sweeps in one
+	 * process cannot interleave. Removing the re-check leaves this test passing;
+	 * it is defence against an ordering the suite cannot stage, and is documented
+	 * as such rather than claimed as covered.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return void
+	 */
+	public function test_a_stale_sweeper_cannot_release_a_fresh_claim(): void {
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+		$this->assertTrue( $run->claim_step( '' ) );
+
+		$run_id = $run->id();
+
+		global $wpdb;
+
+		$wpdb->update(
+			\AutoScribe\Activation::table_name(),
+			array( 'started_at' => gmdate( 'Y-m-d H:i:s', time() - ( Stall_Sweeper::threshold() * 2 ) ) ),
+			array( 'id' => $run_id ),
+			array( '%s' ),
+			array( '%d' )
+		);
+
+		$scheduler = new Scheduler();
+		$sweeper   = new Stall_Sweeper( $scheduler, $this->handler() );
+
+		// The first sweep releases the abandoned claim and arms a restart.
+		$this->assertSame( 1, $sweeper->handle() );
+
+		$held = Run::load( $run_id )->raw_step();
+
+		// That restart takes the step.
+		$this->assertTrue( Run::load( $run_id )->claim_step( '' ) );
+
+		$live = Run::load( $run_id )->raw_step();
+
+		$this->assertNotSame( $held, $live, 'Each claim should be distinguishable from the last.' );
+
+		// A second sweep, still acting on what it saw, must leave it alone.
+		$sweeper->handle();
+
+		$this->assertSame(
+			$live,
+			Run::load( $run_id )->raw_step(),
+			'A concurrent sweep must not free the claim a live worker is holding.'
+		);
+	}
+
+	/**
+	 * A release the database refuses does not spend one of the run's restarts.
+	 *
+	 * Arming a restart that is guaranteed to lose an unchanged claim achieves
+	 * nothing, and doing it twice gives up on a run that was recoverable.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return void
+	 */
+	public function test_a_refused_release_does_not_spend_a_restart(): void {
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+		$this->assertTrue( $run->claim_step( '' ) );
+
+		$run_id = $run->id();
+
+		global $wpdb;
+
+		$wpdb->update(
+			\AutoScribe\Activation::table_name(),
+			array( 'started_at' => gmdate( 'Y-m-d H:i:s', time() - ( Stall_Sweeper::threshold() * 2 ) ) ),
+			array( 'id' => $run_id ),
+			array( '%s' ),
+			array( '%d' )
+		);
+
+		$sweeper = new Stall_Sweeper( new Scheduler(), $this->handler() );
+
+		$acted = $this->with_refused( 'SET `step`', fn() => $sweeper->handle() );
+
+		$this->assertSame( 0, $acted, 'A run whose claim will not release is left for the next sweep.' );
+		$this->assertSame( 0, Run::load( $run_id )->sweeps(), 'No restart should have been spent.' );
+	}
+
+	/**
 	 * Builds the queued handler under test.
 	 *
 	 * @since 1.1.1

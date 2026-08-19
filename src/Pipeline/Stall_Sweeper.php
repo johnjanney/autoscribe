@@ -367,8 +367,32 @@ final class Stall_Sweeper {
 		 * running for this run — that is how it got here — so the claim belongs
 		 * to a worker that is not coming back, and leaving it would make the
 		 * restart fail its claim and stall again immediately.
+		 *
+		 * A refused release is different from having nothing to release, and the
+		 * difference matters: arming a restart that is guaranteed to lose an
+		 * unchanged claim spends one of this run's attempts to achieve nothing,
+		 * and doing that twice gives up on a run that was recoverable. Leave it
+		 * for the next sweep instead.
 		 */
-		$this->recover_claim( $run_id );
+		if ( $this->scheduler->has_step_action( $run_id ) ) {
+			/*
+			 * Re-asked immediately before releasing, and not merely repetition of
+			 * the page scan. Sweeps overlap: another one can have released this
+			 * claim and armed a restart since this sweep read its candidates, and
+			 * that restart can already be holding the step. Releasing then would
+			 * free a live worker's claim and let a third worker perform the same
+			 * paid step beside it.
+			 *
+			 * The page scan answers "is this run worth looking at". This answers
+			 * "is it still true", which is the question that matters at the moment
+			 * of acting on it.
+			 */
+			return false;
+		}
+
+		if ( false === $this->recover_claim( $run_id ) ) {
+			return false;
+		}
 
 		/*
 		 * Count the restart before arming it. A restart that is recorded and then
@@ -395,12 +419,13 @@ final class Stall_Sweeper {
 	 * @since 1.1.1
 	 *
 	 * @param int $run_id Run to free.
-	 * @return bool True when a claim was released.
+	 * @return bool|null True when a claim was released, false when the release
+	 *                   was refused, and null when there was no claim.
 	 */
-	public function recover_claim( int $run_id ): bool {
+	public function recover_claim( int $run_id ): ?bool {
 		$run = Run::load( $run_id );
 
-		return null !== $run && $run->release_claim();
+		return null === $run ? null : $run->release_claim();
 	}
 
 	/**
