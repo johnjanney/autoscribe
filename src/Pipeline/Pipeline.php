@@ -178,7 +178,25 @@ final class Pipeline {
 			return $result;
 		}
 
-		$run->record_step( $step );
+		/*
+		 * Everything downstream reads runs.step to know where the run has got to,
+		 * so a refused write here does not merely lose a log entry — it leaves
+		 * the run pointing at the step that just ran. A driver told the step
+		 * succeeded would read the same position back and run it again, and keep
+		 * running it: for as long as PHP allows in the synchronous loop, or as an
+		 * endless chain of actions under the queue driver, with the budget
+		 * reservation held open throughout.
+		 */
+		if ( ! $run->record_step( $step ) ) {
+			return new WP_Error(
+				'autoscribe_step_not_recorded',
+				sprintf(
+					/* translators: %s: step name. */
+					__( 'The run log could not record that the %s step finished, so the run was stopped rather than repeating it.', 'autoscribe' ),
+					$step
+				)
+			);
+		}
 
 		return $step;
 	}

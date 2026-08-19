@@ -7,6 +7,7 @@
 
 namespace AutoScribe\Tests\Pipeline;
 
+use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Pipeline;
 use AutoScribe\Pipeline\Run;
 use AutoScribe\Prompts\Prompt;
@@ -144,6 +145,83 @@ final class PipelineTest extends WP_UnitTestCase {
 		$run->record_step( 'preview' );
 
 		$this->assertNull( ( new Pipeline( new Provider_Registry() ) )->next_step( $run ) );
+	}
+
+	/**
+	 * A step that cannot be recorded as completed stops the run.
+	 *
+	 * Everything downstream reads runs.step to know where the run has got to. If
+	 * the write that advances it is refused and the driver is told the step
+	 * succeeded, the run does not move: the synchronous loop re-reads the same
+	 * position and executes the same step again, for as long as PHP lets it,
+	 * holding the budget reservation open the whole time. Under the queue driver
+	 * it would be an endless chain of actions instead.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_a_step_that_cannot_be_recorded_fails_the_run(): void {
+		global $wpdb;
+
+		$prompt   = Prompt::load( $this->create_prompt() );
+		$run      = Run::start( $prompt->id() );
+		$pipeline = new Pipeline( new Provider_Registry() );
+
+		$this->assertNotWPError( $run );
+
+		$break = static function ( $query ) {
+			return str_contains( (string) $query, 'SET `step`' )
+				? 'UPDATE autoscribe_no_such_table SET step = 1 WHERE id = 1'
+				: $query;
+		};
+
+		add_filter( 'query', $break );
+		$wpdb->suppress_errors( true );
+
+		$advanced = $pipeline->advance( $prompt, $run );
+
+		$wpdb->suppress_errors( false );
+		remove_filter( 'query', $break );
+
+		$this->assertWPError( $advanced );
+		$this->assertSame( 'autoscribe_step_not_recorded', $advanced->get_error_code() );
+	}
+
+	/**
+	 * The synchronous driver cannot loop for ever, whatever goes wrong.
+	 *
+	 * The test above fixes the one way a run could fail to advance while
+	 * reporting success. This one covers the ways nobody has thought of yet: the
+	 * driver runs a bounded number of times, so a sequence that stops advancing
+	 * ends the request instead of spinning in it.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_the_synchronous_driver_is_bounded(): void {
+		global $wpdb;
+
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt();
+
+		$break = static function ( $query ) {
+			return str_contains( (string) $query, 'SET `step`' )
+				? 'UPDATE autoscribe_no_such_table SET step = 1 WHERE id = 1'
+				: $query;
+		};
+
+		add_filter( 'query', $break );
+		$wpdb->suppress_errors( true );
+
+		$result = ( new Generator( new Provider_Registry() ) )->run( $prompt_id );
+
+		$wpdb->suppress_errors( false );
+		remove_filter( 'query', $break );
+
+		$this->assertWPError( $result, 'The run must end rather than spin.' );
 	}
 
 	/**

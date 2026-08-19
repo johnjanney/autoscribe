@@ -190,10 +190,10 @@ final class Run {
 	 * @since 0.3.0
 	 *
 	 * @param string $step Step name.
-	 * @return void
+	 * @return bool True when the write reached the database.
 	 */
-	public function record_step( string $step ): void {
-		$this->update( array( 'step' => $step ), array( '%s' ) );
+	public function record_step( string $step ): bool {
+		return $this->update( array( 'step' => $step ), array( '%s' ) );
 	}
 
 	/**
