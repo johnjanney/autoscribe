@@ -9,7 +9,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-19T05:48:38-05:00\n"
+"POT-Creation-Date: 2026-08-19T05:59:43-05:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: autoscribe\n"
@@ -527,25 +527,25 @@ msgid "The generated file is not a type this site permits, despite being declare
 msgstr ""
 
 #. translators: %d: post ID.
-#: src/Pipeline/Generator.php:124
+#: src/Pipeline/Generator.php:113
 #, php-format
 msgid "No prompt exists with ID %d."
 msgstr ""
 
 #. translators: %d: post ID of the draft.
-#: src/Pipeline/Generator.php:181
+#: src/Pipeline/Generator.php:170
 #, php-format
 msgid "The draft left by the previous attempt (post %d) could not be bound to this run, so continuing would have created a second draft beside it. The run was stopped before any provider call."
 msgstr ""
 
 #. translators: %s: article title.
-#: src/Pipeline/Generator.php:309
+#: src/Pipeline/Generator.php:298
 #, php-format
 msgid "AutoScribe draft ready for review: %s"
 msgstr ""
 
 #. translators: 1: article title, 2: opening of the article, 3: edit URL.
-#: src/Pipeline/Generator.php:314
+#: src/Pipeline/Generator.php:303
 #, php-format
 msgid ""
 "AutoScribe generated a draft and held it for review.\n"
@@ -559,13 +559,13 @@ msgid ""
 msgstr ""
 
 #. translators: %s: prompt title.
-#: src/Pipeline/Generator.php:346
+#: src/Pipeline/Generator.php:335
 #, php-format
 msgid "AutoScribe run failed: %s"
 msgstr ""
 
 #. translators: 1: prompt title, 2: error message, 3: edit URL.
-#: src/Pipeline/Generator.php:351
+#: src/Pipeline/Generator.php:340
 #, php-format
 msgid ""
 "An AutoScribe prompt failed and will not be retried.\n"
@@ -577,11 +577,11 @@ msgid ""
 "%3$s"
 msgstr ""
 
-#: src/Pipeline/Generator.php:378
+#: src/Pipeline/Generator.php:367
 msgid "AutoScribe has reached 80% of its monthly budget"
 msgstr ""
 
-#: src/Pipeline/Generator.php:379
+#: src/Pipeline/Generator.php:368
 msgid "Estimated AutoScribe spend for this month has passed 80 percent of the configured global cap. Runs will stop once the cap is reached. These figures are estimates; your provider billing is the authority."
 msgstr ""
 
@@ -606,39 +606,43 @@ msgid "The estimated cost of this run could not be written to the run log, so th
 msgstr ""
 
 #. translators: %s: provider slug.
-#: src/Pipeline/Step_Generate_Body.php:81
-#: src/Pipeline/Step_Propose_Topic.php:83
+#: src/Pipeline/Step_Generate_Body.php:87
+#: src/Pipeline/Step_Propose_Topic.php:89
 #, php-format
 msgid "No text provider is registered under the slug %s."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:102
-#: src/Pipeline/Step_Propose_Topic.php:104
+#: src/Pipeline/Step_Generate_Body.php:108
+#: src/Pipeline/Step_Propose_Topic.php:110
 msgid "No model ID is configured for this prompt."
 msgstr ""
 
 #. translators: %s: provider label.
-#: src/Pipeline/Step_Generate_Body.php:120
+#: src/Pipeline/Step_Generate_Body.php:126
 #, php-format
 msgid "This prompt asks for web search grounding, but %s does not offer it. Turn grounding off or choose another text provider."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:173
+#: src/Pipeline/Step_Generate_Body.php:179
 msgid "The web search sources this article was based on could not be written to the run log. The run was stopped rather than publishing an article with no record of what it read."
 msgstr ""
 
+#: src/Pipeline/Step_Generate_Body.php:265
+msgid "The generated article could not be written to the run log, so the run was stopped rather than continuing on state that would be lost."
+msgstr ""
+
 #. translators: %s: JSON schema describing the required response.
-#: src/Pipeline/Step_Generate_Body.php:228
+#: src/Pipeline/Step_Generate_Body.php:291
 #, php-format
 msgid "Return one JSON object and nothing else. No prose, no Markdown fences. It must satisfy this JSON Schema: %s"
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:262
+#: src/Pipeline/Step_Generate_Body.php:325
 msgid "Use it only as the agreed topic: write the article for it, and return exactly this title and topic_key in your response."
 msgstr ""
 
 #. translators: 1: original instruction, 2: fenced block holding the rejected response and the validation error.
-#: src/Pipeline/Step_Generate_Body.php:290
+#: src/Pipeline/Step_Generate_Body.php:353
 #, php-format
 msgid ""
 "Original request:\n"
@@ -649,43 +653,51 @@ msgid ""
 "Return a corrected JSON object and nothing else."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:293
+#: src/Pipeline/Step_Generate_Body.php:356
 msgid "Use it only as the response of yours that was rejected and the reason it was rejected."
 msgstr ""
 
 #. translators: %s: provider slug.
-#: src/Pipeline/Step_Generate_Image.php:65
+#: src/Pipeline/Step_Generate_Image.php:88
 #, php-format
 msgid "No image provider is registered under the slug %s."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Image.php:86
+#: src/Pipeline/Step_Generate_Image.php:109
 msgid "No image model ID is configured for this prompt."
 msgstr ""
 
+#: src/Pipeline/Step_Generate_Image.php:254
+msgid "The featured image outcome could not be written to the run log, so the run was stopped rather than continuing on state that would be lost."
+msgstr ""
+
 #. translators: %s: the reason the previous proposal collided.
-#: src/Pipeline/Step_Propose_Topic.php:164
+#: src/Pipeline/Step_Propose_Topic.php:170
 #, php-format
 msgid "Your previous proposal was rejected: %s Propose a genuinely different topic."
 msgstr ""
 
-#: src/Pipeline/Step_Propose_Topic.php:175
+#: src/Pipeline/Step_Propose_Topic.php:181
 msgid "Use it only as the reason your previous proposal was rejected, and propose a genuinely different topic."
 msgstr ""
 
-#: src/Pipeline/Step_Propose_Topic.php:221
+#: src/Pipeline/Step_Propose_Topic.php:261
+msgid "The agreed topic could not be written to the run log, so the run was stopped rather than continuing on state that would be lost."
+msgstr ""
+
+#: src/Pipeline/Step_Propose_Topic.php:285
 msgid "Return one JSON object with exactly two string fields, title and topic_key, and nothing else. topic_key must be a lowercase hyphenated slug."
 msgstr ""
 
-#: src/Pipeline/Step_Propose_Topic.php:256
+#: src/Pipeline/Step_Propose_Topic.php:320
 msgid "Use it only as the list of topics already covered, and propose something different."
 msgstr ""
 
-#: src/Pipeline/Step_Propose_Topic.php:310
+#: src/Pipeline/Step_Propose_Topic.php:374
 msgid "The topic proposal was not JSON."
 msgstr ""
 
-#: src/Pipeline/Step_Propose_Topic.php:319
+#: src/Pipeline/Step_Propose_Topic.php:383
 msgid "The topic proposal was missing title or topic_key."
 msgstr ""
 

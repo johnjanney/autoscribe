@@ -71,6 +71,12 @@ final class Step_Generate_Body {
 	 * @return Article|WP_Error
 	 */
 	public function run( Prompt $prompt, Run $run, ?array $topic = null ): Article|WP_Error {
+		$written = $this->written_article( $run );
+
+		if ( null !== $written ) {
+			return $written;
+		}
+
 		$provider = $this->registry->text_provider( $prompt->text_provider() );
 
 		if ( null === $provider ) {
@@ -177,7 +183,7 @@ final class Step_Generate_Body {
 		$article = $this->validator->validate( $result->text() );
 
 		if ( ! is_wp_error( $article ) ) {
-			return $article;
+			return $this->remember( $run, $article );
 		}
 
 		// The single repair attempt permitted by section 5.1.
@@ -203,7 +209,64 @@ final class Step_Generate_Body {
 			$second->usage()->output_tokens()
 		);
 
-		return $this->validator->validate( $second->text() );
+		$repaired = $this->validator->validate( $second->text() );
+
+		return is_wp_error( $repaired ) ? $repaired : $this->remember( $run, $repaired );
+	}
+
+	/**
+	 * Returns the article this run has already generated, if it has.
+	 *
+	 * Section 5 requires each step to be idempotent keyed by run ID, and this is
+	 * the step where that matters most. The body call is the largest paid call in
+	 * the pipeline — the whole article, plus a repair call when validation fails
+	 * — so a step re-entered without this guard buys the same article twice.
+	 *
+	 * The stored fields are re-validated on the way back in rather than trusted.
+	 * A payload row that was truncated is not an article, and an Article that
+	 * never satisfied the schema is a lie the rest of the pipeline believes.
+	 * Where the stored copy is unusable the step generates again: paying twice is
+	 * bad, and publishing from a half-read row is worse.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Run $run Run recording progress.
+	 * @return Article|null
+	 */
+	private function written_article( Run $run ): ?Article {
+		$stored = $run->payload()['article'] ?? null;
+
+		if ( ! is_array( $stored ) ) {
+			return null;
+		}
+
+		$article = $this->validator->from_array( $stored );
+
+		return is_wp_error( $article ) ? null : $article;
+	}
+
+	/**
+	 * Stores the article so a re-entry does not buy it again.
+	 *
+	 * A refused write ends the step. The guard above is only worth having if the
+	 * state it reads is really there, and reporting success while the output went
+	 * nowhere is how a split pipeline loses work it has already paid for.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Run     $run     Run recording progress.
+	 * @param Article $article Validated article.
+	 * @return Article|WP_Error
+	 */
+	private function remember( Run $run, Article $article ): Article|WP_Error {
+		if ( ! $run->merge_payload( array( 'article' => $article->to_array() ) ) ) {
+			return new WP_Error(
+				'autoscribe_state_not_recorded',
+				__( 'The generated article could not be written to the run log, so the run was stopped rather than continuing on state that would be lost.', 'autoscribe' )
+			);
+		}
+
+		return $article;
 	}
 
 	/**

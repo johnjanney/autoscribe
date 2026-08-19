@@ -193,8 +193,8 @@ Each phase is independently landable and leaves the plugin working.
 
 | # | Phase | Size | Notes |
 |---|---|---|---|
-| 1 | `merge_payload()`, fix `record_sources()` clobbering, `Article::to_array()/from_array()` | Small | Pure groundwork, no behaviour change, shippable alone |
-| 2 | Idempotency guards in the five steps + tests that each step run twice does the work once | Medium | Valuable on its own — makes today's whole-run retries cheaper |
+| 1 | ✅ `merge_payload()`, fix `record_sources()` clobbering, `Article::to_array()/from_array()` | Small | Done. Took three PRs: the document, then the cache semantics, then propagating the write failure to a caller that discarded it |
+| 2 | ✅ Idempotency guards in the five steps + tests that each step run twice does the work once | Medium | Done. `Step_Assemble_Post` was already idempotent; the image work moved out of `Generator` into `Step_Generate_Image` so its guard could be re-entered and therefore tested |
 | 3 | Dispatcher, `autoscribe_run_step` hook, `Generator` reduced to opening the run | Medium | The visible change |
 | 4 | Finalise step; re-arm on every terminal path | Small | |
 | 5 | **Stall sweeper** + reservation release on give-up | Medium | §4.4 and §5; do not defer this one |

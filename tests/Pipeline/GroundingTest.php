@@ -304,8 +304,17 @@ final class GroundingTest extends WP_UnitTestCase {
 			)
 		);
 
+		/*
+		 * Only the write that carries the sources is refused. Refusing every
+		 * payload write would stop the run at the topic step instead, which is
+		 * correct behaviour and a different test: this one has to reach the body
+		 * step with the article already paid for, because that is the moment the
+		 * old code published without provenance.
+		 */
 		$break = static function ( $query ) {
-			return str_contains( (string) $query, 'payload' ) && str_starts_with( ltrim( (string) $query ), 'UPDATE' )
+			$sql = (string) $query;
+
+			return str_contains( $sql, 'sources' ) && str_starts_with( ltrim( $sql ), 'UPDATE' )
 				? 'UPDATE autoscribe_no_such_table SET payload = 1 WHERE id = 1'
 				: $query;
 		};

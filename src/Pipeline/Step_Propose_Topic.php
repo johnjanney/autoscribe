@@ -73,6 +73,12 @@ final class Step_Propose_Topic {
 	 * @return array{title: string, topic_key: string}|WP_Error
 	 */
 	public function run( Prompt $prompt, Run $run, int $adopted_post = 0 ): array|WP_Error {
+		$agreed = $this->agreed_topic( $run );
+
+		if ( null !== $agreed ) {
+			return $agreed;
+		}
+
 		$provider = $this->registry->text_provider( $prompt->text_provider() );
 
 		if ( null === $provider ) {
@@ -156,7 +162,7 @@ final class Step_Propose_Topic {
 			);
 
 			if ( null === $reason ) {
-				return $proposal;
+				return $this->remember( $run, $proposal );
 			}
 
 			$rebuttal = sprintf(
@@ -199,6 +205,64 @@ final class Step_Propose_Topic {
 			'required'             => array( 'title', 'topic_key' ),
 			'additionalProperties' => false,
 		);
+	}
+
+	/**
+	 * Returns the topic this run has already agreed, if it has.
+	 *
+	 * Section 5 requires each step to be idempotent keyed by run ID. For this
+	 * step that is not only about correctness — the proposal call is a paid call,
+	 * and section 7.2 allows two of them per run. A step re-entered without this
+	 * guard spends that allowance again to be told the same thing.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Run $run Run recording progress.
+	 * @return array{title: string, topic_key: string}|null
+	 */
+	private function agreed_topic( Run $run ): ?array {
+		$stored = $run->payload()['topic'] ?? null;
+
+		if ( ! is_array( $stored ) ) {
+			return null;
+		}
+
+		$title     = (string) ( $stored['title'] ?? '' );
+		$topic_key = (string) ( $stored['topic_key'] ?? '' );
+
+		if ( '' === $title || '' === $topic_key ) {
+			return null;
+		}
+
+		return array(
+			'title'     => $title,
+			'topic_key' => $topic_key,
+		);
+	}
+
+	/**
+	 * Stores the agreed topic so a re-entry does not pay for it again.
+	 *
+	 * A refused write ends the step rather than returning the topic anyway. The
+	 * guard above is only worth having if the state it reads is really there, and
+	 * a step that reports success while its output went nowhere is how a split
+	 * pipeline loses work it has already paid for.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Run                                     $run      Run recording progress.
+	 * @param array{title: string, topic_key: string} $proposal Agreed topic.
+	 * @return array{title: string, topic_key: string}|WP_Error
+	 */
+	private function remember( Run $run, array $proposal ): array|WP_Error {
+		if ( ! $run->merge_payload( array( 'topic' => $proposal ) ) ) {
+			return new WP_Error(
+				'autoscribe_state_not_recorded',
+				__( 'The agreed topic could not be written to the run log, so the run was stopped rather than continuing on state that would be lost.', 'autoscribe' )
+			);
+		}
+
+		return $proposal;
 	}
 
 	/**
