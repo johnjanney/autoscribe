@@ -293,9 +293,9 @@ final class Run {
 	 * @since 0.8.0
 	 *
 	 * @param string[] $urls Source URLs.
-	 * @return void
+	 * @return bool True when the write reached the database.
 	 */
-	public function record_sources( array $urls ): void {
+	public function record_sources( array $urls ): bool {
 		$clean = array();
 
 		foreach ( $urls as $url ) {
@@ -308,9 +308,13 @@ final class Run {
 
 		$clean = array_values( array_unique( $clean ) );
 
+		if ( ! $this->merge_payload( array( 'sources' => $clean ) ) ) {
+			return false;
+		}
+
 		$this->sources = $clean;
 
-		$this->merge_payload( array( 'sources' => $clean ) );
+		return true;
 	}
 
 	/**
@@ -332,18 +336,40 @@ final class Run {
 	 *
 	 * @since 1.1.0
 	 *
+	 * The cache is assigned only once the write has been accepted. Assigning it
+	 * first — the 1.1.0 groundwork as first written — left a refused write with
+	 * the merged document still in memory, so the object went on reporting keys
+	 * the row did not contain. That is worse than it sounds under section 5: the
+	 * idempotency guards read this document to decide whether a step has already
+	 * run, so a key that exists only in memory means a step skips work that was
+	 * never persisted, and the run continues on state nothing can recover.
+	 *
+	 * On a refusal the cache is dropped rather than rolled back to its previous
+	 * value. Rolling back would assert what the row contains, and a write that
+	 * just failed is the worst moment to start making assertions about the
+	 * database; dropping it means the next read goes and looks.
+	 *
 	 * @param array<string, mixed> $patch Keys to write.
 	 * @return bool True when the write reached the database.
 	 */
 	public function merge_payload( array $patch ): bool {
 		$payload = array_merge( $this->payload(), $patch );
 
-		$this->payload = $payload;
-
-		return $this->update(
+		$written = $this->update(
 			array( 'payload' => (string) wp_json_encode( $payload ) ),
 			array( '%s' )
 		);
+
+		if ( ! $written ) {
+			$this->payload = null;
+			$this->sources = null;
+
+			return false;
+		}
+
+		$this->payload = $payload;
+
+		return true;
 	}
 
 	/**

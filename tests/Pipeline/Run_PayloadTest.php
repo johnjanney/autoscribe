@@ -194,6 +194,117 @@ final class Run_PayloadTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A refused write leaves nothing cached that the database does not hold.
+	 *
+	 * The cache was assigned before the write was attempted, so a refused write
+	 * left the object reporting keys the row did not contain. Phase 2 is what
+	 * makes that expensive: the idempotency guards read this document to decide
+	 * whether a step has already run, so a key that exists only in memory means
+	 * a step skips work that was never persisted.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_a_refused_write_caches_nothing(): void {
+		$run = $this->start_run();
+
+		$run->merge_payload( array( 'topic' => array( 'title' => 'Kept' ) ) );
+
+		$written = $this->without_payload_writes(
+			static function () use ( $run ) {
+				return $run->merge_payload( array( 'article' => array( 'title' => 'Lost' ) ) );
+			}
+		);
+
+		$this->assertFalse( $written, 'merge_payload() should report the refused write.' );
+		$this->assertArrayNotHasKey( 'article', $run->payload(), 'A refused write must not be cached.' );
+		$this->assertSame( array( 'title' => 'Kept' ), $run->payload()['topic'] );
+	}
+
+	/**
+	 * A later write does not resurrect a patch the database refused.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_a_refused_patch_is_not_persisted_by_a_later_write(): void {
+		$run = $this->start_run();
+
+		$run->merge_payload( array( 'topic' => array( 'title' => 'Kept' ) ) );
+
+		$this->without_payload_writes(
+			static function () use ( $run ) {
+				return $run->merge_payload( array( 'article' => array( 'title' => 'Lost' ) ) );
+			}
+		);
+
+		$run->merge_payload( array( 'image' => array( 'attachment_id' => 42 ) ) );
+
+		$payload = $this->stored_payload( $run->id() );
+
+		$this->assertArrayNotHasKey( 'article', $payload, 'The refused patch must not ride along on a later write.' );
+		$this->assertSame( array( 'title' => 'Kept' ), $payload['topic'] );
+		$this->assertSame( array( 'attachment_id' => 42 ), $payload['image'] );
+	}
+
+	/**
+	 * Sources are not reported when the write that stored them was refused.
+	 *
+	 * The same defect one level up, and the one that reaches published content:
+	 * Step_Assemble_Post reads sources() to append the section 7.1 sources block,
+	 * so a cache the row does not back puts citations under an article that has
+	 * no record of them.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_refused_sources_are_not_reported(): void {
+		$run = $this->start_run();
+
+		$stored = $this->without_payload_writes(
+			static function () use ( $run ) {
+				return $run->record_sources( array( 'https://example.com/one' ) );
+			}
+		);
+
+		$this->assertFalse( $stored, 'record_sources() should report the refused write.' );
+		$this->assertSame( array(), $run->sources(), 'A refused write must not be cached.' );
+	}
+
+	/**
+	 * Runs a callback with every payload UPDATE redirected at a missing table.
+	 *
+	 * The same shape of failure a corrupt or missing runs table would produce.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param callable $callback Work to run while writes are refused.
+	 * @return mixed Whatever the callback returned.
+	 */
+	private function without_payload_writes( callable $callback ) {
+		global $wpdb;
+
+		$break = static function ( $query ) {
+			return str_contains( (string) $query, 'payload' ) && str_starts_with( ltrim( (string) $query ), 'UPDATE' )
+				? 'UPDATE autoscribe_no_such_table SET payload = 1 WHERE id = 1'
+				: $query;
+		};
+
+		add_filter( 'query', $break );
+		$wpdb->suppress_errors( true );
+
+		$result = $callback();
+
+		$wpdb->suppress_errors( false );
+		remove_filter( 'query', $break );
+
+		return $result;
+	}
+
+	/**
 	 * Opens a run to write against.
 	 *
 	 * @since 1.1.0
