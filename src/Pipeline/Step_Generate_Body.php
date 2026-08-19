@@ -229,8 +229,9 @@ final class Step_Generate_Body {
 	 * The stored fields are re-validated on the way back in rather than trusted.
 	 * A payload row that was truncated is not an article, and an Article that
 	 * never satisfied the schema is a lie the rest of the pipeline believes.
-	 * Where the stored copy is unusable the step generates again: paying twice is
-	 * bad, and publishing from a half-read row is worse.
+	 * Where the stored copy is unusable — whether it fails the schema or is not
+	 * a fields array at all — the step generates again: paying twice is bad, and
+	 * publishing from a half-read row is worse.
 	 *
 	 * @since 1.1.0
 	 *
@@ -239,15 +240,25 @@ final class Step_Generate_Body {
 	 *                               could not be cleared, or null to generate.
 	 */
 	private function written_article( Run $run ): Article|WP_Error|null {
-		$stored = $run->payload()['article'] ?? null;
+		$payload = $run->payload();
 
-		if ( ! is_array( $stored ) ) {
+		/*
+		 * Two situations look alike from a distance and are not the same. No
+		 * article key at all means nothing was ever stored, and any sources on
+		 * the run belong to the attempt now running. An article key holding
+		 * something unusable means an article *was* stored and is being thrown
+		 * away, so the cleanup below has to happen. Reading the key with a null
+		 * coalesce collapsed both into "nothing stored" and skipped the cleanup
+		 * for the second.
+		 */
+		if ( ! array_key_exists( 'article', $payload ) ) {
 			return null;
 		}
 
-		$article = $this->validator->from_array( $stored );
+		$stored  = $payload['article'];
+		$article = is_array( $stored ) ? $this->validator->from_array( $stored ) : null;
 
-		if ( ! is_wp_error( $article ) ) {
+		if ( $article instanceof Article ) {
 			return $article;
 		}
 
