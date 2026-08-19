@@ -251,7 +251,8 @@ final class Stall_Sweeper {
 				break;
 			}
 
-			$busy = $this->scheduler->runs_with_step_actions( $candidates );
+			$busy     = $this->scheduler->runs_with_step_actions( $candidates );
+			$observed = Run::steps_for( $candidates );
 
 			foreach ( $candidates as $run_id ) {
 				/*
@@ -268,7 +269,7 @@ final class Stall_Sweeper {
 					continue;
 				}
 
-				if ( $this->recover( $run_id ) ) {
+				if ( $this->recover( $run_id, (string) ( $observed[ $run_id ] ?? '' ) ) ) {
 					++$acted;
 				}
 
@@ -305,12 +306,19 @@ final class Stall_Sweeper {
 	/**
 	 * Restarts one stalled run, or gives up on it.
 	 *
+	 * Public because it is the unit of recovery — one run, judged and acted on —
+	 * and because the guards inside it protect against interleavings the page
+	 * scan above cannot reproduce: a caller that reaches this directly can put a
+	 * run in a state the scan would have filtered out, which is the only way to
+	 * exercise what happens when the scan's view has gone stale.
+	 *
 	 * @since 1.1.0
 	 *
-	 * @param int $run_id Run to recover.
+	 * @param int    $run_id   Run to recover.
+	 * @param string $observed The step value seen when the run was judged idle.
 	 * @return bool Whether anything was done.
 	 */
-	private function recover( int $run_id ): bool {
+	public function recover( int $run_id, string $observed ): bool {
 		$run = Run::load( $run_id );
 
 		if ( null === $run || Run::STATUS_RUNNING !== $run->status() ) {
@@ -345,6 +353,18 @@ final class Stall_Sweeper {
 			return true;
 		}
 
+		/*
+		 * Re-asked before anything terminal, not only before a release. Sweeps
+		 * overlap, and the candidate scan can be many pages old by now: another
+		 * sweep may have counted the restart that takes this run to its limit,
+		 * armed it, and left a worker part-way through a paid call. Giving up
+		 * would close the run under that worker's feet. The scan says a run is
+		 * worth looking at; this says it is still true.
+		 */
+		if ( $this->scheduler->has_step_action( $run_id ) ) {
+			return false;
+		}
+
 		if ( $run->sweeps() >= self::MAX_RESTARTS ) {
 			$this->give_up(
 				$run,
@@ -374,23 +394,7 @@ final class Stall_Sweeper {
 		 * and doing that twice gives up on a run that was recoverable. Leave it
 		 * for the next sweep instead.
 		 */
-		if ( $this->scheduler->has_step_action( $run_id ) ) {
-			/*
-			 * Re-asked immediately before releasing, and not merely repetition of
-			 * the page scan. Sweeps overlap: another one can have released this
-			 * claim and armed a restart since this sweep read its candidates, and
-			 * that restart can already be holding the step. Releasing then would
-			 * free a live worker's claim and let a third worker perform the same
-			 * paid step beside it.
-			 *
-			 * The page scan answers "is this run worth looking at". This answers
-			 * "is it still true", which is the question that matters at the moment
-			 * of acting on it.
-			 */
-			return false;
-		}
-
-		if ( false === $this->recover_claim( $run_id ) ) {
+		if ( false === $this->recover_claim( $run_id, $observed ) ) {
 			return false;
 		}
 
@@ -418,14 +422,15 @@ final class Stall_Sweeper {
 	 *
 	 * @since 1.1.1
 	 *
-	 * @param int $run_id Run to free.
+	 * @param int    $run_id   Run to free.
+	 * @param string $observed The claim seen when the run was judged idle.
 	 * @return bool|null True when a claim was released, false when the release
 	 *                   was refused, and null when there was no claim.
 	 */
-	public function recover_claim( int $run_id ): ?bool {
+	public function recover_claim( int $run_id, string $observed ): ?bool {
 		$run = Run::load( $run_id );
 
-		return null === $run ? null : $run->release_claim();
+		return null === $run ? null : $run->release_claim( $observed );
 	}
 
 	/**

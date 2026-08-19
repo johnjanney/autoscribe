@@ -767,23 +767,32 @@ final class Run {
 	 * time. Left alone, that turns the guard into a trap: a run interrupted at any
 	 * point after claiming can never resume, and is given up on instead.
 	 *
-	 * Only the stall sweeper calls this, and only once it has established that
-	 * nothing is queued or running for the run — which is as close to "the worker
-	 * is gone" as this side of the system can get.
+	 * The claim to release is passed in rather than read here, and that is the
+	 * whole of the guard. Reading it would find whatever claim exists at this
+	 * instant — including one a restart took a moment ago, which is live and must
+	 * not be freed. Naming the claim observed before the run was judged idle makes
+	 * the check and the release one conditional update: a claim taken since
+	 * carries a different token, so the update matches nothing and the live worker
+	 * keeps its step.
+	 *
+	 * Only the stall sweeper calls this, and only for a run it found with nothing
+	 * queued or running — which is as close to "the worker is gone" as this side
+	 * of the system can get.
 	 *
 	 * @since 1.1.1
 	 *
+	 * @param string $observed The claim seen when the run was judged idle.
 	 * @return bool|null True when a claim was released, false when the release
 	 *                   was refused, and null when there was no claim to release.
 	 */
-	public function release_claim(): ?bool {
+	public function release_claim( string $observed ): ?bool {
 		global $wpdb;
 
-		$raw = $this->raw_step();
-
-		if ( ! str_starts_with( $raw, self::CLAIM_PREFIX ) ) {
+		if ( ! str_starts_with( $observed, self::CLAIM_PREFIX ) ) {
 			return null;
 		}
+
+		$raw = $observed;
 
 		$released = $wpdb->update(
 			Activation::table_name(),
@@ -1040,6 +1049,45 @@ final class Run {
 		}
 
 		return strtotime( $modified . ' UTC' ) <= strtotime( $finished_at . ' UTC' );
+	}
+
+	/**
+	 * Returns the step column for a set of runs, in one query.
+	 *
+	 * The sweeper reads these when it judges a page of runs, so it can name the
+	 * exact claim it saw when it later asks for that claim to be released. One
+	 * query rather than one per run, for the same reason the action lookup is
+	 * batched.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @param int[] $run_ids Runs to read.
+	 * @return array<int, string> Step values keyed by run ID.
+	 */
+	public static function steps_for( array $run_ids ): array {
+		global $wpdb;
+
+		$run_ids = array_values( array_filter( array_map( 'intval', $run_ids ) ) );
+
+		if ( array() === $run_ids ) {
+			return array();
+		}
+
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT id, step FROM %i WHERE id IN ( ' . implode( ', ', array_fill( 0, count( $run_ids ), '%d' ) ) . ' )',
+				array_merge( array( Activation::table_name() ), $run_ids )
+			),
+			ARRAY_A
+		);
+
+		$steps = array();
+
+		foreach ( (array) $rows as $row ) {
+			$steps[ (int) $row['id'] ] = (string) $row['step'];
+		}
+
+		return $steps;
 	}
 
 	/**

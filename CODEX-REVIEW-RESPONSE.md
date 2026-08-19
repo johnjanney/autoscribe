@@ -1284,11 +1284,16 @@ introducing a lock into a system that did not have one:
   CR-05 check exists to prevent, arriving by the other door.
 - *A concurrent sweep could free a live claim.* The release re-read the column,
   and a released-then-retaken claim produced an identical marker, so a second
-  sweeper acting on a stale view freed a live worker's claim. Claims now carry a
-  token, and the sweeper re-asks whether anything is queued immediately before
-  releasing. The re-check is defence against an interleaving the suite cannot
-  stage in one process; it is documented in the test rather than claimed as
-  covered.
+  sweeper acting on a stale view freed a live worker's claim. This took two
+  attempts. The first added a token and a re-check before releasing, which was
+  the wrong shape: check-then-read leaves a window between the two, and it could
+  not be tested at all. The release now names the claim observed when the run was
+  judged idle, which makes the check and the release one conditional update — and
+  makes the interleaving reproducible in a single process, which is how the
+  second attempt is verified and the first could not be.
+- *A run at its restart limit could be closed while a worker was on it.* The
+  limit was evaluated against a candidate scan that can be many pages old.
+  Activity is re-asked before anything terminal now.
 - *A refused release spent one of the run's restarts.* The restart it armed was
   guaranteed to lose an unchanged claim, so two failures gave up on a recoverable
   run.

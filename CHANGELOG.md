@@ -142,8 +142,16 @@ already returned a value, so the ones still returning `void` were never in it.
   step; and the second, still acting on what it saw, releases that live claim and
   lets a third worker perform the same paid step beside it. It matched because a
   released and retaken claim produced an identical marker. Claims now carry a
-  token, and the sweeper re-asks whether anything is queued immediately before
-  releasing rather than trusting a scan taken pages earlier.
+  token, and the release names the claim the sweeper saw when it judged the run
+  idle rather than reading whatever is there when the update lands — so a claim
+  taken since carries a different token and the update matches nothing. Checking
+  and then re-reading, which an earlier attempt did, leaves a window between the
+  two however narrow it looks.
+- **A run at its restart limit could be closed while a worker was on it.** The
+  limit was evaluated against the candidate scan, which can be many pages old by
+  then: another sweep may have counted the restart that reaches the limit, armed
+  it, and left a worker part-way through a paid call. Activity is re-asked before
+  anything terminal now, not only before a release.
 - **A release the database refused still spent one of the run's restarts.** The
   restart it armed was guaranteed to lose an unchanged claim, so two such
   failures gave up on a run that was recoverable. A refused release is now

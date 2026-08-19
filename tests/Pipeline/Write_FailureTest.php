@@ -410,16 +410,11 @@ final class Write_FailureTest extends WP_UnitTestCase {
 	 * perform the same paid step beside the one already doing it. It matched
 	 * because a released and retaken claim produced an identical marker.
 	 *
-	 * Two changes address it: each claim now carries a token, so no two claims
-	 * are the same string, and the sweeper re-asks whether anything is queued
-	 * immediately before releasing rather than trusting the page scan.
-	 *
-	 * This test asserts the outcome — a live claim survives a concurrent sweep —
-	 * and does not isolate the second guard. Reaching it needs an action armed
-	 * between one sweep's page scan and its release, which two sweeps in one
-	 * process cannot interleave. Removing the re-check leaves this test passing;
-	 * it is defence against an ordering the suite cannot stage, and is documented
-	 * as such rather than claimed as covered.
+	 * Each claim carries a token, and the release names the claim the sweeper saw
+	 * when it judged the run idle rather than reading whatever is there when the
+	 * update lands. That makes the check and the release one conditional update,
+	 * which is what an earlier attempt at this got wrong: rechecking and then
+	 * re-reading leaves a window between the two, however narrow.
 	 *
 	 * @since 1.1.1
 	 *
@@ -446,20 +441,28 @@ final class Write_FailureTest extends WP_UnitTestCase {
 		$scheduler = new Scheduler();
 		$sweeper   = new Stall_Sweeper( $scheduler, $this->handler() );
 
+		$abandoned = Run::load( $run_id )->raw_step();
+
 		// The first sweep releases the abandoned claim and arms a restart.
 		$this->assertSame( 1, $sweeper->handle() );
 
-		$held = Run::load( $run_id )->raw_step();
-
-		// That restart takes the step.
+		// That restart takes the step, with a claim of its own.
 		$this->assertTrue( Run::load( $run_id )->claim_step( '' ) );
 
 		$live = Run::load( $run_id )->raw_step();
 
-		$this->assertNotSame( $held, $live, 'Each claim should be distinguishable from the last.' );
+		$this->assertNotSame( $abandoned, $live, 'Each claim should be distinguishable from the last.' );
 
-		// A second sweep, still acting on what it saw, must leave it alone.
-		$sweeper->handle();
+		/*
+		 * A second sweeper acting on the claim it saw before the restart existed.
+		 * Passing the observed value is what the sweep does internally; naming it
+		 * here is what makes the interleaving reproducible in one process, which
+		 * a recheck-then-read design could not be tested for at all.
+		 */
+		$this->assertFalse(
+			(bool) $sweeper->recover_claim( $run_id, $abandoned ),
+			'A stale release must not free a claim taken since it was observed.'
+		);
 
 		$this->assertSame(
 			$live,
@@ -502,6 +505,62 @@ final class Write_FailureTest extends WP_UnitTestCase {
 
 		$this->assertSame( 0, $acted, 'A run whose claim will not release is left for the next sweep.' );
 		$this->assertSame( 0, Run::load( $run_id )->sweeps(), 'No restart should have been spent.' );
+	}
+
+	/**
+	 * A run at its restart limit is not given up on while a worker is on it.
+	 *
+	 * Sweeps overlap and a candidate scan can be many pages old by the time it is
+	 * acted on. Another sweep may have counted the restart that takes a run to
+	 * its limit, armed it, and left a worker part-way through a paid call — and
+	 * the limit check, evaluated on the stale scan, would close the run under
+	 * that worker's feet. Activity has to be re-asked before anything terminal,
+	 * not only before a release.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return void
+	 */
+	public function test_a_run_at_its_limit_is_not_closed_while_a_worker_is_on_it(): void {
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+
+		$run_id = $run->id();
+
+		$run->merge_payload( array( 'sweeps' => Stall_Sweeper::MAX_RESTARTS ) );
+
+		global $wpdb;
+
+		$wpdb->update(
+			\AutoScribe\Activation::table_name(),
+			array( 'started_at' => gmdate( 'Y-m-d H:i:s', time() - ( Stall_Sweeper::threshold() * 2 ) ) ),
+			array( 'id' => $run_id ),
+			array( '%s' ),
+			array( '%d' )
+		);
+
+		$scheduler = new Scheduler();
+		$sweeper   = new Stall_Sweeper( $scheduler, $this->handler() );
+
+		/*
+		 * Arm the action and then reach the decision directly. Going through
+		 * handle() would have the page scan filter this run out before the
+		 * decision is made, so the test would pass whether or not the guard
+		 * exists — which is what the first version of it did.
+		 */
+		$scheduler->schedule_step( $run_id );
+
+		$this->assertFalse(
+			$sweeper->recover( $run_id, '' ),
+			'A run with a worker on it should be left alone.'
+		);
+
+		$this->assertSame(
+			Run::STATUS_RUNNING,
+			Run::load( $run_id )->status(),
+			'A run with a worker on it must not be closed for reaching its restart limit.'
+		);
 	}
 
 	/**
