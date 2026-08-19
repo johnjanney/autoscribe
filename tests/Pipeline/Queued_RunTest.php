@@ -297,6 +297,81 @@ final class Queued_RunTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A prompt edited mid-chain stops the run rather than finishing under it.
+	 *
+	 * The window is real: a chain spans several queue passes, and every step
+	 * reloads the prompt. Publishing mode is the case that matters most — a run
+	 * that began under review would otherwise finish by publishing, turning
+	 * section 10's safety model off retrospectively for work already in progress.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_editing_a_prompt_mid_chain_stops_the_run(): void {
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt( array( 'post_status_mode' => 'review' ) );
+
+		$this->handler()->handle( $prompt_id );
+
+		$run_id = (int) Run::latest_for_prompt( $prompt_id )['id'];
+
+		$this->handler()->handle_step( $run_id );
+
+		// An editor switches the prompt to publish automatically, mid-run.
+		update_post_meta( $prompt_id, '_autoscribe_post_status_mode', 'auto' );
+
+		$this->handler()->handle_step( $run_id );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame( Run::STATUS_FAILED, $row['status'] );
+		$this->assertStringContainsString( 'edited while the run was in progress', (string) $row['error'] );
+		$this->assertSame( 'budget_check', (string) $row['step'], 'The chain should stop where it was.' );
+	}
+
+	/**
+	 * Re-arming the next occurrence does not look like an edit.
+	 *
+	 * The plugin writes to the prompt while a run is in flight — the cached
+	 * next-run timestamp and the attempt counter — and a fingerprint built from
+	 * every meta key would call each of those an edit and stop every run.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_the_plugins_own_writes_are_not_edits(): void {
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt();
+
+		$this->handler()->handle( $prompt_id );
+
+		$run_id = (int) Run::latest_for_prompt( $prompt_id )['id'];
+
+		$this->handler()->handle_step( $run_id );
+
+		update_post_meta( $prompt_id, '_autoscribe_next_run_ts', time() + 3600 );
+		update_post_meta( $prompt_id, Queued_Run_Handler::ATTEMPT_META, 2 );
+
+		/*
+		 * Pump this run rather than starting a fresh one. run_to_completion()
+		 * would open a second run whose fingerprint is taken after the writes
+		 * above, which passes whether or not the guard ignores them — the first
+		 * version of this test did exactly that and proved nothing.
+		 */
+		$passes = count( Pipeline::STEPS ) + 2;
+
+		for ( $i = 0; $i < $passes; $i++ ) {
+			$this->handler()->handle_step( $run_id );
+		}
+
+		$this->assertSame( Run::STATUS_SUCCESS, Run::latest_for_prompt( $prompt_id )['status'] );
+	}
+
+	/**
 	 * A disabled prompt is not run at all.
 	 *
 	 * @since 0.8.0
