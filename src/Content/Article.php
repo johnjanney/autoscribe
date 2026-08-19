@@ -152,4 +152,21 @@ final class Article {
 	public function image_alt(): string {
 		return (string) ( $this->fields['image_alt'] ?? '' );
 	}
+
+	/**
+	 * Returns the validated fields, ready to be stored.
+	 *
+	 * The counterpart is Article_Validator::from_array(), which is where the
+	 * rebuilding lives rather than here: an Article is a statement that the
+	 * schema was satisfied, and only the validator can make that statement. A
+	 * from_array() on this class would be able to mint one that had never been
+	 * checked, which is the whole invariant gone.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return array<string, mixed>
+	 */
+	public function to_array(): array {
+		return $this->fields;
+	}
 }
