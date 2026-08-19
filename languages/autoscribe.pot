@@ -9,7 +9,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-19T06:08:18-05:00\n"
+"POT-Creation-Date: 2026-08-19T06:20:19-05:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: autoscribe\n"
@@ -527,25 +527,29 @@ msgid "The generated file is not a type this site permits, despite being declare
 msgstr ""
 
 #. translators: %d: post ID.
-#: src/Pipeline/Generator.php:113
+#: src/Pipeline/Generator.php:92
 #, php-format
 msgid "No prompt exists with ID %d."
 msgstr ""
 
 #. translators: %d: post ID of the draft.
-#: src/Pipeline/Generator.php:170
+#: src/Pipeline/Generator.php:236
 #, php-format
 msgid "The draft left by the previous attempt (post %d) could not be bound to this run, so continuing would have created a second draft beside it. The run was stopped before any provider call."
 msgstr ""
 
+#: src/Pipeline/Generator.php:285
+msgid "This run produced no article, so there is nothing to publish."
+msgstr ""
+
 #. translators: %s: article title.
-#: src/Pipeline/Generator.php:298
+#: src/Pipeline/Generator.php:319
 #, php-format
 msgid "AutoScribe draft ready for review: %s"
 msgstr ""
 
 #. translators: 1: article title, 2: opening of the article, 3: edit URL.
-#: src/Pipeline/Generator.php:303
+#: src/Pipeline/Generator.php:324
 #, php-format
 msgid ""
 "AutoScribe generated a draft and held it for review.\n"
@@ -559,13 +563,13 @@ msgid ""
 msgstr ""
 
 #. translators: %s: prompt title.
-#: src/Pipeline/Generator.php:335
+#: src/Pipeline/Generator.php:356
 #, php-format
 msgid "AutoScribe run failed: %s"
 msgstr ""
 
 #. translators: 1: prompt title, 2: error message, 3: edit URL.
-#: src/Pipeline/Generator.php:340
+#: src/Pipeline/Generator.php:361
 #, php-format
 msgid ""
 "An AutoScribe prompt failed and will not be retried.\n"
@@ -577,12 +581,22 @@ msgid ""
 "%3$s"
 msgstr ""
 
-#: src/Pipeline/Generator.php:367
+#: src/Pipeline/Generator.php:388
 msgid "AutoScribe has reached 80% of its monthly budget"
 msgstr ""
 
-#: src/Pipeline/Generator.php:368
+#: src/Pipeline/Generator.php:389
 msgid "Estimated AutoScribe spend for this month has passed 80 percent of the configured global cap. Runs will stop once the cap is reached. These figures are estimates; your provider billing is the authority."
+msgstr ""
+
+#. translators: %s: step name.
+#: src/Pipeline/Pipeline.php:238
+#, php-format
+msgid "The run asked for a step called %s, which does not exist."
+msgstr ""
+
+#: src/Pipeline/Pipeline.php:287
+msgid "This run has no generated article to work from, so it cannot continue."
 msgstr ""
 
 #: src/Pipeline/Run.php:158
@@ -627,26 +641,26 @@ msgstr ""
 msgid "The web search sources this article was based on could not be written to the run log. The run was stopped rather than publishing an article with no record of what it read."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:271
+#: src/Pipeline/Step_Generate_Body.php:282
 msgid "The sources belonging to a discarded article could not be cleared from the run log, so the run was stopped rather than risking them being published as the new article's citations."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:295
+#: src/Pipeline/Step_Generate_Body.php:306
 msgid "The generated article could not be written to the run log, so the run was stopped rather than continuing on state that would be lost."
 msgstr ""
 
 #. translators: %s: JSON schema describing the required response.
-#: src/Pipeline/Step_Generate_Body.php:321
+#: src/Pipeline/Step_Generate_Body.php:332
 #, php-format
 msgid "Return one JSON object and nothing else. No prose, no Markdown fences. It must satisfy this JSON Schema: %s"
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:355
+#: src/Pipeline/Step_Generate_Body.php:366
 msgid "Use it only as the agreed topic: write the article for it, and return exactly this title and topic_key in your response."
 msgstr ""
 
 #. translators: 1: original instruction, 2: fenced block holding the rejected response and the validation error.
-#: src/Pipeline/Step_Generate_Body.php:383
+#: src/Pipeline/Step_Generate_Body.php:394
 #, php-format
 msgid ""
 "Original request:\n"
@@ -657,7 +671,7 @@ msgid ""
 "Return a corrected JSON object and nothing else."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:386
+#: src/Pipeline/Step_Generate_Body.php:397
 msgid "Use it only as the response of yours that was rejected and the reason it was rejected."
 msgstr ""
 

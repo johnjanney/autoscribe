@@ -195,7 +195,8 @@ Each phase is independently landable and leaves the plugin working.
 |---|---|---|---|
 | 1 | ✅ `merge_payload()`, fix `record_sources()` clobbering, `Article::to_array()/from_array()` | Small | Done. Took three PRs: the document, then the cache semantics, then propagating the write failure to a caller that discarded it |
 | 2 | ✅ Idempotency guards in the five steps + tests that each step run twice does the work once | Medium | Done. `Step_Assemble_Post` was already idempotent; the image work moved out of `Generator` into `Step_Generate_Image` so its guard could be re-entered and therefore tested |
-| 3 | Dispatcher, `autoscribe_run_step` hook, `Generator` reduced to opening the run | Medium | The visible change |
+| 3a | ✅ Extract the sequence into `Pipeline`; `Generator` drives it in a loop | Medium | Done. Pure refactor — every existing test passes unchanged, which is the safety net |
+| 3b | Dispatcher, `autoscribe_run_step` hook, queued path advances one step per action | Medium | The visible change |
 | 4 | Finalise step; re-arm on every terminal path | Small | |
 | 5 | **Stall sweeper** + reservation release on give-up | Medium | §4.4 and §5; do not defer this one |
 | 6 | Docs: `DECISIONS.md` D-10, README known-limitations, `INSTRUCTIONS.md` on latency | Small | |
@@ -245,9 +246,10 @@ run, or make the pipeline faster; it makes it slower in wall-clock terms.
    or fail it outright and let the normal retry path handle it? Re-dispatch is
    the point of the exercise, but it needs a cap — suggest two re-dispatches,
    then fail and release the reservation.
-3. **Run-now latency.** Accept multi-minute "Run now", or keep a synchronous path
-   for it as Preview has? A synchronous path means two sequencers to maintain,
-   which is how they drift apart.
+3. ~~**Run-now latency.**~~ **Decided: keep the synchronous path.** The concern
+   was two sequencers drifting apart, so there is only one — `Pipeline` owns the
+   order and both drivers advance it. `Generator` loops it inside one request;
+   the queue driver advances it one action at a time. Neither knows the order.
 4. **Ship as 1.1.0.** New hooks, a changed retry model, and a new recurring
    action are more than a patch. The version policy in `CHANGELOG.md` supports
    this reading.
