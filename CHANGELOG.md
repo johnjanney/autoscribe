@@ -351,6 +351,14 @@ time.
   only to keep the sweeper away from runs too young to judge. Fifteen minutes by
   default, filterable through `autoscribe_stall_threshold`.
 
+  The scan pages past healthy runs rather than reading a fixed number of the
+  oldest: a busy queue can hold more healthy open runs than one batch, and
+  reading only the oldest would re-read the same healthy rows every sweep and
+  never reach a newer stalled one — leaving it holding its reservation for as
+  long as the backlog lasted. A prompt that has been switched off is treated like
+  one that has been deleted, so giving up on its run does not arm it again and
+  leave a disabled prompt showing a next-run time.
+
 - **Giving up on a run releases what it reserved.** This is the point of the
   sweep rather than a detail of it. The estimated cost is written onto a run
   before its first paid call so that concurrent runs can see it, and the section

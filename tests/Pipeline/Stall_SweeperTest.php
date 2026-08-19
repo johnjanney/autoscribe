@@ -229,6 +229,78 @@ final class Stall_SweeperTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A stalled run is found even behind a batch of healthy ones.
+	 *
+	 * The scan takes the oldest open runs, and a busy site can have more healthy
+	 * ones than a batch holds. Skipping them inside the loop meant the same
+	 * healthy rows were re-read on every sweep and anything newer was never
+	 * reached — so under a sustained backlog a stalled run could hold its
+	 * reservation against the monthly cap indefinitely, which is the one thing
+	 * the sweeper exists to prevent.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_a_stalled_run_behind_a_full_batch_is_still_found(): void {
+		$scheduler = new Scheduler();
+
+		for ( $i = 0; $i < Stall_Sweeper::BATCH; $i++ ) {
+			$healthy = $this->open_stale_run();
+
+			$scheduler->schedule_step( $healthy );
+		}
+
+		// Newest, so last in the scan order, and nothing is advancing it.
+		$stalled = $this->open_stale_run();
+
+		$this->assertSame( 1, $this->sweeper()->handle(), 'The stalled run was never reached.' );
+		$this->assertSame( 1, Run::load( $stalled )->sweeps() );
+	}
+
+	/**
+	 * Giving up on a disabled prompt's run does not arm it again.
+	 *
+	 * A disabled prompt still loads, so it takes the ordinary give-up path and
+	 * gets its next occurrence armed — leaving a prompt somebody switched off
+	 * with a queued action and a next-run time the editor will show. The action
+	 * cancels itself when it fires, but the state is wrong until then and the
+	 * readout says the opposite of what the setting says.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_giving_up_does_not_arm_a_disabled_prompt(): void {
+		$prompt_id = $this->create_prompt(
+			array(
+				'schedule_type'   => 'daily',
+				'schedule_params' => array( 'time' => '06:00' ),
+			)
+		);
+
+		$run_id = $this->open_stale_run( $prompt_id );
+
+		Run::load( $run_id )->merge_payload( array( 'sweeps' => Stall_Sweeper::MAX_RESTARTS ) );
+		update_post_meta( $prompt_id, '_autoscribe_enabled', 0 );
+
+		$this->assertSame( 1, $this->sweeper()->handle() );
+		$this->assertSame( Run::STATUS_FAILED, Run::load( $run_id )->status() );
+
+		$this->assertSame(
+			array(),
+			as_get_scheduled_actions(
+				array(
+					'hook'   => Scheduler::HOOK_RUN_PROMPT,
+					'status' => \ActionScheduler_Store::STATUS_PENDING,
+				),
+				'ids'
+			),
+			'A prompt somebody switched off must not come back armed.'
+		);
+	}
+
+	/**
 	 * Builds the sweeper under test.
 	 *
 	 * @since 1.1.0
