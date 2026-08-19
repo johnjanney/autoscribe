@@ -103,6 +103,22 @@ the stall sweeper — are what make the split worth having.
   `Run::merge_payload()`, which merges at the top level. The grounding sources
   recorded under section 7.1 were the data that would have been lost.
 
+- **Deactivating the plugin left its whole queue armed.** The teardown passed a
+  hook *and* a group with empty arguments, which makes Action Scheduler skip its
+  cancel-everything-for-this-hook shortcut and match only actions whose arguments
+  are exactly empty — and every action this plugin arms carries a prompt or run
+  ID. So nothing was ever cancelled. It cancels by hook now, and clears the new
+  step actions as well: those are keyed by run rather than by prompt, so nothing
+  else reaches them, and left behind they either strand their runs or resume a
+  half-finished one when the plugin is switched back on. This predates the split;
+  writing a test for the new hook is what found it.
+- **The queue wrapper could not tell a scheduled job from a refused one.**
+  `as_schedule_single_action()` returns 0 when it cannot create an action, and
+  all three arming calls discarded that. Each discarded it into a different
+  silence: a refused step left a run in `running` with no next action and its
+  budget reservation held indefinitely; a refused retry dropped the attempt; and
+  a refused re-arm stopped the prompt for ever, which is the one outcome section
+  4.3 exists to prevent. All three now report the failure.
 - **A prompt edited mid-run applied to the rest of that run.** Every step action
   reloads the prompt, so an edit landing between two queue passes took effect for
   the remaining steps: a larger model or a newly required image spending against
