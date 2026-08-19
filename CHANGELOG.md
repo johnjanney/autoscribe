@@ -87,6 +87,24 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A run the sweeper had already recovered once could never be closed, and held
+  its budget reservation for ever.** "Nothing has completed yet" has two
+  spellings in the run log: a run that has never advanced stores SQL NULL, and
+  one whose first-step claim was released stores an empty string, because that is
+  what its completed position is. The conditional close added in 1.1.2 treated an
+  observed empty position as NULL, so it matched neither.
+
+  A run recovered at its first step therefore became unclosable. Every later
+  sweep read the same position, refused the write, and left the run `running` —
+  and its reserved cost counted against the monthly cap indefinitely, so a
+  handful of them could stop the site generating anything at all. The sweeper's
+  own recovery was what made the run unrecoverable.
+
+  The close now compares with `COALESCE( step, '' )`, matching the claim it is
+  paired with, so both spellings resolve to the same position.
+
 ## [1.1.2] - 2026-08-19
 
 One more finding against the concurrency guard 1.1.1 introduced, and the last of

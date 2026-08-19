@@ -706,6 +706,9 @@ final class Run {
 	/**
 	 * Writes a terminal state, and only while the run is at a known position.
 	 *
+	 * Only reached from fail(), which is the one ending a caller can tie to an
+	 * observed position, so the statement writes that ending's columns.
+	 *
 	 * @since 1.1.2
 	 *
 	 * @param array<string, mixed> $data          Columns to write, with finished_at.
@@ -715,16 +718,34 @@ final class Run {
 	private function close_at( array $data, string $expected_step ): bool {
 		global $wpdb;
 
-		$updated = $wpdb->update(
-			Activation::table_name(),
-			$data,
-			array(
-				'id'     => $this->id,
-				'status' => self::STATUS_RUNNING,
-				'step'   => '' === $expected_step ? null : $expected_step,
-			),
-			array( '%s', '%s', '%d', '%s' ),
-			array( '%d', '%s', '%s' )
+		/*
+		 * COALESCE, matching claim_step(), because "nothing has completed yet" has
+		 * two spellings in this column. A run that has never advanced holds NULL;
+		 * one whose first-step claim was released holds an empty string, because
+		 * that is what the completed position is at that point.
+		 *
+		 * Treating an observed empty position as NULL — the first version of this
+		 * — matched neither, so once a run had been through one recovery no later
+		 * sweep could close it, and it held its budget reservation against the
+		 * monthly cap indefinitely. The recovery made the run unrecoverable.
+		 *
+		 * Written out rather than passed to wpdb::update(), which cannot express a
+		 * function in its WHERE. One static statement with placeholders, per D-26.
+		 */
+		$updated = $wpdb->query(
+			$wpdb->prepare(
+				'UPDATE %i SET status = %s, error = %s, cost_cents = %d, finished_at = %s
+				WHERE id = %d AND status = %s AND COALESCE( step, %s ) = %s',
+				Activation::table_name(),
+				(string) $data['status'],
+				(string) ( $data['error'] ?? '' ),
+				(int) ( $data['cost_cents'] ?? 0 ),
+				(string) $data['finished_at'],
+				$this->id,
+				self::STATUS_RUNNING,
+				'',
+				$expected_step
+			)
 		);
 
 		return is_numeric( $updated ) && (int) $updated > 0;
