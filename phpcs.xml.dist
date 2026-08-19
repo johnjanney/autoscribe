@@ -149,5 +149,10 @@
 	</rule>
 	<rule ref="WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode">
 		<exclude-pattern>*/tests/Providers/*</exclude-pattern>
+		<!--
+		The idempotency tests mock an OpenAI image response, which carries its
+		bytes as b64_json. Same documented wire format, same reason.
+		-->
+		<exclude-pattern>*/tests/Pipeline/Idempotent_StepsTest.php</exclude-pattern>
 	</rule>
 </ruleset>

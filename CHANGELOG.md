@@ -87,10 +87,11 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
-Phase 1 of the pipeline split scoped in `docs/PIPELINE-SPLIT.md`. Groundwork
-only: no behaviour changes, and nothing here is visible to a site running the
-plugin. It is on `main` rather than in a release because the phases it prepares
-for are what earn the version bump.
+Phases 1 and 2 of the pipeline split scoped in `docs/PIPELINE-SPLIT.md`.
+Groundwork: nothing here changes what a site sees today, because the pipeline
+still runs as one action and no step is ever re-entered. It is on `main` rather
+than in a release because the phases it prepares for are what earn the version
+bump.
 
 ### Fixed
 
@@ -122,6 +123,17 @@ for are what earn the version bump.
 
 ### Added
 
+- **Idempotency guards on every paid step**, as section 5 requires. The topic
+  proposal and the article are stored on the run and returned on re-entry
+  instead of being bought again; the image step records its outcome, including
+  a decision to give up, so a re-entry does not pay a provider to make that
+  decision a second time. `Step_Assemble_Post` was already idempotent. The
+  budget check deliberately is not — skipping it would let a run past a cap
+  breached in the meantime — and it is safe to repeat because the reservation is
+  an absolute write rather than an increment, which now has a test saying so.
+- A stored article is re-validated before it is trusted. Paying twice is bad;
+  publishing from a truncated payload row is worse, so a stored copy that no
+  longer satisfies the schema is regenerated rather than used.
 - `Run::merge_payload()` and `Run::payload()`, the read and write side of the
   document the split pipeline will pass step state through.
 - `Run::record_sources()` reports whether its write succeeded.
@@ -199,6 +211,14 @@ time.
   a second one beside it. The run stands down as a duplicate instead.
 
 ### Changed
+
+- The featured image work — the provider call, the sideload, the thumbnail, and
+  the decision about what to do when no image can be had — moved out of
+  `Generator` and into `Step_Generate_Image`, where the other four steps'
+  equivalents already live. It had a practical cost as well as an untidy shape:
+  the idempotency guard belongs with the paid call, and a guard in the
+  orchestrator could not be tested, because the orchestrator runs the pipeline
+  once and never re-enters.
 
 - `Run::adopt_post()` and `Run::record_post()` return whether their writes
   reached the database.
