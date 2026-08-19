@@ -87,7 +87,49 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-08-19
+
+Version 1.0.4 handled a failed draft adoption by carrying on and trusting
+duplicate detection to stop the run. The automated review pointed out that this
+has the mechanism backwards, and it is right.
+
+### Fixed
+
+- **A run whose adoption failed carried on and wrote a second draft anyway.**
+  The already-covered list is injected into the proposal call precisely so the
+  model proposes something *different*. So on a failed adoption the retry
+  proposed a new topic, the collision check passed, the body was paid for, and
+  assembly wrote a second draft beside the orphaned one — the pile-up adoption
+  exists to prevent, reached by a longer route and with a provider bill attached.
+  Relying on duplicate detection to abort only worked when the model happened to
+  repeat itself, which is the one thing that list is there to stop.
+
+  The run now ends with `autoscribe_adoption_failed` at the adoption site, before
+  the first paid call.
+- **The translation template had been stale since 1.0.0.** Regenerating it is in
+  the release checklist, and a checklist is only as good as the last person to
+  read it: twenty-nine strings added across 1.0.1 to 1.0.5 were missing from
+  `languages/autoscribe.pot`, including both notification emails, the whole
+  health panel, every image validation error, the grounding refusals, the
+  weak-salt messages, and all four untrusted-data blocks. A localised site
+  displayed all twenty-nine in English, and a translator had no way to fix it
+  because the strings were not in the template they work from. Two strings that
+  no longer exist were still asking to be translated.
+
+### Added
+
+- A test that fails when a translatable string in the code is absent from the
+  template. The checklist is no longer the only thing standing between a new
+  string and a site that cannot translate it. It does not compare the file to a
+  fresh build — the header carries a timestamp and the version, so that would
+  fail on every release for no reason — it asserts the property a translator
+  depends on: if the plugin can say it, the template contains it.
+
 ## [1.0.4] - 2026-08-19
+
+> **Correction, 19 August 2026.** The second entry below claimed a failed
+> adoption would leave the run to "stand down as a duplicate". It would not — see
+> 1.0.5. The first entry, on making adoption atomic, is accurate and stands.
 
 A follow-on from 1.0.3. The same automated review pointed out that the fix made
 adoption depend on two writes without checking either, so a failure in the second
