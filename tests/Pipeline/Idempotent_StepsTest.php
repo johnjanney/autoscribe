@@ -214,6 +214,56 @@ final class Idempotent_StepsTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * An article key that is not an array is still a discarded article.
+	 *
+	 * The cleanup has to tell two situations apart that look alike from a
+	 * distance. No article key at all means nothing was ever stored, and the
+	 * sources belong to the attempt now running. An article key holding something
+	 * unusable — null, a string, anything that is not the fields array — means an
+	 * article *was* stored and is being thrown away, so its sources go with it.
+	 * Reading the key with a null coalesce collapsed both into "nothing stored"
+	 * and skipped the cleanup for the second.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @dataProvider unusable_stored_articles
+	 *
+	 * @param mixed $stored Whatever the payload holds under the article key.
+	 * @return void
+	 */
+	public function test_any_unusable_stored_article_clears_its_sources( $stored ): void {
+		$this->mock_provider_success();
+
+		$prompt = Prompt::load( $this->create_prompt() );
+		$run    = $this->start_run( $prompt );
+		$step   = new Step_Generate_Body( new Provider_Registry(), new Article_Validator() );
+
+		$run->merge_payload( array( 'article' => $stored ) );
+		$run->record_sources( array( 'https://example.com/read-by-the-discarded-article' ) );
+
+		$article = $step->run( $prompt, $run, null );
+
+		$this->assertNotWPError( $article );
+		$this->assertSame( array(), $run->sources() );
+	}
+
+	/**
+	 * Values an article key can hold that are not a usable article.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return array<string, array<int, mixed>>
+	 */
+	public function unusable_stored_articles(): array {
+		return array(
+			'null'          => array( null ),
+			'a string'      => array( 'not an article' ),
+			'a number'      => array( 42 ),
+			'an empty list' => array( array() ),
+		);
+	}
+
+	/**
 	 * A repair call does not wipe the sources the first call reported.
 	 *
 	 * The counterpart to the test above, and the reason the clearing happens
