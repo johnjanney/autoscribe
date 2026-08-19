@@ -43,7 +43,7 @@ earlier entry
 | [D-21](#d-21) | Force human review is checked before any caller override | ✅ |
 | [D-22](#d-22) | Uninstall preserves the flags that identify generated content | ⚠️ |
 | [D-23](#d-23) | Uninstall sweeps an explicit key list, not a wildcard | ⚠️ |
-| [D-24](#d-24) | No `phpcs:ignore` annotations, anywhere | ⚠️ |
+| [D-24](#d-24) | `phpcs:ignore` is a last resort, and each one carries its reason | ⚠️ |
 | [D-25](#d-25) | `WordPress.Files.FileName` is disabled for PSR-4 | ⚠️ |
 | [D-26](#d-26) | Filtered queries use one static statement with sentinel bindings | ⚠️ |
 | [D-27](#d-27) | Date bounds use a wide sentinel range, never an empty string | ⚠️ |
@@ -451,11 +451,17 @@ unreachable content of an unregistered post type.
 ## Code standards
 
 ### D-24
-**No `phpcs:ignore` annotations, anywhere.** ⚠️
+**`phpcs:ignore` is a last resort, and each one carries its reason.** ⚠️
 
-A suppression comment is invisible in review and permanent in practice. Four
-times during development a sniff fired and the reflex was to annotate; each time
-the annotation was removed and the code changed instead:
+> *Revised in 1.1.1.* This entry used to claim there were no `phpcs:ignore`
+> annotations anywhere. That stopped being true and nobody noticed: there are
+> five, and the claim survived several releases after the first one appeared. The
+> rule below is what the codebase actually follows.
+
+A suppression comment is invisible in review and permanent in practice, so the
+first answer to a sniff is to change the code. Several times during development a
+sniff fired and the reflex was to annotate; each time the annotation was removed
+and the code changed instead:
 
 | Sniff | What was done instead |
 |---|---|
@@ -465,9 +471,17 @@ the annotation was removed and the code changed instead:
 | `NonceVerification` in the meta box save | Moved the nonce check inline, into the same function that reads `$_POST` |
 | `PreparedSQL.NotPrepared` in the run query | Rewrote as one static statement (D-26) |
 
-Where a sniff genuinely does not apply, the exclusion goes in `phpcs.xml.dist`
-with a comment explaining why — visible in one place, reviewable, and scoped to
-the narrowest possible pattern. Every current exclusion is documented there.
+Where a sniff genuinely does not apply to a whole file, the exclusion goes in
+`phpcs.xml.dist` with a comment explaining why — visible in one place,
+reviewable, and scoped to the narrowest possible pattern. Every current exclusion
+is documented there.
+
+An inline `phpcs:ignore` is used only where a file-wide exclusion would be needed
+to suppress a single line, and it carries its reason on that line. There are
+five: four read a local fixture file in a test, where the sniff's suggested
+`wp_remote_get()` would fetch a local path over HTTP and trip the suite's own
+no-unmocked-requests tripwire; the fifth silences `getimagesize()`, which returns
+false for a non-image and is being called precisely to find that out.
 
 ### D-25
 **`WordPress.Files.FileName` is disabled for PSR-4.** ⚠️

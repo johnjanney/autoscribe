@@ -169,18 +169,22 @@ final class Step_Generate_Image {
 				$article->title()
 			);
 
-			if ( ! is_wp_error( $attachment_id ) ) {
-				if ( ! $this->set_thumbnail( $post_id, (int) $attachment_id ) ) {
-					$image = new WP_Error(
-						'autoscribe_thumbnail_not_set',
-						__( 'The featured image was generated but WordPress would not attach it to the post.', 'autoscribe' )
-					);
-				} else {
-					return $this->remember( $run, (int) $attachment_id );
-				}
+			if ( is_wp_error( $attachment_id ) ) {
+				$image = $attachment_id;
+			} elseif ( $this->set_thumbnail( $post_id, (int) $attachment_id ) ) {
+				return $this->remember( $run, (int) $attachment_id );
+			} else {
+				/*
+				 * One branch each, and no assignment after them. Written as an
+				 * inner condition followed by a common assignment, the failure
+				 * error was replaced by the attachment ID a line later and the
+				 * mode handling below then called get_error_code() on an integer.
+				 */
+				$image = new WP_Error(
+					'autoscribe_thumbnail_not_set',
+					__( 'The featured image was generated but WordPress would not attach it to the post.', 'autoscribe' )
+				);
 			}
-
-			$image = $attachment_id;
 		}
 
 		if ( Null_Image::SKIPPED === $image->get_error_code() ) {

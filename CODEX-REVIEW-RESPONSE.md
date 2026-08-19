@@ -1268,6 +1268,20 @@ introducing a lock into a system that did not have one:
   the losing worker did not stand down — it finished the run, closing a run with
   no article early on, or publishing before the winner had attached the image. A
   lost claim is now its own outcome.
+- *A refused featured-image write became a fatal error.* The verification added
+  for CR-04 built its error and then let the next line overwrite it with the
+  attachment ID, so every image mode crashed on a refused thumbnail rather than
+  handling it.
+- *Two guards cancelled each other out.* Putting force review into the abort
+  fingerprint (CR-03) meant any change to it stopped the run, so the monotonic
+  rule added for the same finding could never be reached — and tightening a
+  safety catch would have killed the run it protects. The fingerprint covers the
+  settings where continuing under a changed value is wrong; force review is
+  governed by the monotonic rule alone.
+- *Losing the close race was reported as a failure.* The winner had already sent
+  the review mail and armed the next occurrence; the loser's error then had the
+  handler send a failure notice and re-arm on top. The duplicate announcement the
+  CR-05 check exists to prevent, arriving by the other door.
 - *An abandoned claim could never be taken again.* A worker killed mid-step leaves
   the marker behind, and the next worker reads the position with the marker
   stripped — so it asked to claim a value the column no longer held, and failed

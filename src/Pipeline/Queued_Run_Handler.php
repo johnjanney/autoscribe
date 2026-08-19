@@ -267,6 +267,11 @@ final class Queued_Run_Handler {
 
 		$result = $this->generator->finalise( $prompt, $run, $article, null, new Pricing_Table(), $run->grounded_calls() );
 
+		if ( is_wp_error( $result ) && Generator::CLOSE_RACE_LOST === $result->get_error_code() ) {
+			// Somebody else finished this run and has already reported it.
+			return;
+		}
+
 		$this->conclude( $prompt, $run->attempt(), is_wp_error( $result ) ? $result : null );
 	}
 

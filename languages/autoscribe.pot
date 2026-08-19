@@ -9,7 +9,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-19T13:54:22-05:00\n"
+"POT-Creation-Date: 2026-08-19T14:20:22-05:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: autoscribe\n"
@@ -530,42 +530,42 @@ msgstr ""
 msgid "The generated file is not a type this site permits, despite being declared as %s."
 msgstr ""
 
-#: src/Pipeline/Generator.php:139
+#: src/Pipeline/Generator.php:147
 msgid "The run stopped making progress through its steps and was abandoned rather than repeated indefinitely."
 msgstr ""
 
-#: src/Pipeline/Generator.php:223
-msgid "The post was published, but this run could not be closed in the run log — most likely because something else closed it first. No notification was sent and the schedule was left alone, so nothing has been done twice."
+#: src/Pipeline/Generator.php:239
+msgid "This run was already closed by something else, so it was left alone. Whatever closed it has reported the outcome."
 msgstr ""
 
-#: src/Pipeline/Generator.php:293
+#: src/Pipeline/Generator.php:309
 msgid "The settings this run was checked against could not be written to the run log, so the run was stopped rather than starting without a record of them."
 msgstr ""
 
 #. translators: %d: post ID.
-#: src/Pipeline/Generator.php:319
+#: src/Pipeline/Generator.php:335
 #, php-format
 msgid "No prompt exists with ID %d."
 msgstr ""
 
 #. translators: %d: post ID of the draft.
-#: src/Pipeline/Generator.php:408
+#: src/Pipeline/Generator.php:424
 #, php-format
 msgid "The draft left by the previous attempt (post %d) could not be bound to this run, so continuing would have created a second draft beside it. The run was stopped before any provider call."
 msgstr ""
 
-#: src/Pipeline/Generator.php:457
+#: src/Pipeline/Generator.php:473
 msgid "This run produced no article, so there is nothing to publish."
 msgstr ""
 
 #. translators: %s: article title.
-#: src/Pipeline/Generator.php:491
+#: src/Pipeline/Generator.php:507
 #, php-format
 msgid "AutoScribe draft ready for review: %s"
 msgstr ""
 
 #. translators: 1: article title, 2: opening of the article, 3: edit URL.
-#: src/Pipeline/Generator.php:496
+#: src/Pipeline/Generator.php:512
 #, php-format
 msgid ""
 "AutoScribe generated a draft and held it for review.\n"
@@ -579,13 +579,13 @@ msgid ""
 msgstr ""
 
 #. translators: %s: prompt title.
-#: src/Pipeline/Generator.php:528
+#: src/Pipeline/Generator.php:544
 #, php-format
 msgid "AutoScribe run failed: %s"
 msgstr ""
 
 #. translators: 1: prompt title, 2: error message, 3: edit URL.
-#: src/Pipeline/Generator.php:533
+#: src/Pipeline/Generator.php:549
 #, php-format
 msgid ""
 "An AutoScribe prompt failed and will not be retried.\n"
@@ -597,27 +597,27 @@ msgid ""
 "%3$s"
 msgstr ""
 
-#: src/Pipeline/Generator.php:560
+#: src/Pipeline/Generator.php:576
 msgid "AutoScribe has reached 80% of its monthly budget"
 msgstr ""
 
-#: src/Pipeline/Generator.php:561
+#: src/Pipeline/Generator.php:577
 msgid "Estimated AutoScribe spend for this month has passed 80 percent of the configured global cap. Runs will stop once the cap is reached. These figures are estimates; your provider billing is the authority."
 msgstr ""
 
 #. translators: %s: step name.
-#: src/Pipeline/Pipeline.php:206
+#: src/Pipeline/Pipeline.php:219
 #, php-format
 msgid "The run log could not record that the %s step finished, so the run was stopped rather than repeating it."
 msgstr ""
 
 #. translators: %s: step name.
-#: src/Pipeline/Pipeline.php:267
+#: src/Pipeline/Pipeline.php:280
 #, php-format
 msgid "The run asked for a step called %s, which does not exist."
 msgstr ""
 
-#: src/Pipeline/Pipeline.php:316
+#: src/Pipeline/Pipeline.php:329
 msgid "This run has no generated article to work from, so it cannot continue."
 msgstr ""
 
@@ -625,7 +625,7 @@ msgstr ""
 msgid "The prompt was disabled or removed while this run was in progress."
 msgstr ""
 
-#: src/Pipeline/Queued_Run_Handler.php:236
+#: src/Pipeline/Queued_Run_Handler.php:245
 msgid "This prompt was edited while the run was in progress, so the run was stopped rather than finishing under settings it was never checked against. The next scheduled run will use the new settings."
 msgstr ""
 
@@ -633,7 +633,7 @@ msgstr ""
 msgid "The run could not be recorded. Check that the AutoScribe runs table exists and is writable."
 msgstr ""
 
-#: src/Pipeline/Run.php:1298
+#: src/Pipeline/Run.php:1340
 msgid "The cost of this run could not be written to the run log, so the reservation it made against the monthly cap still stands. The run was not reported as finished."
 msgstr ""
 
@@ -748,11 +748,11 @@ msgstr ""
 msgid "An image was generated and charged for, but the run log would not record it. The run was stopped so the charge is still counted against the monthly cap."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Image.php:176
+#: src/Pipeline/Step_Generate_Image.php:185
 msgid "The featured image was generated but WordPress would not attach it to the post."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Image.php:284
+#: src/Pipeline/Step_Generate_Image.php:288
 msgid "The featured image outcome could not be written to the run log, so the run was stopped rather than continuing on state that would be lost."
 msgstr ""
 
