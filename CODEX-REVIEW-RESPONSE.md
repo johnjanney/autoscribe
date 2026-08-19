@@ -1260,6 +1260,23 @@ after its first step, which is what happened when I tried it.
 Uniqueness would have prevented a second action row. The claim prevents a second
 worker spending, which is the property that matters.
 
+**Two defects in the claim itself were caught before release**, both raised on the
+pull request that added it, and both worth recording because they are the cost of
+introducing a lock into a system that did not have one:
+
+- *A lost claim looked like a finished sequence.* Both returned the same value, so
+  the losing worker did not stand down — it finished the run, closing a run with
+  no article early on, or publishing before the winner had attached the image. A
+  lost claim is now its own outcome.
+- *An abandoned claim could never be taken again.* A worker killed mid-step leaves
+  the marker behind, and the next worker reads the position with the marker
+  stripped — so it asked to claim a value the column no longer held, and failed
+  every time. A run interrupted at any point after claiming could never resume and
+  was given up on instead: the guard defeating the sweeper that exists to recover
+  from exactly that. The sweeper now releases an abandoned claim before
+  restarting, which it can do safely because it has already established that
+  nothing is queued or running for the run.
+
 ## CR-07 — Rejected. `gemini-3.7-flash` is listed as a stable model today.
 
 This is the second review to raise it and the second time the cited page says the

@@ -114,6 +114,16 @@ already returned a value, so the ones still returning `void` were never in it.
   — two workers could both find no stored article and both buy one. A
   compare-and-swap on the run's position now decides between them before either
   spends.
+
+  Two defects in that guard were found before release and are fixed with it. A
+  worker that lost the claim reported it the same way as a finished sequence, so
+  instead of standing down it finished the run — closing a run with no article
+  early on, or publishing before the winner had attached the image. And a claim
+  left behind by a killed worker could never be taken again, because the next
+  worker read the position with the claim marker stripped and asked for a value
+  the column no longer held; the stall sweeper releases an abandoned claim before
+  restarting, which it can do safely because it has already established that
+  nothing is advancing the run.
 - **A site default model changed mid-run applied to the rest of that run**, so a
   run could finish under a model its budget was never checked for. The site
   defaults a run depends on are part of what it was checked against.

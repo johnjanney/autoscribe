@@ -110,6 +110,7 @@
 		quarter of an hour for the threshold would not be a test.
 		-->
 		<exclude-pattern>*/tests/Pipeline/Stall_SweeperTest.php</exclude-pattern>
+		<exclude-pattern>*/tests/Pipeline/Write_FailureTest.php</exclude-pattern>
 	</rule>
 
 	<!--

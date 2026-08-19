@@ -172,6 +172,15 @@ final class Queued_Run_Handler {
 
 		$step = $this->generator->advance( $prompt, $run );
 
+		if ( Pipeline::CLAIM_LOST === $step ) {
+			/*
+			 * Another worker holds this step. Standing down means exactly that:
+			 * not arming anything, not concluding, and above all not finishing —
+			 * the run belongs to whoever took the claim.
+			 */
+			return;
+		}
+
 		if ( is_wp_error( $step ) ) {
 			$this->generator->close( $run, $step, $run->grounded_calls() );
 			$this->conclude( $prompt, $run->attempt(), $step );

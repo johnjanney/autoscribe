@@ -12,6 +12,7 @@ use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Queued_Run_Handler;
 use AutoScribe\Pipeline\Retry_Policy;
 use AutoScribe\Pipeline\Run;
+use AutoScribe\Pipeline\Stall_Sweeper;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Scheduling\Scheduler;
 use AutoScribe\Security\Key_Store;
@@ -140,11 +141,7 @@ final class Write_FailureTest extends WP_UnitTestCase {
 		$this->mock_provider_success();
 
 		$prompt_id = $this->create_prompt();
-		$handler   = new Queued_Run_Handler(
-			new Generator( new Provider_Registry() ),
-			new Scheduler(),
-			new Retry_Policy()
-		);
+		$handler   = $this->handler();
 
 		$handler->handle( $prompt_id );
 
@@ -170,6 +167,118 @@ final class Write_FailureTest extends WP_UnitTestCase {
 			$calls,
 			$this->captured_requests(),
 			'A worker that did not win the claim must not reach a provider.'
+		);
+	}
+
+	/**
+	 * A worker that loses the claim stands down; it does not finish the run.
+	 *
+	 * "No steps remain" and "somebody else is doing this step" are different
+	 * things, and returning the same value for both made the loser finish the
+	 * run: early on it closed a run with no article, and at the image step it
+	 * could publish before the winner had attached the picture.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return void
+	 */
+	public function test_a_worker_that_loses_the_claim_does_not_finish_the_run(): void {
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt();
+		$handler   = $this->handler();
+
+		$handler->handle( $prompt_id );
+
+		$run_id = (int) Run::latest_for_prompt( $prompt_id )['id'];
+
+		// Somebody else takes the first step's claim.
+		$this->assertTrue( Run::load( $run_id )->claim_step( '' ) );
+
+		$handler->handle_step( $run_id );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame(
+			Run::STATUS_RUNNING,
+			$row['status'],
+			'The loser must leave the run to the worker holding the claim.'
+		);
+		$this->assertSame( 0, (int) $row['post_id'] );
+	}
+
+	/**
+	 * A step abandoned mid-claim can be recovered.
+	 *
+	 * A worker killed after claiming leaves the claim marker behind. The sweeper
+	 * arms another action, and that worker reads the position with the marker
+	 * stripped — so it asked to claim a value the column no longer held, and
+	 * failed every time. Every recovery lost its claim, which meant a run
+	 * interrupted at any point after claiming could never resume and was given up
+	 * on instead: the sweeper defeated by the guard.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return void
+	 */
+	public function test_a_step_abandoned_mid_claim_can_be_recovered(): void {
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt();
+		$handler   = $this->handler();
+
+		$handler->handle( $prompt_id );
+
+		$run_id = (int) Run::latest_for_prompt( $prompt_id )['id'];
+
+		$handler->handle_step( $run_id );
+
+		$this->assertSame( 'budget_check', (string) Run::latest_for_prompt( $prompt_id )['step'] );
+
+		// A worker claims the next step and is then killed.
+		$this->assertTrue( Run::load( $run_id )->claim_step( 'budget_check' ) );
+
+		/*
+		 * Drive the sweep rather than calling the release directly: the property
+		 * under test is that a stalled run recovers, not that a method exists.
+		 * Calling it directly passes whether or not the sweeper uses it, which is
+		 * what the first version of this test did.
+		 */
+		global $wpdb;
+
+		$wpdb->update(
+			\AutoScribe\Activation::table_name(),
+			array( 'started_at' => gmdate( 'Y-m-d H:i:s', time() - ( Stall_Sweeper::threshold() * 2 ) ) ),
+			array( 'id' => $run_id ),
+			array( '%s' ),
+			array( '%d' )
+		);
+
+		( new Scheduler() )->cancel_step_actions( $run_id );
+
+		$this->assertSame( 1, ( new Stall_Sweeper( new Scheduler(), $handler ) )->handle() );
+
+		$handler->handle_step( $run_id );
+
+		$this->assertSame(
+			'propose_topic',
+			(string) Run::latest_for_prompt( $prompt_id )['step'],
+			'A recovered run has to be able to take its own claim again.'
+		);
+	}
+
+	/**
+	 * Builds the queued handler under test.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return Queued_Run_Handler
+	 */
+	private function handler(): Queued_Run_Handler {
+		return new Queued_Run_Handler(
+			new Generator( new Provider_Registry() ),
+			new Scheduler(),
+			new Retry_Policy()
 		);
 	}
 
