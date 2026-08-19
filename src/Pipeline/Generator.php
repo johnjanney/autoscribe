@@ -161,14 +161,31 @@ final class Generator {
 
 		/*
 		 * Adoption is all or nothing, and a refused ownership write leaves the
-		 * draft with its previous owner. Carrying on as though it had been
-		 * adopted would hide that draft from duplicate detection and then write a
-		 * second one beside it, so a failed adoption is treated as no adoption:
-		 * the old draft still counts as covering its topic, and this run stands
-		 * down as a duplicate rather than adding to the pile.
+		 * draft with its previous owner. There is no safe way to carry on from
+		 * there. Version 1.0.4 cleared the inherited ID and continued, reasoning
+		 * that duplicate detection would see the abandoned draft and stand the
+		 * run down — which had the mechanism backwards. The covered list is
+		 * injected precisely so the model proposes something *different*, so the
+		 * collision check passes, the body is paid for, and assembly writes a
+		 * second draft beside the orphaned one. That is the pile-up adoption
+		 * exists to prevent, reached by a longer route and with a provider bill
+		 * attached.
+		 *
+		 * The run stops here instead, before the first paid call.
 		 */
 		if ( null !== $inherited && ! $run->adopt_post( $inherited ) ) {
-			$inherited = null;
+			$error = new WP_Error(
+				'autoscribe_adoption_failed',
+				sprintf(
+					/* translators: %d: post ID of the draft. */
+					__( 'The draft left by the previous attempt (post %d) could not be bound to this run, so continuing would have created a second draft beside it. The run was stopped before any provider call.', 'autoscribe' ),
+					$inherited
+				)
+			);
+
+			$run->fail( $error->get_error_message() );
+
+			return $error;
 		}
 
 		// Section 7.2: a cheap proposal call, so a duplicate is caught before

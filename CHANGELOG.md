@@ -87,7 +87,31 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-08-19
+
+Version 1.0.4 handled a failed draft adoption by carrying on and trusting
+duplicate detection to stop the run. The automated review pointed out that this
+has the mechanism backwards, and it is right.
+
+### Fixed
+
+- **A run whose adoption failed carried on and wrote a second draft anyway.**
+  The already-covered list is injected into the proposal call precisely so the
+  model proposes something *different*. So on a failed adoption the retry
+  proposed a new topic, the collision check passed, the body was paid for, and
+  assembly wrote a second draft beside the orphaned one — the pile-up adoption
+  exists to prevent, reached by a longer route and with a provider bill attached.
+  Relying on duplicate detection to abort only worked when the model happened to
+  repeat itself, which is the one thing that list is there to stop.
+
+  The run now ends with `autoscribe_adoption_failed` at the adoption site, before
+  the first paid call.
+
 ## [1.0.4] - 2026-08-19
+
+> **Correction, 19 August 2026.** The second entry below claimed a failed
+> adoption would leave the run to "stand down as a duplicate". It would not — see
+> 1.0.5. The first entry, on making adoption atomic, is accurate and stands.
 
 A follow-on from 1.0.3. The same automated review pointed out that the fix made
 adoption depend on two writes without checking either, so a failure in the second

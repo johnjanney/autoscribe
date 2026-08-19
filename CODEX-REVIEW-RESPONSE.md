@@ -980,9 +980,66 @@ site, not of the method, and it is not one to depend on.
 **What a failed adoption now does.** `Generator` treats it as no adoption rather
 than pressing on. That matters because the adopted post ID is also what excludes
 the draft from duplicate detection: carrying on would hide the old draft from the
-dedupe check and then write a second one beside it, which is the outcome the
-whole mechanism exists to prevent. Standing down as a duplicate is the better
-failure — it leaves one draft and one clear reason in the run log.
+dedupe check and then write a second one beside it.
+
+> **Correction, 19 August 2026.** The paragraph above originally went on to claim
+> that clearing the inherited ID would leave the run to "stand down as a
+> duplicate". It would not, and FR-14 below sets out why. The run is now stopped
+> outright at the adoption site.
 
 Two tests cover it: a blocked ownership write adopts nothing, changes nothing,
 and says so; and a successful adoption reports success and moves the link.
+
+
+---
+
+## FR-14 — Confirmed. Fixed. My own mitigation was wrong.
+
+> **P2 — Stop the run when draft adoption fails.** When the ownership write is
+> refused, clearing `$inherited` does not make this run stand down: execution
+> continues into `Step_Propose_Topic::run()`. Because passing `0` causes the
+> abandoned draft to be included in `recent_topics()`, the provider is encouraged
+> to propose a different, non-colliding topic; if it does, the pipeline generates
+> and assembles a second draft while leaving the original behind. Return a
+> skipped/error result immediately on adoption failure rather than relying on
+> duplicate detection to abort.
+
+Correct, and it is a correction to the previous response rather than to the code
+alone. The 1.0.4 fix made adoption atomic — that part holds — but the claim about
+what happens *after* a failed adoption was wrong, and it was wrong in the
+direction that matters.
+
+The reasoning I gave was: leave the abandoned draft visible to duplicate
+detection and the run will collide with it and skip. That has the mechanism
+backwards. The already-covered list is injected into the proposal call for the
+express purpose of steering the model away from repeats — the instruction it
+carries is literally "propose something different". So on a failed adoption the
+likely path is not a collision at all:
+
+1. The retry proposes a *new* topic, as instructed.
+2. `collision_reason()` finds nothing, because the topic genuinely is new.
+3. The body call is made and paid for.
+4. Assembly writes a second draft, and the orphaned one stays where it is.
+
+The pile-up adoption exists to prevent, reached by a longer route and with a
+provider bill attached. Relying on dedupe to abort only worked in the case where
+the model repeated itself, which is the single thing that list is there to
+prevent.
+
+Writing the test made this plain. My first attempt asserted against a mock that
+returned the same topic on every call, and it "passed" as a duplicate skip — for
+the wrong reason. Making the retry propose a different topic, which is what a
+real provider reading that prompt would do, showed the run running all the way to
+the image step: past proposal, past the body call, past assembly.
+
+**Fix.** The run ends at the adoption site with `autoscribe_adoption_failed`,
+before the first paid call, and the run row records why. No provider is
+contacted, no second draft is written, and the original draft keeps its owner.
+`autoscribe_adoption_failed` is not on the transient allowlist, so it is not
+retried — a refused metadata write is not something a second attempt five minutes
+later is likely to get past, and each attempt would cost another proposal call to
+find that out.
+
+The test now asserts the whole outcome rather than just the error: one post on
+the site, the original draft still owned by the run that created it, and a failed
+run row with no post bound to it.

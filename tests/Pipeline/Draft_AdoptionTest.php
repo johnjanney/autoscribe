@@ -353,6 +353,87 @@ final class Draft_AdoptionTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A run whose adoption fails stops, rather than writing a second draft.
+	 *
+	 * Version 1.0.4 cleared the inherited ID on an adoption failure and carried
+	 * on, on the reasoning that duplicate detection would catch the abandoned
+	 * draft and stand the run down. That reasoning was backwards. The covered
+	 * list is injected precisely so the model proposes something *different*, so
+	 * the collision check passes, the body is written, and the pipeline assembles
+	 * a second draft beside the orphaned one — which is the pile-up adoption
+	 * exists to prevent.
+	 *
+	 * @since 1.0.5
+	 *
+	 * @return void
+	 */
+	public function test_a_run_stops_when_adoption_fails(): void {
+		$prompt_id = $this->create_failing_image_prompt();
+
+		$this->mock_text_success_and_image_failure();
+
+		( new Generator( new Provider_Registry() ) )->run( $prompt_id, null, 1 );
+		$draft = $this->failed_post_id( $prompt_id );
+		$owner = (int) get_post_meta( $draft, Step_Assemble_Post::RUN_ID_META, true );
+
+		/*
+		 * The retry proposes a different topic, which is what the covered list
+		 * asks the model to do. Reusing the first topic would make this test pass
+		 * for the wrong reason — on a collision the run stops anyway, and the
+		 * question here is what happens when it does not collide.
+		 */
+		$this->mock_text_success_and_image_failure(
+			$this->article_payload(
+				array(
+					'title'     => 'Grinder Burr Alignment',
+					'topic_key' => 'grinder-burr-alignment',
+				)
+			)
+		);
+
+		// Refuse the ownership write the way a filter or a database error would.
+		$block = static function ( $check, $object_id, $meta_key ) {
+			unset( $object_id );
+
+			return Step_Assemble_Post::RUN_ID_META === $meta_key ? false : $check;
+		};
+
+		add_filter( 'update_post_metadata', $block, 10, 3 );
+
+		$result = ( new Generator( new Provider_Registry() ) )->run( $prompt_id, null, 2 );
+
+		remove_filter( 'update_post_metadata', $block, 10 );
+
+		$this->assertWPError( $result );
+		$this->assertSame( 'autoscribe_adoption_failed', $result->get_error_code() );
+
+		$this->assertCount(
+			1,
+			get_posts(
+				array(
+					'post_type'   => 'post',
+					'post_status' => 'any',
+					'fields'      => 'ids',
+					'numberposts' => -1,
+				)
+			),
+			'A failed adoption must not leave a second draft beside the first.'
+		);
+
+		$this->assertSame(
+			$owner,
+			(int) get_post_meta( $draft, Step_Assemble_Post::RUN_ID_META, true ),
+			'The original draft must still belong to the run that owned it.'
+		);
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertIsArray( $row );
+		$this->assertSame( Run::STATUS_FAILED, $row['status'] );
+		$this->assertSame( 0, (int) $row['post_id'] );
+	}
+
+	/**
 	 * Builds a prompt whose image call will fail the run.
 	 *
 	 * Section 6's "required" mode fails the run and leaves the draft behind,

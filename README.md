@@ -191,9 +191,9 @@ way to tell it apart from the rest of the site.
 
 ## Status and known limitations
 
-Version 1.0.4. Two external audits have been run against this plugin, and both
+Version 1.0.5. Two external audits have been run against this plugin, and both
 found real defects; the findings, the fixes, and the two findings rejected with
-evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 218 tests run
+evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 219 tests run
 against PHP 8.1, 8.2, and 8.3 on every push.
 
 Three brief requirements are knowingly not met: the single-action pipeline, the
