@@ -301,6 +301,73 @@ final class Stall_SweeperTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A sweep that hits its recovery cap carries on from there next time.
+	 *
+	 * Paging fixed starvation within one sweep and would have left it between
+	 * sweeps: without a cursor every sweep restarts at the oldest row, so the
+	 * runs beyond one sweep's reach are never examined and keep their
+	 * reservations. The same starvation, moved further out.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_a_sweep_carries_on_from_where_the_last_one_stopped(): void {
+		$prompt_id = $this->create_prompt();
+		$stalled   = array();
+
+		for ( $i = 0; $i <= Stall_Sweeper::BATCH; $i++ ) {
+			$stalled[] = $this->open_stale_run( $prompt_id );
+		}
+
+		$this->assertSame( Stall_Sweeper::BATCH, $this->sweeper()->handle(), 'The first sweep should stop at its cap.' );
+
+		$last = (int) end( $stalled );
+
+		$this->assertSame( 0, Run::load( $last )->sweeps(), 'The run past the cap is not reached yet.' );
+		$this->assertGreaterThan( 0, (int) get_option( Stall_Sweeper::CURSOR_OPTION ) );
+
+		/*
+		 * The restarts stall again. Without this the recovered runs would look
+		 * healthy on the next sweep and be skipped anyway, so the test would pass
+		 * whether or not the cursor was remembered — which is exactly what the
+		 * first version of it did.
+		 */
+		$scheduler = new Scheduler();
+
+		foreach ( $stalled as $run_id ) {
+			$scheduler->cancel_step_actions( $run_id );
+		}
+
+		$this->assertSame( 1, $this->sweeper()->handle(), 'The next sweep should pick up where it stopped.' );
+		$this->assertSame( 1, Run::load( $last )->sweeps() );
+	}
+
+	/**
+	 * The cursor starts over once the scan runs out of runs.
+	 *
+	 * Otherwise it would climb past every ID and the sweeper would quietly stop
+	 * looking at anything.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_the_scan_cursor_wraps_at_the_end(): void {
+		$scheduler = new Scheduler();
+
+		$scheduler->schedule_step( $this->open_stale_run() );
+
+		$this->sweeper()->handle();
+
+		$this->assertSame(
+			0,
+			(int) get_option( Stall_Sweeper::CURSOR_OPTION ),
+			'A sweep that reached the end must start over next time.'
+		);
+	}
+
+	/**
 	 * Builds the sweeper under test.
 	 *
 	 * @since 1.1.0

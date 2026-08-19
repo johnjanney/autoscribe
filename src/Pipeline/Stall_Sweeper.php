@@ -113,6 +113,20 @@ final class Stall_Sweeper {
 	public const MAX_PAGES = 20;
 
 	/**
+	 * Option holding where the last sweep stopped reading.
+	 *
+	 * Paging fixed starvation within one sweep and would have left it between
+	 * sweeps: a backlog wider than one sweep reads means every sweep restarts at
+	 * the oldest row and inspects the same rows again, so a stalled run past the
+	 * end of that window is never reached and keeps its reservation. The same
+	 * starvation, moved further out.
+	 *
+	 * @since 1.1.0
+	 * @var string
+	 */
+	public const CURSOR_OPTION = 'autoscribe_sweep_cursor';
+
+	/**
 	 * Queue wrapper.
 	 *
 	 * @since 1.1.0
@@ -213,7 +227,7 @@ final class Stall_Sweeper {
 	public function handle(): int {
 		$cutoff = gmdate( 'Y-m-d H:i:s', time() - self::threshold() );
 		$acted  = 0;
-		$after  = 0;
+		$after  = (int) get_option( self::CURSOR_OPTION, 0 );
 
 		/*
 		 * The batch caps how many runs are *recovered*, not how many are looked
@@ -231,12 +245,22 @@ final class Stall_Sweeper {
 			$candidates = Run::open_before( $cutoff, self::PAGE, $after );
 
 			if ( array() === $candidates ) {
+				// Nothing left above the cursor, so the next sweep starts over.
+				$after = 0;
+
 				break;
 			}
 
-			$after = (int) end( $candidates );
-
 			foreach ( $candidates as $run_id ) {
+				/*
+				 * The cursor follows the run being examined, not the end of the
+				 * page. Advancing it a page at a time would have the early return
+				 * below record a position past runs this sweep never looked at,
+				 * and the next sweep would skip them — which is the starvation
+				 * the cursor exists to prevent, one page wide.
+				 */
+				$after = $run_id;
+
 				if ( $this->scheduler->has_step_action( $run_id ) ) {
 					// Waiting its turn, or working. Not stalled.
 					continue;
@@ -247,12 +271,33 @@ final class Stall_Sweeper {
 				}
 
 				if ( $acted >= self::BATCH ) {
+					$this->remember_cursor( $after );
+
 					return $acted;
 				}
 			}
 		}
 
+		$this->remember_cursor( $after );
+
 		return $acted;
+	}
+
+	/**
+	 * Stores where this sweep stopped reading, so the next one carries on.
+	 *
+	 * Zero means "start from the beginning", which is both the initial state and
+	 * what a sweep that reached the end writes back. The cursor is an optimisation
+	 * for finding stalled runs, not a record of anything, so a lost or stale value
+	 * costs a repeated scan rather than correctness.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param int $after Highest run ID examined.
+	 * @return void
+	 */
+	private function remember_cursor( int $after ): void {
+		update_option( self::CURSOR_OPTION, max( 0, $after ), false );
 	}
 
 	/**
@@ -306,7 +351,7 @@ final class Stall_Sweeper {
 					'autoscribe_run_stalled',
 					sprintf(
 						/* translators: %d: number of restarts already attempted. */
-						__( 'This run stopped part-way %d times and was given up on. Whatever it had reserved against the monthly cap has been released. A host that ends requests early is the usual cause; see the system cron guidance in the README.', 'autoscribe' ),
+						__( 'This run stopped part-way %d times and was given up on. Whatever it had reserved against the monthly cap has been released. The usual cause is a host ending requests before they finish: check this site\'s PHP max_execution_time and memory limit.', 'autoscribe' ),
 						self::MAX_RESTARTS
 					)
 				)

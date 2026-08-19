@@ -286,9 +286,11 @@ behaviour; nothing needs migrating. The runs table is unchanged.
   oldest: a busy queue can hold more healthy open runs than one batch, and
   reading only the oldest would re-read the same healthy rows every sweep and
   never reach a newer stalled one — leaving it holding its reservation for as
-  long as the backlog lasted. A prompt that has been switched off is treated like
-  one that has been deleted, so giving up on its run does not arm it again and
-  leave a disabled prompt showing a next-run time.
+  long as the backlog lasted. Where one sweep stopped reading is remembered, so a
+  backlog wider than a single sweep does not hide the runs beyond it either. A
+  prompt that has been switched off is treated like one that has been deleted, so
+  giving up on its run does not arm it again and leave a disabled prompt showing
+  a next-run time.
 
 - **Giving up on a run releases what it reserved.** This is the point of the
   sweep rather than a detail of it. The estimated cost is written onto a run
