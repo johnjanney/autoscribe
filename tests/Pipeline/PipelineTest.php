@@ -83,8 +83,9 @@ final class PipelineTest extends WP_UnitTestCase {
 		$this->assertNotWPError( $run );
 
 		$performed = array();
+		$attempts  = count( Pipeline::STEPS ) + 1;
 
-		while ( count( $performed ) <= count( Pipeline::STEPS ) ) {
+		for ( $i = 0; $i < $attempts; $i++ ) {
 			$step = ( new Pipeline( new Provider_Registry() ) )->advance( $prompt, $run );
 
 			$this->assertNotWPError( $step );
