@@ -222,7 +222,24 @@ final class Step_Assemble_Post {
 
 		$this->taxonomy->apply( $post_id, $prompt, $article->suggested_tags() );
 
-		$run->record_post( $post_id );
+		/*
+		 * Later steps read the post back off the run rather than receiving it as
+		 * an argument, because they run in separate requests. A refused write
+		 * therefore leaves a post nothing points at: the image step would attach
+		 * its picture to post 0 and publishing would look for one that was never
+		 * recorded. The post itself is left in place — it is a draft, and losing
+		 * the link to it is better than deleting an article that was paid for.
+		 */
+		if ( ! $run->record_post( $post_id ) ) {
+			return new WP_Error(
+				'autoscribe_state_not_recorded',
+				sprintf(
+					/* translators: %d: post ID. */
+					__( 'The generated post (%d) could not be linked to this run, so the run was stopped rather than continuing without knowing what it had written.', 'autoscribe' ),
+					$post_id
+				)
+			);
+		}
 		$run->record_article(
 			$this->sanitizer->sanitize_title( $article->title() ),
 			$this->sanitizer->sanitize_topic_key( $article->topic_key() )

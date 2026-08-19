@@ -8,6 +8,7 @@
 namespace AutoScribe\Tests\Pipeline;
 
 use AutoScribe\Cost\Budget_Guard;
+use AutoScribe\Cost\Pricing_Table;
 use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Pipeline;
 use AutoScribe\Pipeline\Queued_Run_Handler;
@@ -369,6 +370,167 @@ final class Queued_RunTest extends WP_UnitTestCase {
 		}
 
 		$this->assertSame( Run::STATUS_SUCCESS, Run::latest_for_prompt( $prompt_id )['status'] );
+	}
+
+	/**
+	 * A run whose fingerprint cannot be stored does not start.
+	 *
+	 * The guard treats a missing fingerprint as a run opened by an earlier
+	 * version, which is right for an upgrade and wrong for a write that failed:
+	 * the run would go on to accept any edit silently, which is the guard turned
+	 * off by the one failure it most needs to survive.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_a_run_whose_fingerprint_cannot_be_stored_does_not_start(): void {
+		global $wpdb;
+
+		$prompt_id = $this->create_prompt();
+
+		$break = static function ( $query ) {
+			return str_contains( (string) $query, 'SET `payload`' )
+				? 'UPDATE autoscribe_no_such_table SET payload = 1 WHERE id = 1'
+				: $query;
+		};
+
+		add_filter( 'query', $break );
+		$wpdb->suppress_errors( true );
+
+		// No provider mock: reaching one would throw.
+		$this->handler()->handle( $prompt_id );
+
+		$wpdb->suppress_errors( false );
+		remove_filter( 'query', $break );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertIsArray( $row );
+		$this->assertSame( Run::STATUS_FAILED, $row['status'] );
+		$this->assertSame( '', (string) $row['step'], 'Nothing should have run.' );
+	}
+
+	/**
+	 * Aborting an edited run still charges for the grounded call it made.
+	 *
+	 * Run::fail() settles from measured usage, and the grounded-request charge is
+	 * not part of that measurement — it is passed in. Every abort path in this
+	 * handler left it at zero, so a run that had already paid for a grounded body
+	 * call settled for less than it spent, and the month-to-date total that
+	 * section 7.4's cap reads was short by the difference.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_an_aborted_grounded_run_is_charged_for_its_grounding(): void {
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt( array( 'grounding_enabled' => 1 ) );
+
+		$this->handler()->handle( $prompt_id );
+
+		$run_id = (int) Run::latest_for_prompt( $prompt_id )['id'];
+
+		// Through the budget check, the proposal, and the paid body call.
+		foreach ( array( 1, 2, 3 ) as $ignored ) {
+			$this->handler()->handle_step( $run_id );
+		}
+
+		$this->assertSame( 'generate_body', (string) Run::latest_for_prompt( $prompt_id )['step'] );
+
+		update_post_meta( $prompt_id, '_autoscribe_target_word_count', 1234 );
+
+		$this->handler()->handle_step( $run_id );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame( Run::STATUS_FAILED, $row['status'] );
+
+		$pricing    = new Pricing_Table();
+		$ungrounded = $pricing->cost_cents(
+			(string) $row['text_model'],
+			(int) $row['input_tokens'],
+			(int) $row['output_tokens']
+		);
+
+		$this->assertGreaterThan(
+			$ungrounded,
+			(int) $row['cost_cents'],
+			'The grounded request this run paid for must be settled with it.'
+		);
+	}
+
+	/**
+	 * A refused retry does not leave the prompt stranded.
+	 *
+	 * The retry branch deliberately does not arm the regular next occurrence,
+	 * because a retry is outstanding. When #16 made a refused retry reportable,
+	 * this caller still discarded the report — so the prompt was left with a
+	 * raised attempt counter, no queued action, and nothing said. The refusal was
+	 * detectable and the prompt stopped silently anyway.
+	 *
+	 * Only the first arming is refused, so the fall-through can be observed
+	 * restoring a future occurrence.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_a_refused_retry_does_not_strand_the_prompt(): void {
+		$this->mock_provider_failure( 503 );
+
+		$prompt_id = $this->create_prompt(
+			array(
+				'schedule_type'   => 'daily',
+				'schedule_params' => array( 'time' => '06:00' ),
+			)
+		);
+
+		/*
+		 * Refuse the first prompt-hook arming, which is the retry, and let the
+		 * one after it — the restored occurrence — through. Refusing everything
+		 * would stop the chain at its first step action instead and never reach
+		 * the branch under test, which is how the first version of this test
+		 * passed against the defect.
+		 */
+		$refusals = 0;
+
+		$refuse_retry = static function ( $pre, $timestamp, $hook ) use ( &$refusals ) {
+			unset( $timestamp );
+
+			if ( Scheduler::HOOK_RUN_PROMPT !== $hook ) {
+				return $pre;
+			}
+
+			++$refusals;
+
+			return 1 === $refusals ? 0 : $pre;
+		};
+
+		add_filter( 'pre_as_schedule_single_action', $refuse_retry, 10, 3 );
+
+		$this->run_to_completion( $prompt_id );
+
+		remove_filter( 'pre_as_schedule_single_action', $refuse_retry, 10 );
+
+		$this->assertSame(
+			'',
+			get_post_meta( $prompt_id, Queued_Run_Handler::ATTEMPT_META, true ),
+			'A retry that was never queued must not leave the counter raised.'
+		);
+
+		$this->assertNotEmpty(
+			as_get_scheduled_actions(
+				array(
+					'hook'   => Scheduler::HOOK_RUN_PROMPT,
+					'status' => \ActionScheduler_Store::STATUS_PENDING,
+				),
+				'ids'
+			),
+			'The prompt must be left with a future occurrence rather than stopped.'
+		);
 	}
 
 	/**

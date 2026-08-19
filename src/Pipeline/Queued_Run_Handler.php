@@ -114,7 +114,7 @@ final class Queued_Run_Handler {
 		$armed = $this->scheduler->schedule_step( $run->id() );
 
 		if ( is_wp_error( $armed ) ) {
-			$run->fail( $armed->get_error_message() );
+			$run->fail( $armed->get_error_message(), null, $this->grounded_calls( $prompt ) );
 			$this->conclude( $prompt, $attempt, $armed );
 		}
 	}
@@ -150,7 +150,11 @@ final class Queued_Run_Handler {
 			 * keyed by run rather than by prompt, so the check lives here instead
 			 * — and this way it also catches a prompt disabled between two steps.
 			 */
-			$run->fail( __( 'The prompt was disabled or removed while this run was in progress.', 'autoscribe' ) );
+			$run->fail(
+				__( 'The prompt was disabled or removed while this run was in progress.', 'autoscribe' ),
+				null,
+				$this->grounded_calls( $prompt )
+			);
 			$this->scheduler->cancel( $prompt_id );
 
 			return;
@@ -159,7 +163,7 @@ final class Queued_Run_Handler {
 		$changed = $this->config_changed( $prompt, $run );
 
 		if ( null !== $changed ) {
-			$run->fail( $changed->get_error_message() );
+			$run->fail( $changed->get_error_message(), null, $this->grounded_calls( $prompt ) );
 			$this->conclude( $prompt, $run->attempt(), $changed );
 
 			return;
@@ -187,6 +191,29 @@ final class Queued_Run_Handler {
 		}
 
 		$this->finish( $prompt, $run, $grounded );
+	}
+
+	/**
+	 * Returns the number of grounded requests to settle a run against.
+	 *
+	 * Run::fail() settles from measured usage, and the grounded-request charge is
+	 * not part of that measurement — it has to be passed in. Every abort path
+	 * here left it at zero, so a run that had already paid for a grounded body
+	 * call settled for less than it spent and the month-to-date total the section
+	 * 7.4 cap reads was short by the difference.
+	 *
+	 * The prompt's setting rather than a count of calls actually made: settlement
+	 * ignores it entirely when no usage was recorded, so a run that stopped
+	 * before the body call is unaffected, and over-stating a cap is the safe
+	 * direction to be wrong in.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Prompt $prompt Prompt being run.
+	 * @return int
+	 */
+	private function grounded_calls( Prompt $prompt ): int {
+		return $prompt->grounding_enabled() ? 1 : 0;
 	}
 
 	/**
@@ -278,9 +305,29 @@ final class Queued_Run_Handler {
 
 		if ( null !== $error && $this->policy->should_retry( $error, $attempt ) ) {
 			update_post_meta( $prompt_id, self::ATTEMPT_META, $attempt + 1 );
-			$this->scheduler->schedule_retry( $prompt_id, $this->policy->delay_seconds( $attempt ) );
 
-			return;
+			$queued = $this->scheduler->schedule_retry( $prompt_id, $this->policy->delay_seconds( $attempt ) );
+
+			if ( ! is_wp_error( $queued ) ) {
+				return;
+			}
+
+			/*
+			 * The retry could not be armed. This branch deliberately leaves the
+			 * regular occurrence unarmed, because a retry is outstanding — so
+			 * returning here would leave the prompt with a raised attempt
+			 * counter, no queued action of any kind, and nothing said: a refusal
+			 * that is reported all the way to this line and still stops the
+			 * prompt silently.
+			 *
+			 * Falling through instead treats the run as finished: the counter is
+			 * cleared, the next occurrence is armed, and the notice below reports
+			 * the refusal rather than the transient failure that prompted the
+			 * retry. The transient failure is on the run row either way; that the
+			 * queue would not take the retry is the part nobody would otherwise
+			 * learn.
+			 */
+			$error = $queued;
 		}
 
 		/*
@@ -317,7 +364,17 @@ final class Queued_Run_Handler {
 
 		if ( ! is_wp_error( $timestamp ) ) {
 			$prompt->set_next_run_ts( $timestamp );
+
+			return;
 		}
+
+		/*
+		 * A prompt whose next occurrence cannot be armed does not run again, and
+		 * section 4.3 exists to prevent exactly that. Nothing else in the system
+		 * will notice — there is no queued action left to fail and no run to
+		 * record it against — so the only useful thing left to do is say so.
+		 */
+		Generator::send_failure_notice( $prompt->id(), $timestamp );
 	}
 
 	/**

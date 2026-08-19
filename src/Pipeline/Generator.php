@@ -259,7 +259,23 @@ final class Generator {
 		 * were never budget-checked, and a run that began under review finishing
 		 * by publishing. The queue driver compares this before each step.
 		 */
-		$run->merge_payload( array( 'config' => $prompt->config_fingerprint() ) );
+		if ( ! $run->merge_payload( array( 'config' => $prompt->config_fingerprint() ) ) ) {
+			/*
+			 * A missing fingerprint is read downstream as "opened by an earlier
+			 * version", which is right for an upgrade and wrong for a write that
+			 * failed: the run would then accept any edit silently. Refusing to
+			 * start is the only reading that does not turn the guard off with the
+			 * one failure it most needs to survive.
+			 */
+			$error = new WP_Error(
+				'autoscribe_state_not_recorded',
+				__( 'The settings this run was checked against could not be written to the run log, so the run was stopped rather than starting without a record of them.', 'autoscribe' )
+			);
+
+			$run->fail( $error->get_error_message() );
+
+			return $error;
+		}
 
 		$adopted = $this->adopt( $prompt_id, $run, $attempt );
 
