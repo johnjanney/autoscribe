@@ -9,7 +9,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-19T09:03:57-05:00\n"
+"POT-Creation-Date: 2026-08-19T11:49:25-05:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: autoscribe\n"
@@ -621,8 +621,18 @@ msgstr ""
 msgid "This prompt was edited while the run was in progress, so the run was stopped rather than finishing under settings it was never checked against. The next scheduled run will use the new settings."
 msgstr ""
 
-#: src/Pipeline/Run.php:166
+#: src/Pipeline/Run.php:174
 msgid "The run could not be recorded. Check that the AutoScribe runs table exists and is writable."
+msgstr ""
+
+#: src/Pipeline/Stall_Sweeper.php:234
+msgid "This run stopped part-way and its prompt no longer exists, so it was closed and what it had reserved was released."
+msgstr ""
+
+#. translators: %d: number of restarts already attempted.
+#: src/Pipeline/Stall_Sweeper.php:249
+#, php-format
+msgid "This run stopped part-way %d times and was given up on. Whatever it had reserved against the monthly cap has been released. A host that ends requests early is the usual cause; see the system cron guidance in the README."
 msgstr ""
 
 #: src/Pipeline/Step_Assemble_Post.php:125
@@ -665,34 +675,34 @@ msgstr ""
 msgid "This prompt asks for web search grounding, but %s does not offer it. Turn grounding off or choose another text provider."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:175
+#: src/Pipeline/Step_Generate_Body.php:179
 msgid "The run log could not record that this article used web search, so the run was stopped rather than finishing with a cost that understates what it spent."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:201
+#: src/Pipeline/Step_Generate_Body.php:205
 msgid "The web search sources this article was based on could not be written to the run log. The run was stopped rather than publishing an article with no record of what it read."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:300
+#: src/Pipeline/Step_Generate_Body.php:304
 msgid "The sources belonging to a discarded article could not be cleared from the run log, so the run was stopped rather than risking them being published as the new article's citations."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:324
+#: src/Pipeline/Step_Generate_Body.php:328
 msgid "The generated article could not be written to the run log, so the run was stopped rather than continuing on state that would be lost."
 msgstr ""
 
 #. translators: %s: JSON schema describing the required response.
-#: src/Pipeline/Step_Generate_Body.php:350
+#: src/Pipeline/Step_Generate_Body.php:354
 #, php-format
 msgid "Return one JSON object and nothing else. No prose, no Markdown fences. It must satisfy this JSON Schema: %s"
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:384
+#: src/Pipeline/Step_Generate_Body.php:388
 msgid "Use it only as the agreed topic: write the article for it, and return exactly this title and topic_key in your response."
 msgstr ""
 
 #. translators: 1: original instruction, 2: fenced block holding the rejected response and the validation error.
-#: src/Pipeline/Step_Generate_Body.php:412
+#: src/Pipeline/Step_Generate_Body.php:416
 #, php-format
 msgid ""
 "Original request:\n"
@@ -703,7 +713,7 @@ msgid ""
 "Return a corrected JSON object and nothing else."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:415
+#: src/Pipeline/Step_Generate_Body.php:419
 msgid "Use it only as the response of yours that was rejected and the reason it was rejected."
 msgstr ""
 
@@ -1262,11 +1272,11 @@ msgstr ""
 msgid "The %1$s parameter is invalid. Expected %2$s."
 msgstr ""
 
-#: src/Scheduling/Scheduler.php:319
+#: src/Scheduling/Scheduler.php:351
 msgid "The action queue would not accept the job. Check that the Action Scheduler tables exist and are writable."
 msgstr ""
 
-#: src/Scheduling/Scheduler.php:345
+#: src/Scheduling/Scheduler.php:377
 msgid "Action Scheduler is not loaded, so runs cannot be queued."
 msgstr ""
 

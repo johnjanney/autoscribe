@@ -87,7 +87,7 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
-Phases 1 to 4 of the pipeline split scoped in `docs/PIPELINE-SPLIT.md`.
+Phases 1 to 5 of the pipeline split scoped in `docs/PIPELINE-SPLIT.md`.
 Phase 3 is the first part a site would notice: a scheduled run is now advanced
 one step per queued request instead of running end to end in one. It is on `main`
 rather than in a release because the phases still to come — the finalise step and
@@ -323,6 +323,29 @@ time.
 - **A failed adoption is now treated as no adoption.** Carrying on as though it
   had succeeded would hide the old draft from duplicate detection and then write
   a second one beside it. The run stands down as a duplicate instead.
+
+### Added
+
+- **Recovery for runs the queue stopped advancing.** Splitting the pipeline did
+  not give this on its own: Action Scheduler records a killed action as failed
+  and stops, so a step killed by a PHP timeout left a run open with nothing
+  queued to advance it and nothing that would ever pick it up. A recurring sweep
+  restarts such a run twice and then gives up on it.
+
+  Whether a run is stalled is decided by whether anything is queued or running to
+  advance it, not by how long it has been open — age cannot tell a stalled run
+  from a slow one, and a legitimate run takes several queue passes. Age is used
+  only to keep the sweeper away from runs too young to judge. Fifteen minutes by
+  default, filterable through `autoscribe_stall_threshold`.
+
+- **Giving up on a run releases what it reserved.** This is the point of the
+  sweep rather than a detail of it. The estimated cost is written onto a run
+  before its first paid call so that concurrent runs can see it, and the section
+  7.4 cap reads every open run's reservation — so a run abandoned mid-flight held
+  its estimate against the monthly cap for ever. The cap would fill with money
+  nobody spent and prompts would start skipping for no visible reason. **That
+  failure mode did not exist before the split**; it is the debt the split took
+  on.
 
 ### Changed
 

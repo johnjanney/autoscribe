@@ -207,6 +207,59 @@ final class Scheduler {
 	}
 
 	/**
+	 * Cancels any queued action for one run.
+	 *
+	 * Cancelling a prompt clears the prompt's own actions, and step actions are
+	 * keyed by run rather than by prompt, so nothing else reaches them. A run that has been
+	 * closed does not need advancing, and leaving its action queued means a
+	 * pointless wake-up that finds the run already finished.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param int $run_id Run whose actions should be dropped.
+	 * @return void
+	 */
+	public function cancel_step_actions( int $run_id ): void {
+		if ( ! $this->is_available() ) {
+			return;
+		}
+
+		as_unschedule_all_actions( self::HOOK_RUN_STEP, array( 'run_id' => $run_id ), self::GROUP );
+	}
+
+	/**
+	 * Whether anything is queued or running to advance this run.
+	 *
+	 * This is what tells a stalled run from a slow one. A run that is working has
+	 * an action either waiting or in progress; a run whose action was killed has
+	 * neither, and nothing will ever pick it up again, because Action Scheduler
+	 * records a failure and stops rather than retrying.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param int $run_id Run to look for.
+	 * @return bool
+	 */
+	public function has_step_action( int $run_id ): bool {
+		if ( ! function_exists( 'as_get_scheduled_actions' ) ) {
+			// Unknowable, so assume it is in hand rather than act on a guess.
+			return true;
+		}
+
+		$found = as_get_scheduled_actions(
+			array(
+				'hook'     => self::HOOK_RUN_STEP,
+				'args'     => array( 'run_id' => $run_id ),
+				'status'   => array( \ActionScheduler_Store::STATUS_PENDING, \ActionScheduler_Store::STATUS_RUNNING ),
+				'per_page' => 1,
+			),
+			'ids'
+		);
+
+		return is_array( $found ) && array() !== $found;
+	}
+
+	/**
 	 * Queues a retry a fixed delay from now.
 	 *
 	 * Action Scheduler does not retry failed actions by itself, so a retry is

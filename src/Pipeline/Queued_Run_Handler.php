@@ -155,6 +155,7 @@ final class Queued_Run_Handler {
 				null,
 				$run->grounded_calls()
 			);
+			$this->scheduler->cancel_step_actions( $run_id );
 			$this->abandon( $prompt_id );
 
 			return;
@@ -309,6 +310,20 @@ final class Queued_Run_Handler {
 	 * 4.3 requires the next occurrence to be armed whether the run succeeded or
 	 * failed, and a chain spread across several actions has many more ways to
 	 * end than one that ran in a single request did.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Prompt        $prompt  Prompt that ran.
+	 * @param int           $attempt Attempt number that just ended.
+	 * @param WP_Error|null $error   The failure, or null on success.
+	 * @return void
+	 */
+	public function conclude_run( Prompt $prompt, int $attempt, ?WP_Error $error ): void {
+		$this->conclude( $prompt, $attempt, $error );
+	}
+
+	/**
+	 * Decides what happens after a run ends, however it ended.
 	 *
 	 * @since 1.1.0
 	 *
