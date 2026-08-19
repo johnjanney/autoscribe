@@ -91,7 +91,7 @@ final class Queued_Run_Handler {
 
 		if ( null === $prompt || ! $prompt->enabled() ) {
 			// Section 4.3: cancel everything for a prompt that is gone or off.
-			$this->scheduler->cancel( $prompt_id );
+			$this->abandon( $prompt_id );
 
 			return;
 		}
@@ -155,7 +155,7 @@ final class Queued_Run_Handler {
 				null,
 				$run->grounded_calls()
 			);
-			$this->scheduler->cancel( $prompt_id );
+			$this->abandon( $prompt_id );
 
 			return;
 		}
@@ -258,6 +258,29 @@ final class Queued_Run_Handler {
 		$result = $this->generator->finalise( $prompt, $run, $article, null, new Pricing_Table(), $run->grounded_calls() );
 
 		$this->conclude( $prompt, $run->attempt(), is_wp_error( $result ) ? $result : null );
+	}
+
+	/**
+	 * Gives up on a prompt that is gone or switched off.
+	 *
+	 * The two paths that abandon a run this way do not go through conclude(),
+	 * and should not: there is no next occurrence to arm for a prompt somebody
+	 * has just turned off, and no failure worth mailing about a deliberate act.
+	 *
+	 * What they do still owe is the attempt counter. It lives on the prompt
+	 * rather than the run, because a retry opens a new row and the count has to
+	 * survive across them — so leaving it raised means a prompt switched back on
+	 * later resumes mid-series and quietly gets fewer attempts than it should.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param int $prompt_id Prompt to give up on.
+	 * @return void
+	 */
+	private function abandon( int $prompt_id ): void {
+		$this->scheduler->cancel( $prompt_id );
+
+		delete_post_meta( $prompt_id, self::ATTEMPT_META );
 	}
 
 	/**
