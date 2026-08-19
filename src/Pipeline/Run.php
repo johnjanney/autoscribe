@@ -358,6 +358,36 @@ final class Run {
 	}
 
 	/**
+	 * Takes ownership of a draft left behind by the previous attempt.
+	 *
+	 * Recording the post on the run row is only half of adoption. The other half
+	 * is the post's own run link, and until 1.0.3 nothing moved it: only
+	 * Step_Assemble_Post writes that meta, and a retry that adopted a draft and
+	 * then fell over on the topic or body call never reached assembly. The run
+	 * row pointed at the draft while the draft still named the attempt before it,
+	 * and adoptable_draft() — which asks precisely whether those two agree —
+	 * refused it on the next attempt. A later successful attempt then created the
+	 * second draft the mechanism exists to prevent.
+	 *
+	 * Both halves move together here, so the invariant holds from the moment of
+	 * adoption rather than only after a successful assembly: the post's run link
+	 * names the run that currently owns it.
+	 *
+	 * Updating meta does not touch post_modified, so the human-edit guard in
+	 * adoptable_draft() is unaffected by this write.
+	 *
+	 * @since 1.0.3
+	 *
+	 * @param int $post_id Draft being adopted.
+	 * @return void
+	 */
+	public function adopt_post( int $post_id ): void {
+		$this->record_post( $post_id );
+
+		update_post_meta( $post_id, Step_Assemble_Post::RUN_ID_META, $this->id );
+	}
+
+	/**
 	 * Returns the most recent run row for a prompt.
 	 *
 	 * The Run Log in section 9.3 reads runs back out; this is the accessor it

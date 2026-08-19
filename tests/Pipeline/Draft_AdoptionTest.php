@@ -233,6 +233,47 @@ final class Draft_AdoptionTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Adoption survives a retry that fails before it reaches assembly.
+	 *
+	 * The ownership check asks whether the post's run meta names the row being
+	 * adopted from. Only Step_Assemble_Post writes that meta, so a retry that
+	 * adopts a draft and then falls over on the topic or body call left the run
+	 * row pointing at a draft whose meta still named the attempt before it. The
+	 * next attempt saw a mismatch, refused the draft, and eventually created a
+	 * second one — which is the duplicate the whole mechanism exists to prevent.
+	 *
+	 * Attempt 1 leaves a draft. Attempt 2 adopts it and then fails on the body
+	 * call. Attempt 3 must still adopt that same draft.
+	 *
+	 * @since 1.0.3
+	 *
+	 * @return void
+	 */
+	public function test_adoption_survives_a_retry_that_fails_before_assembly(): void {
+		$prompt_id = $this->create_failing_image_prompt();
+
+		$this->mock_text_success_and_image_failure();
+
+		( new Generator( new Provider_Registry() ) )->run( $prompt_id, null, 1 );
+		$draft = $this->failed_post_id( $prompt_id );
+
+		// Attempt 2: the provider drops the connection during generation, so the
+		// run never reaches assembly.
+		$this->mock_provider_failure( 503 );
+
+		( new Generator( new Provider_Registry() ) )->run( $prompt_id, null, 2 );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertIsArray( $row );
+		$this->assertSame( Run::STATUS_FAILED, $row['status'] );
+		$this->assertSame( $draft, (int) $row['post_id'], 'The failed retry should still own the draft it adopted.' );
+
+		// Attempt 3 must adopt the same draft rather than starting a second one.
+		$this->assertSame( $draft, Run::adoptable_draft( $prompt_id, PHP_INT_MAX, 3 ) );
+	}
+
+	/**
 	 * Builds a prompt whose image call will fail the run.
 	 *
 	 * Section 6's "required" mode fails the run and leaves the draft behind,
