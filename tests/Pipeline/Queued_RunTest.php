@@ -463,6 +463,77 @@ final class Queued_RunTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A refused retry does not leave the prompt stranded.
+	 *
+	 * The retry branch deliberately does not arm the regular next occurrence,
+	 * because a retry is outstanding. When #16 made a refused retry reportable,
+	 * this caller still discarded the report — so the prompt was left with a
+	 * raised attempt counter, no queued action, and nothing said. The refusal was
+	 * detectable and the prompt stopped silently anyway.
+	 *
+	 * Only the first arming is refused, so the fall-through can be observed
+	 * restoring a future occurrence.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_a_refused_retry_does_not_strand_the_prompt(): void {
+		$this->mock_provider_failure( 503 );
+
+		$prompt_id = $this->create_prompt(
+			array(
+				'schedule_type'   => 'daily',
+				'schedule_params' => array( 'time' => '06:00' ),
+			)
+		);
+
+		/*
+		 * Refuse the first prompt-hook arming, which is the retry, and let the
+		 * one after it — the restored occurrence — through. Refusing everything
+		 * would stop the chain at its first step action instead and never reach
+		 * the branch under test, which is how the first version of this test
+		 * passed against the defect.
+		 */
+		$refusals = 0;
+
+		$refuse_retry = static function ( $pre, $timestamp, $hook ) use ( &$refusals ) {
+			unset( $timestamp );
+
+			if ( Scheduler::HOOK_RUN_PROMPT !== $hook ) {
+				return $pre;
+			}
+
+			++$refusals;
+
+			return 1 === $refusals ? 0 : $pre;
+		};
+
+		add_filter( 'pre_as_schedule_single_action', $refuse_retry, 10, 3 );
+
+		$this->run_to_completion( $prompt_id );
+
+		remove_filter( 'pre_as_schedule_single_action', $refuse_retry, 10 );
+
+		$this->assertSame(
+			'',
+			get_post_meta( $prompt_id, Queued_Run_Handler::ATTEMPT_META, true ),
+			'A retry that was never queued must not leave the counter raised.'
+		);
+
+		$this->assertNotEmpty(
+			as_get_scheduled_actions(
+				array(
+					'hook'   => Scheduler::HOOK_RUN_PROMPT,
+					'status' => \ActionScheduler_Store::STATUS_PENDING,
+				),
+				'ids'
+			),
+			'The prompt must be left with a future occurrence rather than stopped.'
+		);
+	}
+
+	/**
 	 * A disabled prompt is not run at all.
 	 *
 	 * @since 0.8.0

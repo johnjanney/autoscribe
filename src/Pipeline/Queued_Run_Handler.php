@@ -305,9 +305,29 @@ final class Queued_Run_Handler {
 
 		if ( null !== $error && $this->policy->should_retry( $error, $attempt ) ) {
 			update_post_meta( $prompt_id, self::ATTEMPT_META, $attempt + 1 );
-			$this->scheduler->schedule_retry( $prompt_id, $this->policy->delay_seconds( $attempt ) );
 
-			return;
+			$queued = $this->scheduler->schedule_retry( $prompt_id, $this->policy->delay_seconds( $attempt ) );
+
+			if ( ! is_wp_error( $queued ) ) {
+				return;
+			}
+
+			/*
+			 * The retry could not be armed. This branch deliberately leaves the
+			 * regular occurrence unarmed, because a retry is outstanding — so
+			 * returning here would leave the prompt with a raised attempt
+			 * counter, no queued action of any kind, and nothing said: a refusal
+			 * that is reported all the way to this line and still stops the
+			 * prompt silently.
+			 *
+			 * Falling through instead treats the run as finished: the counter is
+			 * cleared, the next occurrence is armed, and the notice below reports
+			 * the refusal rather than the transient failure that prompted the
+			 * retry. The transient failure is on the run row either way; that the
+			 * queue would not take the retry is the part nobody would otherwise
+			 * learn.
+			 */
+			$error = $queued;
 		}
 
 		/*
@@ -344,7 +364,17 @@ final class Queued_Run_Handler {
 
 		if ( ! is_wp_error( $timestamp ) ) {
 			$prompt->set_next_run_ts( $timestamp );
+
+			return;
 		}
+
+		/*
+		 * A prompt whose next occurrence cannot be armed does not run again, and
+		 * section 4.3 exists to prevent exactly that. Nothing else in the system
+		 * will notice — there is no queued action left to fail and no run to
+		 * record it against — so the only useful thing left to do is say so.
+		 */
+		Generator::send_failure_notice( $prompt->id(), $timestamp );
 	}
 
 	/**

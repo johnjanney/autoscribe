@@ -103,6 +103,19 @@ the stall sweeper — are what make the split worth having.
   `Run::merge_payload()`, which merges at the top level. The grounding sources
   recorded under section 7.1 were the data that would have been lost.
 
+- **A retry the queue refused stopped the prompt silently.** The retry branch
+  deliberately leaves the regular next occurrence unarmed, because a retry is
+  outstanding — so when the queue would not take the retry, the prompt was left
+  with a raised attempt counter, no queued action of any kind, and nothing said.
+  Reporting the refusal was not enough on its own; the caller now treats the run
+  as finished, clears the counter, arms the next occurrence, and reports the
+  refusal rather than the transient failure behind it. The transient failure is
+  on the run row either way; that the queue would not take the retry is the part
+  nobody would otherwise learn.
+- **A next occurrence that could not be armed was not reported either.** Nothing
+  else in the system notices: there is no queued action left to fail and no run
+  to record it against, so the prompt simply never runs again — the outcome
+  section 4.3 exists to prevent. It now sends the failure notice.
 - **A generated post could be left with nothing pointing at it.** Later steps
   read the post back off the run rather than receiving it as an argument, because
   they run in separate requests, and the write that links them discarded its
