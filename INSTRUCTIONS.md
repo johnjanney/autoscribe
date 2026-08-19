@@ -323,10 +323,17 @@ check, topic, article, post, image, publish — each queued separately, so a
 generated article arrives some minutes after its scheduled time rather than
 seconds after it.
 
-That is deliberate, and it is what lets the plugin work on ordinary shared
-hosting. A whole run takes 30 to 120 seconds of provider time; hosts that cut
-requests off at 30 seconds would kill it part-way, every time. One step per
-request means the longest single request is one provider call.
+That is deliberate, and it is what makes the plugin survivable on ordinary shared
+hosting. A whole run takes 30 to 120 seconds of provider time, so a host that
+cuts requests off at 30 seconds would kill an undivided run part-way, every time.
+Splitting it means a killed request costs one step rather than the article.
+
+It is a reduction in exposure rather than a guarantee. A single step can still
+run long: the topic step asks again when its first proposal collides, and the
+article step makes one repair call when the response does not validate, so a step
+can make two provider calls back to back, each allowed up to 120 seconds. A host
+with a hard 30-second limit can still terminate one — the run is then picked up
+again rather than lost, which is the part that changed.
 
 The practical consequences:
 
@@ -338,9 +345,14 @@ The practical consequences:
 - **A run that stops part-way is picked up again.** If your host kills a request,
   nothing is left half-finished for ever: an automatic sweep restarts the run,
   and after two attempts gives up on it, releases whatever it had set aside
-  against your monthly budget, and records why in the run log. A run log entry
-  saying it "stopped part-way" means your host is ending requests early — the
-  system cron setup is the usual fix.
+  against your monthly budget, and records why in the run log.
+
+  A run log entry saying it "stopped part-way" means a request was terminated
+  before it finished. **The system cron above does not fix that** — cron makes
+  the queue advance, and this run's request was killed while it was already
+  advancing. Look at the host's PHP limits instead: `max_execution_time` first,
+  then memory. If the host will not raise them, a provider or model that answers
+  faster is the other lever.
 
 ---
 

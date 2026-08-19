@@ -881,17 +881,19 @@ final class Run {
 	 *
 	 * @param string $before_utc UTC MySQL timestamp; runs started before this.
 	 * @param int    $limit      Most rows to return.
+	 * @param int    $after_id   Only rows above this ID, so a caller can page on.
 	 * @return int[]
 	 */
-	public static function open_before( string $before_utc, int $limit = 50 ): array {
+	public static function open_before( string $before_utc, int $limit = 50, int $after_id = 0 ): array {
 		global $wpdb;
 
 		$ids = $wpdb->get_col(
 			$wpdb->prepare(
-				'SELECT id FROM %i WHERE status = %s AND started_at < %s ORDER BY id ASC LIMIT %d',
+				'SELECT id FROM %i WHERE status = %s AND started_at < %s AND id > %d ORDER BY id ASC LIMIT %d',
 				Activation::table_name(),
 				self::STATUS_RUNNING,
 				$before_utc,
+				max( 0, $after_id ),
 				max( 1, $limit )
 			)
 		);

@@ -84,12 +84,47 @@ final class Stall_Sweeper {
 	public const MAX_RESTARTS = 2;
 
 	/**
-	 * Most runs to examine in one sweep.
+	 * Most runs to recover in one sweep.
+	 *
+	 * A cap on what is acted on, not on what is looked at — see handle().
 	 *
 	 * @since 1.1.0
 	 * @var int
 	 */
 	public const BATCH = 25;
+
+	/**
+	 * How many open runs one scan query reads.
+	 *
+	 * @since 1.1.0
+	 * @var int
+	 */
+	public const PAGE = 100;
+
+	/**
+	 * How many pages one sweep reads before leaving the rest to the next one.
+	 *
+	 * Bounds the work a single sweep does on a site with a very large backlog,
+	 * which is the job the batch size used to be doing badly.
+	 *
+	 * @since 1.1.0
+	 * @var int
+	 */
+	public const MAX_PAGES = 20;
+
+	/**
+	 * Option holding where the last sweep stopped reading.
+	 *
+	 * Paging fixed starvation within one sweep and would have left it between
+	 * sweeps: a backlog wider than one sweep reads means every sweep restarts at
+	 * the oldest row and inspects the same rows again, so a stalled run past the
+	 * end of that window is never reached and keeps its reservation. The same
+	 * starvation, moved further out.
+	 *
+	 * @since 1.1.0
+	 * @var string
+	 */
+	public const CURSOR_OPTION = 'autoscribe_sweep_cursor';
 
 	/**
 	 * Queue wrapper.
@@ -192,19 +227,77 @@ final class Stall_Sweeper {
 	public function handle(): int {
 		$cutoff = gmdate( 'Y-m-d H:i:s', time() - self::threshold() );
 		$acted  = 0;
+		$after  = (int) get_option( self::CURSOR_OPTION, 0 );
 
-		foreach ( Run::open_before( $cutoff, self::BATCH ) as $run_id ) {
-			if ( $this->scheduler->has_step_action( $run_id ) ) {
-				// Waiting its turn, or working. Not stalled.
-				continue;
+		/*
+		 * The batch caps how many runs are *recovered*, not how many are looked
+		 * at, and the scan pages on past the healthy ones. Capping the look
+		 * instead is subtly useless on the sites that need this most: a busy
+		 * queue can hold more healthy open runs than a batch, so the same healthy
+		 * rows are re-read on every sweep and anything newer is never reached —
+		 * leaving a stalled run holding its reservation against the monthly cap
+		 * for as long as the backlog lasts.
+		 *
+		 * The page count bounds the work instead, so one sweep of a very busy
+		 * site is still a short request.
+		 */
+		for ( $page = 0; $page < self::MAX_PAGES; $page++ ) {
+			$candidates = Run::open_before( $cutoff, self::PAGE, $after );
+
+			if ( array() === $candidates ) {
+				// Nothing left above the cursor, so the next sweep starts over.
+				$after = 0;
+
+				break;
 			}
 
-			if ( $this->recover( $run_id ) ) {
-				++$acted;
+			foreach ( $candidates as $run_id ) {
+				/*
+				 * The cursor follows the run being examined, not the end of the
+				 * page. Advancing it a page at a time would have the early return
+				 * below record a position past runs this sweep never looked at,
+				 * and the next sweep would skip them — which is the starvation
+				 * the cursor exists to prevent, one page wide.
+				 */
+				$after = $run_id;
+
+				if ( $this->scheduler->has_step_action( $run_id ) ) {
+					// Waiting its turn, or working. Not stalled.
+					continue;
+				}
+
+				if ( $this->recover( $run_id ) ) {
+					++$acted;
+				}
+
+				if ( $acted >= self::BATCH ) {
+					$this->remember_cursor( $after );
+
+					return $acted;
+				}
 			}
 		}
 
+		$this->remember_cursor( $after );
+
 		return $acted;
+	}
+
+	/**
+	 * Stores where this sweep stopped reading, so the next one carries on.
+	 *
+	 * Zero means "start from the beginning", which is both the initial state and
+	 * what a sweep that reached the end writes back. The cursor is an optimisation
+	 * for finding stalled runs, not a record of anything, so a lost or stale value
+	 * costs a repeated scan rather than correctness.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param int $after Highest run ID examined.
+	 * @return void
+	 */
+	private function remember_cursor( int $after ): void {
+		update_option( self::CURSOR_OPTION, max( 0, $after ), false );
 	}
 
 	/**
@@ -224,6 +317,18 @@ final class Stall_Sweeper {
 		}
 
 		$prompt = Prompt::load( $run->prompt_id() );
+
+		/*
+		 * A disabled prompt is treated like a removed one. It still loads, so the
+		 * ordinary give-up path would conclude the run and arm the prompt's next
+		 * occurrence — leaving a prompt somebody switched off with a queued action
+		 * and a next-run time the editor displays. The action cancels itself when
+		 * it eventually fires, but until then the readout says the opposite of
+		 * what the setting says.
+		 */
+		if ( null !== $prompt && ! $prompt->enabled() ) {
+			$prompt = null;
+		}
 
 		if ( null === $prompt ) {
 			$this->give_up(
@@ -246,7 +351,7 @@ final class Stall_Sweeper {
 					'autoscribe_run_stalled',
 					sprintf(
 						/* translators: %d: number of restarts already attempted. */
-						__( 'This run stopped part-way %d times and was given up on. Whatever it had reserved against the monthly cap has been released. A host that ends requests early is the usual cause; see the system cron guidance in the README.', 'autoscribe' ),
+						__( 'This run stopped part-way %d times and was given up on. Whatever it had reserved against the monthly cap has been released. The usual cause is a host ending requests before they finish: check this site\'s PHP max_execution_time and memory limit.', 'autoscribe' ),
 						self::MAX_RESTARTS
 					)
 				)
@@ -296,6 +401,15 @@ final class Stall_Sweeper {
 		$this->scheduler->cancel_step_actions( $run->id() );
 
 		if ( null === $prompt ) {
+			/*
+			 * Nothing to conclude for a prompt that is gone or switched off: there
+			 * is no next occurrence to arm, and no failure worth mailing about a
+			 * deliberate act. The attempt counter still belongs to the run series
+			 * that just ended, so it goes.
+			 */
+			Queued_Run_Handler::forget_attempts( $run->prompt_id() );
+			$this->scheduler->cancel( $run->prompt_id() );
+
 			return;
 		}
 
