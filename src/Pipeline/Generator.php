@@ -85,17 +85,10 @@ final class Generator {
 		$prompt = Prompt::load( $prompt_id );
 
 		if ( null === $prompt ) {
-			return new WP_Error(
-				'autoscribe_unknown_prompt',
-				sprintf(
-					/* translators: %d: post ID. */
-					__( 'No prompt exists with ID %d.', 'autoscribe' ),
-					$prompt_id
-				)
-			);
+			return $this->unknown_prompt( $prompt_id );
 		}
 
-		$run = Run::start( $prompt_id, $attempt );
+		$run = $this->open( $prompt_id, $attempt );
 
 		if ( is_wp_error( $run ) ) {
 			return $run;
@@ -103,12 +96,6 @@ final class Generator {
 
 		$grounded = $prompt->grounding_enabled() ? 1 : 0;
 		$pricing  = new Pricing_Table();
-
-		$adopted = $this->adopt( $prompt_id, $run, $attempt );
-
-		if ( is_wp_error( $adopted ) ) {
-			return $adopted;
-		}
 
 		/*
 		 * The sequence itself lives in Pipeline, and this loop is one of its two
@@ -166,6 +153,28 @@ final class Generator {
 			return $article;
 		}
 
+		return $this->finalise( $prompt, $run, $article, $status_override, $pricing, $grounded );
+	}
+
+	/**
+	 * Publishes the finished run and closes it.
+	 *
+	 * Split out of run() so the queue driver can reach it. It is the tail of the
+	 * sequence rather than a step in it: unlike the five steps it does not read
+	 * its position from runs.step, and it is the only part that decides what the
+	 * post's final status should be.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Prompt        $prompt          Prompt being run.
+	 * @param Run           $run             Run recording progress.
+	 * @param Article       $article         The generated article.
+	 * @param string|null   $status_override Final post status, or null for the prompt's mode.
+	 * @param Pricing_Table $pricing         Rate table for settling the cost.
+	 * @param int           $grounded        Number of grounded requests made.
+	 * @return array<string, int|string>|WP_Error
+	 */
+	public function finalise( Prompt $prompt, Run $run, Article $article, ?string $status_override, Pricing_Table $pricing, int $grounded ): array|WP_Error {
 		$post_id       = (int) $run->post_id();
 		$attachment_id = (int) ( $run->payload()['image']['attachment_id'] ?? 0 );
 
@@ -214,6 +223,90 @@ final class Generator {
 			'status'        => $status,
 			'cost_cents'    => $cost,
 		);
+	}
+
+	/**
+	 * Opens a run and binds any draft it inherits, without advancing it.
+	 *
+	 * The synchronous driver goes straight on to the steps. The queue driver
+	 * stops here and arms the first step as its own action, which is the whole
+	 * point of section 5's split: opening a run is cheap, and everything after it
+	 * is not.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param int $prompt_id Prompt to run.
+	 * @param int $attempt   Attempt number this run represents.
+	 * @return Run|WP_Error
+	 */
+	public function open( int $prompt_id, int $attempt = 1 ): Run|WP_Error {
+		$run = Run::start( $prompt_id, $attempt );
+
+		if ( is_wp_error( $run ) ) {
+			return $run;
+		}
+
+		$adopted = $this->adopt( $prompt_id, $run, $attempt );
+
+		return is_wp_error( $adopted ) ? $adopted : $run;
+	}
+
+	/**
+	 * Returns the error for a prompt that no longer exists.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param int $prompt_id Prompt that was asked for.
+	 * @return WP_Error
+	 */
+	public function unknown_prompt( int $prompt_id ): WP_Error {
+		return new WP_Error(
+			'autoscribe_unknown_prompt',
+			sprintf(
+				/* translators: %d: post ID. */
+				__( 'No prompt exists with ID %d.', 'autoscribe' ),
+				$prompt_id
+			)
+		);
+	}
+
+	/**
+	 * Advances a run by one step, for the queue driver.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Prompt $prompt Prompt being run.
+	 * @param Run    $run    Run recording progress.
+	 * @return string|null|WP_Error Step performed, null when none remained, or an error.
+	 */
+	public function advance( Prompt $prompt, Run $run ): string|null|WP_Error {
+		return $this->pipeline->advance( $prompt, $run );
+	}
+
+	/**
+	 * Closes a run that failed, unless the step closed it already.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Run      $run   Run to close.
+	 * @param WP_Error $error Why it failed.
+	 * @param int      $grounded Number of grounded requests made.
+	 * @return void
+	 */
+	public function close( Run $run, WP_Error $error, int $grounded ): void {
+		$this->close_failed( $run, $error, new Pricing_Table(), $grounded );
+	}
+
+	/**
+	 * Reads the finished article back off a run, for the queue driver.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Run $run Run recording progress.
+	 * @return Article|WP_Error
+	 */
+	public function article( Run $run ): Article|WP_Error {
+		return $this->pipeline_article( $run );
 	}
 
 	/**

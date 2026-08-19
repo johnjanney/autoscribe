@@ -87,11 +87,11 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
-Phases 1 to 3a of the pipeline split scoped in `docs/PIPELINE-SPLIT.md`.
-Groundwork: nothing here changes what a site sees today, because the pipeline
-still runs as one action and no step is ever re-entered. It is on `main` rather
-than in a release because the phases it prepares for are what earn the version
-bump.
+Phases 1 to 3 of the pipeline split scoped in `docs/PIPELINE-SPLIT.md`.
+Phase 3 is the first part a site would notice: a scheduled run is now advanced
+one step per queued request instead of running end to end in one. It is on `main`
+rather than in a release because the phases still to come — the finalise step and
+the stall sweeper — are what make the split worth having.
 
 ### Fixed
 
@@ -103,6 +103,11 @@ bump.
   `Run::merge_payload()`, which merges at the top level. The grounding sources
   recorded under section 7.1 were the data that would have been lost.
 
+- **`Run::post_id()` reported no post for any run it had not opened itself.** It
+  returned an in-memory property, which is correct only while a run exists solely
+  inside the request that opened it. A run advanced one queued action at a time
+  is a fresh object each time, so publishing failed with "Invalid post ID" on
+  every scheduled run. It reads the row when nothing is cached.
 - **A step that could not be recorded as completed made the run repeat it.**
   Everything downstream reads `runs.step` to know where a run has got to, and
   the write that advances it discarded its result. A refused write therefore
@@ -228,6 +233,20 @@ time.
 
 ### Changed
 
+- **A scheduled run is advanced one queued action per step.** Section 5 asks for
+  this because a run takes 30 to 120 seconds and a host with a short
+  `max_execution_time` terminates it part-way. Each request now carries at most
+  one provider call, so what a kill costs is one step rather than an article.
+
+  The new `autoscribe_run_step` hook carries a run ID and nothing else, and the
+  position is read from `runs.step` — one hook rather than one per step, so the
+  queue never holds routing the run row could contradict. "Run now" and Preview
+  keep the synchronous path, and both drivers advance the same sequence.
+
+  **What this does not yet give is recovery.** Action Scheduler marks a killed
+  action failed and stops; it does not retry. A killed step still strands a run
+  until the stall sweeper lands. The window shrinks from six provider calls to
+  one; it does not close.
 - **The step order moved out of `Generator` and into a `Pipeline` class.**
   Section 5 needs a run to be resumable from its row alone, because a queued
   action arrives knowing only a run ID — and an order expressed as a sequence of

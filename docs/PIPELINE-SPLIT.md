@@ -167,10 +167,11 @@ getting `skipped_budget` for no visible reason. The sweeper must release the
 reservation when it gives up on a run. **This risk is created by the split and
 does not exist today.**
 
-**Decision D-10 inverts.** "A retry opens a new run row" was chosen *because*
-steps are not idempotent. Once they are, the same row is reused within a run, and
-D-10 governs only whole-run retries. `DECISIONS.md` needs updating rather than
-quietly contradicting the code — that drift is what the audits kept catching.
+**Decision D-10 does not invert after all.** The expectation was that step
+resume would force the same run row to be reused across retries. It has not: the
+step chain lives *within* one run, and a retry still opens a new row exactly as
+D-10 says. Resume within a run is what phase 5's sweeper will use, and it works
+on the row the chain already owns. D-10 stands as written.
 
 **Draft adoption is touched.** `adoptable_draft()` keys off the immediately
 preceding run row and its attempt number. Reusing a row within a run does not
@@ -196,7 +197,7 @@ Each phase is independently landable and leaves the plugin working.
 | 1 | ✅ `merge_payload()`, fix `record_sources()` clobbering, `Article::to_array()/from_array()` | Small | Done. Took three PRs: the document, then the cache semantics, then propagating the write failure to a caller that discarded it |
 | 2 | ✅ Idempotency guards in the five steps + tests that each step run twice does the work once | Medium | Done. `Step_Assemble_Post` was already idempotent; the image work moved out of `Generator` into `Step_Generate_Image` so its guard could be re-entered and therefore tested |
 | 3a | ✅ Extract the sequence into `Pipeline`; `Generator` drives it in a loop | Medium | Done. Pure refactor — every existing test passes unchanged, which is the safety net |
-| 3b | Dispatcher, `autoscribe_run_step` hook, queued path advances one step per action | Medium | The visible change |
+| 3b | ✅ Dispatcher, `autoscribe_run_step` hook, queued path advances one step per action | Medium | Done. `Run::post_id()` had to start reading the row — it returned an in-memory property that only the object which wrote it ever had |
 | 4 | Finalise step; re-arm on every terminal path | Small | |
 | 5 | **Stall sweeper** + reservation release on give-up | Medium | §4.4 and §5; do not defer this one |
 | 6 | Docs: `DECISIONS.md` D-10, README known-limitations, `INSTRUCTIONS.md` on latency | Small | |
