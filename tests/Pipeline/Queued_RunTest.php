@@ -14,6 +14,7 @@ use AutoScribe\Pipeline\Pipeline;
 use AutoScribe\Pipeline\Queued_Run_Handler;
 use AutoScribe\Pipeline\Retry_Policy;
 use AutoScribe\Pipeline\Run;
+use AutoScribe\Prompts\Prompt_Post_Type;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Scheduling\Scheduler;
 use AutoScribe\Security\Key_Store;
@@ -788,6 +789,105 @@ final class Queued_RunTest extends WP_UnitTestCase {
 			'success'          => array( 'success' ),
 			'provider failure' => array( 'provider_failure' ),
 			'prompt edited'    => array( 'prompt_edited' ),
+		);
+	}
+
+	/**
+	 * Disabling a prompt clears its attempt counter even with no run in flight.
+	 *
+	 * The usual way a prompt is switched off is while nothing is executing: the
+	 * only queued action is a pending retry, and saving the prompt cancels it. No
+	 * queue callback runs, so neither of the handler's abandon paths is reached
+	 * and the counter survives — re-enabling the prompt then resumes midway
+	 * through the retry series, which is the leak the previous change set out to
+	 * close, through a door it did not cover.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_disabling_a_prompt_clears_the_counter_with_no_run_in_flight(): void {
+		$prompt_id = $this->create_prompt();
+
+		update_post_meta( $prompt_id, Queued_Run_Handler::ATTEMPT_META, 2 );
+		update_post_meta( $prompt_id, '_autoscribe_enabled', 0 );
+
+		do_action( 'save_post_' . Prompt_Post_Type::POST_TYPE, $prompt_id );
+
+		$this->assertSame(
+			'',
+			get_post_meta( $prompt_id, Queued_Run_Handler::ATTEMPT_META, true )
+		);
+	}
+
+	/**
+	 * Trashing a prompt clears its attempt counter too.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_trashing_a_prompt_clears_the_counter(): void {
+		$prompt_id = $this->create_prompt();
+
+		update_post_meta( $prompt_id, Queued_Run_Handler::ATTEMPT_META, 3 );
+
+		wp_trash_post( $prompt_id );
+
+		$this->assertSame(
+			'',
+			get_post_meta( $prompt_id, Queued_Run_Handler::ATTEMPT_META, true )
+		);
+	}
+
+	/**
+	 * A run that cannot record its grounded call is still charged for it.
+	 *
+	 * The failure path of the marker, and it undoes the marker's own purpose: the
+	 * grounded response has arrived and been paid for, the write that remembers
+	 * it is refused, and settlement then reads back a zero and drops the
+	 * surcharge — understating exactly what the marker exists to capture.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_a_run_is_charged_for_grounding_it_could_not_record(): void {
+		global $wpdb;
+
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt( array( 'grounding_enabled' => 1 ) );
+
+		$this->handler()->handle( $prompt_id );
+
+		$run_id = (int) Run::latest_for_prompt( $prompt_id )['id'];
+
+		$this->handler()->handle_step( $run_id );
+		$this->handler()->handle_step( $run_id );
+
+		// Refuse only the write that records the grounded call.
+		$break = static function ( $query ) {
+			return str_contains( (string) $query, 'grounded_calls' )
+				? 'UPDATE autoscribe_no_such_table SET payload = 1 WHERE id = 1'
+				: $query;
+		};
+
+		add_filter( 'query', $break );
+		$wpdb->suppress_errors( true );
+
+		$this->handler()->handle_step( $run_id );
+
+		$wpdb->suppress_errors( false );
+		remove_filter( 'query', $break );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame( Run::STATUS_FAILED, $row['status'] );
+		$this->assertGreaterThan(
+			$this->ungrounded_cost( $row ),
+			(int) $row['cost_cents'],
+			'The grounded request was made and paid for, so it must be settled even though recording it failed.'
 		);
 	}
 

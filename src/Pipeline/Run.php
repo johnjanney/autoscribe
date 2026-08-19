@@ -121,6 +121,14 @@ final class Run {
 	private bool $usage_loaded = false;
 
 	/**
+	 * Grounded requests this object has seen made, whether or not they persisted.
+	 *
+	 * @since 1.1.0
+	 * @var int
+	 */
+	private int $grounded_calls = 0;
+
+	/**
 	 * Wraps an existing row ID.
 	 *
 	 * @since 0.3.0
@@ -500,7 +508,31 @@ final class Run {
 	 * @return int
 	 */
 	public function grounded_calls(): int {
-		return max( 0, (int) ( $this->payload()['grounded_calls'] ?? 0 ) );
+		return max( $this->grounded_calls, (int) ( $this->payload()['grounded_calls'] ?? 0 ) );
+	}
+
+	/**
+	 * Records that this run made a grounded request.
+	 *
+	 * The in-memory count is set whether or not the write lands, which is the
+	 * opposite of how the payload cache behaves — and deliberately so. That cache
+	 * is a claim about what the database contains, and a claim the database just
+	 * refused is a lie. This is a statement about what the run did, and a refused
+	 * write does not un-make a request the provider has already answered and
+	 * charged for.
+	 *
+	 * So the persisted value is what a later action reads, and the in-memory one
+	 * is a floor for the action that made the call — which is the action that
+	 * will settle the run when the write failure ends it.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return bool True when the marker also reached the database.
+	 */
+	public function record_grounded_call(): bool {
+		++$this->grounded_calls;
+
+		return $this->merge_payload( array( 'grounded_calls' => $this->grounded_calls ) );
 	}
 
 	/**

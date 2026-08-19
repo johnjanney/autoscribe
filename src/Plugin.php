@@ -195,6 +195,10 @@ final class Plugin {
 		if ( ! $prompt->enabled() ) {
 			$this->scheduler->cancel( $post_id );
 
+			// A retry series belongs to the run that started it, not to the
+			// prompt's next life. See Queued_Run_Handler::forget_attempts().
+			Queued_Run_Handler::forget_attempts( $post_id );
+
 			return;
 		}
 
@@ -225,6 +229,7 @@ final class Plugin {
 		}
 
 		$this->scheduler->cancel( $post_id );
+		Queued_Run_Handler::forget_attempts( $post_id );
 	}
 
 	/**

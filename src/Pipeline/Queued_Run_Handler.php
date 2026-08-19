@@ -280,6 +280,25 @@ final class Queued_Run_Handler {
 	private function abandon( int $prompt_id ): void {
 		$this->scheduler->cancel( $prompt_id );
 
+		self::forget_attempts( $prompt_id );
+	}
+
+	/**
+	 * Clears a prompt's retry counter.
+	 *
+	 * Shared with the prompt's own lifecycle rather than kept to the queue
+	 * callbacks, because the ordinary way a prompt is switched off is while
+	 * nothing is executing: the only queued action is a pending retry, and saving
+	 * the prompt cancels it. No callback runs, so nothing in this class would
+	 * ever reach the cleanup, and re-enabling the prompt would resume midway
+	 * through a retry series it had abandoned.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param int $prompt_id Prompt to reset.
+	 * @return void
+	 */
+	public static function forget_attempts( int $prompt_id ): void {
 		delete_post_meta( $prompt_id, self::ATTEMPT_META );
 	}
 
