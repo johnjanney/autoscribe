@@ -677,6 +677,121 @@ final class Queued_RunTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Abandoning a run for a disabled prompt clears its attempt counter.
+	 *
+	 * The counter lives on the prompt, because a retry opens a new run and it has
+	 * to survive across rows. Every other terminal path clears it; the two that
+	 * abandon a run because the prompt is gone or off did not. A prompt disabled
+	 * part-way through a retry series and later switched back on therefore
+	 * resumed with the counter still raised, and quietly got fewer attempts than
+	 * it should — one of those failures that only shows up as "it gave up sooner
+	 * than it used to".
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_abandoning_a_run_clears_the_attempt_counter(): void {
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt();
+
+		update_post_meta( $prompt_id, Queued_Run_Handler::ATTEMPT_META, 2 );
+
+		$this->handler()->handle( $prompt_id );
+
+		$run_id = (int) Run::latest_for_prompt( $prompt_id )['id'];
+
+		$this->handler()->handle_step( $run_id );
+
+		update_post_meta( $prompt_id, '_autoscribe_enabled', 0 );
+
+		$this->handler()->handle_step( $run_id );
+
+		$this->assertSame( Run::STATUS_FAILED, Run::latest_for_prompt( $prompt_id )['status'] );
+		$this->assertSame(
+			'',
+			get_post_meta( $prompt_id, Queued_Run_Handler::ATTEMPT_META, true ),
+			'A prompt switched back on should start its next run with a fresh count.'
+		);
+	}
+
+	/**
+	 * However a run ends, the prompt is left able to run again.
+	 *
+	 * Section 4.3 asks for the next occurrence to be armed whether a run
+	 * succeeded or failed, so that one bad night does not stop a prompt for good.
+	 * A chain spread across queued actions has many more ways to end than a run
+	 * inside a single request did, and each was written separately — this asserts
+	 * the property they are all supposed to share, rather than trusting that each
+	 * new exit remembered it.
+	 *
+	 * The two paths that abandon a run because the prompt is gone or switched off
+	 * are deliberately not here: cancelling is the point of them.
+	 *
+	 * @dataProvider terminal_outcomes
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param string $outcome How to end the run.
+	 * @return void
+	 */
+	public function test_every_terminal_path_leaves_a_future_occurrence( string $outcome ): void {
+		$prompt_id = $this->create_prompt(
+			array(
+				'schedule_type'   => 'daily',
+				'schedule_params' => array( 'time' => '06:00' ),
+			)
+		);
+
+		if ( 'provider_failure' === $outcome ) {
+			$this->mock_provider_failure( 401 );
+		} else {
+			$this->mock_provider_success();
+		}
+
+		if ( 'prompt_edited' === $outcome ) {
+			$this->handler()->handle( $prompt_id );
+
+			$run_id = (int) Run::latest_for_prompt( $prompt_id )['id'];
+
+			$this->handler()->handle_step( $run_id );
+
+			update_post_meta( $prompt_id, '_autoscribe_target_word_count', 4321 );
+
+			$this->handler()->handle_step( $run_id );
+		} else {
+			$this->run_to_completion( $prompt_id );
+		}
+
+		$this->assertNotEmpty(
+			as_get_scheduled_actions(
+				array(
+					'hook'   => Scheduler::HOOK_RUN_PROMPT,
+					'status' => \ActionScheduler_Store::STATUS_PENDING,
+				),
+				'ids'
+			),
+			$outcome . ' left the prompt with no future occurrence.'
+		);
+	}
+
+	/**
+	 * The ways a run can end that should still leave the prompt scheduled.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return array<string, array<int, string>>
+	 */
+	public function terminal_outcomes(): array {
+		return array(
+			'success'          => array( 'success' ),
+			'provider failure' => array( 'provider_failure' ),
+			'prompt edited'    => array( 'prompt_edited' ),
+		);
+	}
+
+	/**
 	 * A disabled prompt is not run at all.
 	 *
 	 * @since 0.8.0

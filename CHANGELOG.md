@@ -87,7 +87,7 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
-Phases 1 to 3 of the pipeline split scoped in `docs/PIPELINE-SPLIT.md`.
+Phases 1 to 4 of the pipeline split scoped in `docs/PIPELINE-SPLIT.md`.
 Phase 3 is the first part a site would notice: a scheduled run is now advanced
 one step per queued request instead of running end to end in one. It is on `main`
 rather than in a release because the phases still to come — the finalise step and
@@ -103,6 +103,12 @@ the stall sweeper — are what make the split worth having.
   `Run::merge_payload()`, which merges at the top level. The grounding sources
   recorded under section 7.1 were the data that would have been lost.
 
+- **Abandoning a run left the prompt's attempt counter raised.** The counter
+  lives on the prompt because a retry opens a new run and the count has to
+  survive across rows. Every terminal path clears it except the two that abandon
+  a run when the prompt is gone or switched off, so a prompt disabled part-way
+  through a retry series and later switched back on resumed mid-series and
+  quietly got fewer attempts than it should.
 - **A prompt deleted mid-chain killed the queue action instead of closing the
   run.** The branch that handles a removed prompt went on to ask that prompt
   whether grounding was enabled, which is a fatal when there is no prompt left.

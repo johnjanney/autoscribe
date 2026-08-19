@@ -149,6 +149,16 @@ believing the job is done.
 
 ### 4.5 Retry, re-arm, and the terminal step
 
+> **Settled in phase 4.** Making finalise a queued step of its own needed no
+> change: by the time the chain reaches it, the action that publishes has already
+> done nothing but cheap checks — the image step finished in the action before.
+> Adding it to `Pipeline::STEPS` would have meant carrying `status_override` in
+> the payload and changing what `next_step()` means for a Preview run, in
+> exchange for no behaviour a site could observe. The re-arm half was the real
+> work, and it found the attempt counter leaking on the two paths that abandon a
+> run.
+
+
 The finalise tail — status transition, `settle_cost()`, `succeed()`, review
 email, budget warning — becomes the last step. Re-arming the next occurrence
 must happen there **and** on every terminal failure path, including the
@@ -198,7 +208,7 @@ Each phase is independently landable and leaves the plugin working.
 | 2 | ✅ Idempotency guards in the five steps + tests that each step run twice does the work once | Medium | Done. `Step_Assemble_Post` was already idempotent; the image work moved out of `Generator` into `Step_Generate_Image` so its guard could be re-entered and therefore tested |
 | 3a | ✅ Extract the sequence into `Pipeline`; `Generator` drives it in a loop | Medium | Done. Pure refactor — every existing test passes unchanged, which is the safety net |
 | 3b | ✅ Dispatcher, `autoscribe_run_step` hook, queued path advances one step per action | Medium | Done. `Run::post_id()` had to start reading the row — it returned an in-memory property that only the object which wrote it ever had |
-| 4 | Finalise step; re-arm on every terminal path | Small | |
+| 4 | ✅ Re-arm on every terminal path | Small | Done. The finalise *step* turned out to need no work — see below |
 | 5 | **Stall sweeper** + reservation release on give-up | Medium | §4.4 and §5; do not defer this one |
 | 6 | Docs: `DECISIONS.md` D-10, README known-limitations, `INSTRUCTIONS.md` on latency | Small | |
 
