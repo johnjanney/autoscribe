@@ -71,6 +71,14 @@
 		caching a lock would defeat the point of taking one.
 		-->
 		<exclude-pattern>*/src/Cost/Spend_Lock.php</exclude-pattern>
+		<!--
+		The stall sweep asks Action Scheduler's own table which runs have a queued
+		action. Its store exposes no bulk query, and asking one run at a time made
+		a bounded sweep into two thousand round trips against the queue it is
+		watching. Scoped to that one wrapper, which falls back to the public API
+		when the table is not the one it expects.
+		-->
+		<exclude-pattern>*/src/Scheduling/Scheduler.php</exclude-pattern>
 		<exclude-pattern>*/src/Content/Topic_Deduplicator.php</exclude-pattern>
 		<!--
 		The run log tests need rows with specific started_at values to exercise

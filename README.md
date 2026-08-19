@@ -13,7 +13,7 @@ everything, and inserts the post as a draft or publishes it.
 
 | | |
 |---|---|
-| **Version** | 1.0.0 |
+| **Version** | 1.1.1 |
 | **Requires WordPress** | 6.4 |
 | **Requires PHP** | 8.1 |
 | **License** | GPL-2.0-or-later |
@@ -191,9 +191,10 @@ way to tell it apart from the rest of the site.
 
 ## Status and known limitations
 
-Version 1.1.0. Two external audits have been run against this plugin, and both
-found real defects; the findings, the fixes, and the two findings rejected with
-evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 282 tests run
+Version 1.1.1. Three external audits have been run against this plugin, and all
+three found real defects; the findings, the fixes, and the three findings
+rejected with evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`.
+291 tests run
 against PHP 8.1, 8.2, and 8.3 on every push.
 
 Two brief requirements are knowingly not met: the live next-run readout and the
@@ -213,11 +214,22 @@ The first item is the one that matters most:
   this cap as a brake, not a wall.
 - **A scheduled run is spread across several queued requests, so it takes
   minutes rather than seconds.** One step per request is what keeps a host with a
-  short `max_execution_time` from killing an article part-way, and the cost is
-  wall-clock time: each step waits for the queue's next pass. "Run now" and
-  "Preview" are unaffected — both still answer in the request that asked. If your
-  queue only runs when someone visits the site, set up the system cron described
-  above, or a scheduled run will crawl.
+  short `max_execution_time` from killing a whole article, and the cost is
+  wall-clock time: each step waits for the queue's next pass. If your queue only
+  runs when someone visits the site, set up the system cron described above, or a
+  scheduled run will crawl.
+
+  **Preview** still answers in the request that asked for it. **Run now** queues
+  a run and returns immediately; the run log reports the outcome. It has always
+  worked that way — section 9.2 of the brief asks for a streamed result and
+  `DECISIONS.md` records why it queues instead.
+- **A single step can still exceed a short request limit.** The topic step asks
+  again when its first proposal collides, and the article step makes one repair
+  call when a response does not validate, so one step can make two provider
+  calls at up to 120 seconds each. Splitting the pipeline reduced how much a
+  killed request costs — one step rather than the article — and the stall sweeper
+  restarts what was killed. It did not make any single request short enough to
+  guarantee survival on a 30-second host.
 - The Settings screen's save path and its connection-test controls have no
   automated coverage. The prompt editor's save path does.
 - The "Next run" readout in the prompt editor reflects the *saved* schedule. It

@@ -1102,3 +1102,239 @@ name all 29 strings with the file and line each came from.
 was introduced by this pull request, so the omission is this pull request's to
 fix. The other 28 came with it because there is no honest way to regenerate the
 template for one string only.
+
+---
+---
+
+# Response to the third Codex review
+
+**Responding to:** the fresh-review section of [CODEX-REVIEW.md](CODEX-REVIEW.md),
+dated 19 August 2026 against `076b6dd` (tag `v1.1.0`)
+**Response date:** 19 August 2026
+**Release under response:** 1.1.0 → 1.1.1
+
+---
+
+## Summary
+
+Ten findings. **Nine confirmed, one rejected on evidence.** All nine are fixed.
+
+| Finding | Verdict | Status |
+|---|---|---|
+| CR-01 Paid usage lost on a write failure | Confirmed | Fixed |
+| CR-02 Not one provider call per request | Confirmed as documentation drift | Docs corrected; not split |
+| CR-03 Globals outside the run's configuration | Confirmed ×2 | Fixed |
+| CR-04 Image reported attached when it is not | Confirmed | Fixed |
+| CR-05 Terminal writes unchecked | Confirmed | Fixed |
+| CR-06 No atomic step claim | Confirmed | Fixed — one half rejected, see below |
+| CR-07 `gemini-3.7-flash` not in the catalog | **Rejected** — listed as New Stable today | No change |
+| CR-08 Sweep makes ~2,000 queue queries | Confirmed | Fixed |
+| CR-09 Monthly warning not exactly once | Confirmed | Fixed |
+| CR-10 Documentation contradictions | Confirmed | Fixed |
+
+**Verification:** PHPCS passes with zero errors and zero warnings. PHPUnit passes
+291 tests and 1,083 assertions, up from 286 and 1,066. No test contacts a live
+provider.
+
+---
+
+## The pattern worth naming before the findings
+
+CR-01 and CR-05 are the same defect as five the pipeline split already fixed: a
+write whose result nobody consumed. I ran an audit for exactly that during the
+split and reported it clean.
+
+The audit was wrong because of how I scoped it. I grepped for callers of methods
+that **already returned** `bool` — which found the call sites I had recently
+changed and, by construction, none of the methods still returning `void`.
+`record_text_usage()`, `record_image()`, `succeed()`, `fail()`, and `skip()` were
+never in the search. An audit shaped around the previous symptom finds the
+previous symptom.
+
+The right question was "which writes can fail without anyone noticing", and it
+should have been asked of every write, not of the ones I had just touched.
+
+---
+
+## CR-01 — Confirmed. Fixed.
+
+A provider that answers has charged for the answer. Whether the run log accepts
+the counters afterwards is a separate question, and the two were not connected:
+`record_text_usage()` and `record_image()` returned `void`, so a refused write
+left the step to finish, and the next queued action loaded a fresh run and read
+the row. The charge was real; the record of it was gone, and with it the
+month-to-date total the section 7.4 cap reads.
+
+Both writes now report. A step that cannot store what it just spent returns
+`autoscribe_usage_not_recorded` and the run stops.
+
+**Why stopping books the charge rather than losing it.** The counters are held in
+memory whether or not the write lands, and the object that made the call is the
+object that settles the run when the failure ends it. So the cost is measured
+from figures the row never accepted — which is the point. Carrying on is what
+loses them.
+
+## CR-02 — Confirmed as drift. Documentation corrected; the calls are not split.
+
+The claim is false and I should not have made it. The topic step asks again when
+its first proposal collides, and the article step makes one repair call when a
+response does not validate. A single step can make two provider calls at up to
+120 seconds each.
+
+`INSTRUCTIONS.md` already said so — I corrected it in the previous round — while
+the changelog and the scope document still claimed the bound. That is the worst
+version of the error: the accurate text existed and contradicted the promotional
+text.
+
+**I have corrected the claim rather than split the calls.** The reasoning:
+
+- The re-ask and the repair are *within* one logical step. Splitting them adds
+  two pipeline positions, two payload keys, and two more places for a run to
+  stall, to buy a bound that is still not a guarantee — a single 120-second call
+  already exceeds a 30-second limit on its own.
+- What the split actually bought is not a request-size bound but a **blast
+  radius**: a killed request costs a step rather than an article, and the sweeper
+  restarts it. That is true, useful, and now what the documentation says.
+
+Splitting them remains reasonable future work. It is not a correctness fix, and
+describing the current behaviour honestly is.
+
+## CR-03 — Confirmed, both halves. Fixed.
+
+The fingerprint covered prompt fields and nothing else, so two global settings
+could change under an open run.
+
+**The site default model.** A prompt with a blank model field resolves through it
+at every step, so changing it mid-run swaps the model the budget was checked for.
+The defaults for the prompt's providers are now part of the fingerprint.
+
+**Force review.** This one needed a different answer rather than the same one.
+Failing a run because the safety catch was *tightened* would be perverse, and
+failing it because the catch was loosened is weaker than simply not honouring the
+loosening. So an open run keeps the stricter of the setting it started under and
+the setting at the end: turning review on mid-run takes effect immediately,
+turning it off never applies to an article already being written.
+
+## CR-04 — Confirmed. Fixed.
+
+`set_post_thumbnail()` returns `false` when it fails **and** when the post already
+carries that thumbnail, so its return value cannot distinguish a refusal from a
+no-op — which is presumably why it was ignored. The post is now asked what its
+thumbnail actually is.
+
+That matters most for `required` mode: a run reporting success without a featured
+image has published precisely what that mode exists to prevent.
+
+Attachment metadata is verified the same way, and for the same reason —
+`wp_update_attachment_metadata()` has the identical false-means-two-things
+problem. An attachment whose metadata could not be built is removed rather than
+left half-attached.
+
+## CR-05 — Confirmed. Fixed.
+
+Every ending is now one conditional update that only an open run accepts, and it
+reports whether this call is the one that closed the run.
+
+The conditional part is worth more than the reporting. It makes closing a
+*transition* rather than a write, so a duplicate action and a stall sweep that
+already gave up both lose the race instead of closing a run twice — and closing
+twice means a second review email, a second re-arm, and a settled cost
+overwritten by a later one.
+
+Nothing is announced until the transition succeeds. Publishing was never the
+risky part; announcing off a transition that did not happen was.
+
+## CR-06 — Confirmed. Fixed, with one half of the suggested remedy rejected.
+
+The per-step guards are reads, and a read cannot exclude anyone: two workers can
+both find no stored article and both buy one. `Run::claim_step()` is now a
+compare-and-swap on the run's position, taken before anything is spent. The
+loser stands down having paid nothing.
+
+**Unique scheduling is not usable here, and this was tested rather than
+reasoned.** Action Scheduler's uniqueness counts actions that are pending *or in
+progress*, and every step arms its successor from inside itself — so the action
+doing the arming is itself the duplicate. Setting `unique` stops the chain dead
+after its first step, which is what happened when I tried it.
+
+Uniqueness would have prevented a second action row. The claim prevents a second
+worker spending, which is the property that matters.
+
+## CR-07 — Rejected. `gemini-3.7-flash` is listed as a stable model today.
+
+This is the second review to raise it and the second time the cited page says the
+opposite. Retrieved 19 August 2026 from
+[Google's Gemini model catalog](https://ai.google.dev/gemini-api/docs/models) —
+the same URL the finding cites:
+
+- `gemini-3.7-flash` — **"New Stable"**, described as the latest and most capable
+  Flash model.
+- `gemini-3.6-flash` — "Stable", described as the *previous-generation* Flash
+  model.
+
+So the finding's premise, that the catalog lists 3.6 but not 3.7, does not hold
+against the catalog. Putting 3.6 first would make the plugin default to a model
+Google itself labels previous-generation.
+
+Two things in the finding stand regardless, and are already how the plugin works:
+the model field is user-editable with a connection test, and `Model_Resolver`
+puts the adapter's suggestion last, behind the prompt field and the site default.
+Section 2.2 of the brief requires exactly that, because this is a dependency that
+moves faster than releases do.
+
+No live model-list call has been made against a funded key. This conclusion rests
+on first-party documentation, as the finding's does.
+
+## CR-08 — Confirmed. Fixed.
+
+One queue query per candidate run, up to two thousand per sweep, against the
+queue the sweep exists to watch. Now one query per page, matched against the
+page's run IDs.
+
+Action Scheduler's store exposes no bulk query for this, so the wrapper reads its
+table directly and falls back to the per-run API when the table is not the one it
+expects — a site using the legacy post-based store, or a substituted store, gets
+correct answers slowly rather than wrong answers quickly.
+
+## CR-09 — Confirmed. Fixed.
+
+Read-then-update is not a claim. Two runs finishing together could both see the
+old month and both send the one email section 7.4 allows.
+
+The month is now claimed with `add_option()`, because only one caller can create
+a row that does not exist. The option name carries the month, so the insert *is*
+the claim and the loser is told so.
+
+## CR-10 — Confirmed. Fixed.
+
+Three separate errors, all mine:
+
+- **The README version table said 1.0.0.** Wrong since 1.0.1, through six
+  releases. I have been updating the status paragraph and never looked at the
+  table above it.
+- **"Run now and Preview both answer in the request that asked" is false.** Run
+  now queues and always has; `DECISIONS.md` D-19 explains why, and I contradicted
+  my own decision record while writing release notes.
+- **The one-provider-call claim** — see CR-02.
+
+---
+
+## On the findings not fixed
+
+The review's remediation list also asks for tests that dispatch the bundled
+Action Scheduler queue end to end, MariaDB in CI, and a built-archive activation
+smoke test. Those remain open and are recorded in the README's known limitations.
+They are infrastructure work rather than defects, and none of them is a claim the
+documentation currently makes.
+
+---
+
+## Where this leaves the release
+
+Nine of ten findings fixed, one rejected with the evidence above. Two of the nine
+— the lost usage and the unchecked terminal writes — were financial-control
+defects that predate the pipeline split and that my own audit should have caught.
+
+1.1.1 is a patch release. The known deviations from the brief are unchanged: Run
+now does not stream, the next-run readout is not live, the duplicate threshold is
+78 rather than 82, and there is still no screenshot.

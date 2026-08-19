@@ -139,10 +139,34 @@ final class Image_Sideloader {
 
 		$attachment_id = (int) $attachment_id;
 
-		wp_update_attachment_metadata(
-			$attachment_id,
-			wp_generate_attachment_metadata( $attachment_id, $upload['file'] )
-		);
+		/*
+		 * Metadata is what gives an attachment its sizes, so an attachment
+		 * without it is a picture WordPress cannot render responsively — the
+		 * theme falls back to the full-size original, or to nothing. Worth
+		 * failing over rather than attaching quietly and hoping.
+		 */
+		$metadata = wp_generate_attachment_metadata( $attachment_id, $upload['file'] );
+
+		if ( is_array( $metadata ) && array() !== $metadata ) {
+			wp_update_attachment_metadata( $attachment_id, $metadata );
+		}
+
+		/*
+		 * Read back rather than trust the return value: wp_update_attachment_
+		 * metadata() reports false when the write fails *and* when the value is
+		 * already what was passed, exactly like set_post_thumbnail(). What the
+		 * attachment actually holds is the only answer that distinguishes them.
+		 */
+		$stored = wp_get_attachment_metadata( $attachment_id );
+
+		if ( ! is_array( $stored ) || array() === $stored ) {
+			wp_delete_attachment( $attachment_id, true );
+
+			return new WP_Error(
+				'autoscribe_image_metadata_failed',
+				__( 'The image was saved but WordPress could not build its attachment metadata, so it was removed rather than left half-attached.', 'autoscribe' )
+			);
+		}
 
 		update_post_meta( $attachment_id, '_wp_attachment_image_alt', $alt_text );
 		update_post_meta( $attachment_id, self::GENERATED_META, 1 );

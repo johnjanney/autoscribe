@@ -156,7 +156,9 @@ final class Step_Generate_Body {
 			return $result;
 		}
 
-		$run->record_text_usage( $result->model(), $result->usage()->input_tokens(), $result->usage()->output_tokens() );
+		if ( ! $run->record_text_usage( $result->model(), $result->usage()->input_tokens(), $result->usage()->output_tokens() ) ) {
+			return $this->usage_not_recorded();
+		}
 
 		/*
 		 * Record that this run really made a grounded request, rather than
@@ -229,15 +231,30 @@ final class Step_Generate_Body {
 
 		// Only the repair call's own tokens. The first call's were added when it
 		// returned, and record_text_usage accumulates.
-		$run->record_text_usage(
-			$second->model(),
-			$second->usage()->input_tokens(),
-			$second->usage()->output_tokens()
-		);
+		if ( ! $run->record_text_usage( $second->model(), $second->usage()->input_tokens(), $second->usage()->output_tokens() ) ) {
+			return $this->usage_not_recorded();
+		}
 
 		$repaired = $this->validator->validate( $second->text() );
 
 		return is_wp_error( $repaired ) ? $repaired : $this->remember( $run, $repaired );
+	}
+
+	/**
+	 * Returns the error for a paid call whose usage could not be stored.
+	 *
+	 * See Step_Propose_Topic::usage_not_recorded(): the provider has already
+	 * charged, and only this request still holds the figures.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return WP_Error
+	 */
+	private function usage_not_recorded(): WP_Error {
+		return new WP_Error(
+			'autoscribe_usage_not_recorded',
+			__( 'A provider call was made and charged for, but the run log would not record what it used. The run was stopped so the charge is still counted against the monthly cap.', 'autoscribe' )
+		);
 	}
 
 	/**

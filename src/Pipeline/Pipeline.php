@@ -166,9 +166,20 @@ final class Pipeline {
 	 *                              or the step's error.
 	 */
 	public function advance( Prompt $prompt, Run $run ): string|null|WP_Error {
-		$step = $this->next_step( $run );
+		$completed = $run->step();
+		$step      = $this->next_step( $run );
 
 		if ( null === $step ) {
+			return null;
+		}
+
+		/*
+		 * Claim the position before doing anything that costs money. Two workers
+		 * can otherwise both read the same position and both pay for the same
+		 * step — the per-step guards are reads, and a read cannot exclude anyone.
+		 * The loser stops here having spent nothing.
+		 */
+		if ( ! $run->claim_step( $completed ) ) {
 			return null;
 		}
 
