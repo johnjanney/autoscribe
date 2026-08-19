@@ -110,6 +110,16 @@ for are what earn the version bump.
   built from it. Both now cache only once the write is accepted, and drop the
   cache on a refusal so the next read goes back to the database.
 
+- **A grounded run published even when its sources could not be recorded.** The
+  section 7.1 source URLs are the only record of what third-party text entered
+  the model context. `Step_Generate_Body` discarded the result of writing them,
+  so a refused write published the article anyway — without its Sources block
+  where the prompt asked for one, and with no provenance record either way. The
+  run now stops. That costs an article already paid for, which is the right
+  trade: the refusal is the runs row rejecting writes, and assembly, settlement,
+  and closing the run all write to that same row, so the run could not complete
+  correctly in any case.
+
 ### Added
 
 - `Run::merge_payload()` and `Run::payload()`, the read and write side of the
