@@ -7,6 +7,7 @@
 
 namespace AutoScribe\Tests\Pipeline;
 
+use AutoScribe\Cost\Budget_Guard;
 use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Pipeline;
 use AutoScribe\Pipeline\Queued_Run_Handler;
@@ -262,6 +263,37 @@ final class Queued_RunTest extends WP_UnitTestCase {
 		$this->handler()->handle_step( 999999 );
 
 		$this->assertTrue( true );
+	}
+
+	/**
+	 * A scheduled run contributes what it spent to the monthly total.
+	 *
+	 * The end-to-end form of the accounting defect. A run advanced across actions
+	 * settled to zero, so the month-to-date total never moved however many
+	 * articles were generated — and a cap that never sees spending never fires.
+	 * Section 7.4's whole mechanism rests on this number.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_a_scheduled_run_is_counted_against_the_monthly_cap(): void {
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt();
+
+		$this->run_to_completion( $prompt_id );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertIsArray( $row );
+		$this->assertSame( Run::STATUS_SUCCESS, $row['status'] );
+		$this->assertGreaterThan( 0, (int) $row['cost_cents'], 'A run that made paid calls must not settle to zero.' );
+		$this->assertGreaterThan(
+			0,
+			( new Budget_Guard() )->month_to_date_cents( $prompt_id ),
+			'A completed run has to show up in the month-to-date total, or the cap cannot fire.'
+		);
 	}
 
 	/**

@@ -201,4 +201,51 @@ final class Cost_AccountingTest extends WP_UnitTestCase {
 
 		return $row;
 	}
+
+	/**
+	 * A run advanced across actions settles what it really spent.
+	 *
+	 * Usage is accumulated in memory and written out, which is correct only while
+	 * one object sees every call. Under the queue driver each action gets a fresh
+	 * Run, so the tokens of one step overwrote the last step's, and the object
+	 * that settles the cost saw no usage at all and replaced the reservation with
+	 * zero. Every scheduled run then reported spending nothing, the monthly total
+	 * never moved, and the section 7.4 cap could not fire.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_usage_survives_being_reloaded_between_actions(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+
+		$run->record_text_usage( 'claude-opus-5', 1000, 2000 );
+
+		// A later action: same row, different object, as the queue produces.
+		$reloaded = Run::load( $run->id() );
+
+		$this->assertInstanceOf( Run::class, $reloaded );
+
+		$reloaded->record_text_usage( 'claude-opus-5', 500, 700 );
+
+		$this->assertTrue( $reloaded->has_usage(), 'A reloaded run must see what it already spent.' );
+
+		$settled = Run::load( $run->id() );
+
+		$this->assertInstanceOf( Run::class, $settled );
+		$this->assertTrue( $settled->has_usage(), 'The object that settles the cost must see the usage.' );
+
+		$cost = $settled->settle_cost( new Pricing_Table() );
+
+		$this->assertGreaterThan( 0, $cost, 'A run that made paid calls must not settle to zero.' );
+
+		// Accumulated, not overwritten: 1500 in and 2700 out.
+		$this->assertSame(
+			( new Pricing_Table() )->cost_cents( 'claude-opus-5', 1500, 2700 ),
+			$cost
+		);
+	}
 }

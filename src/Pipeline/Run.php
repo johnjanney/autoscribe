@@ -113,6 +113,14 @@ final class Run {
 	);
 
 	/**
+	 * Whether the usage above has been read back from the row yet.
+	 *
+	 * @since 1.1.0
+	 * @var bool
+	 */
+	private bool $usage_loaded = false;
+
+	/**
 	 * Wraps an existing row ID.
 	 *
 	 * @since 0.3.0
@@ -301,6 +309,8 @@ final class Run {
 	 * @return void
 	 */
 	public function record_text_usage( string $model, int $input_tokens, int $output_tokens ): void {
+		$this->load_usage();
+
 		$this->usage['text_model']    = $model;
 		$this->usage['input_tokens']  = (int) $this->usage['input_tokens'] + max( 0, $input_tokens );
 		$this->usage['output_tokens'] = (int) $this->usage['output_tokens'] + max( 0, $output_tokens );
@@ -323,6 +333,8 @@ final class Run {
 	 * @return bool
 	 */
 	public function has_usage(): bool {
+		$this->load_usage();
+
 		return (int) $this->usage['input_tokens'] > 0
 			|| (int) $this->usage['output_tokens'] > 0
 			|| (int) $this->usage['image_count'] > 0;
@@ -337,6 +349,8 @@ final class Run {
 	 * @return void
 	 */
 	public function record_image( string $model ): void {
+		$this->load_usage();
+
 		$this->usage['image_model'] = $model;
 		$this->usage['image_count'] = 1;
 
@@ -591,6 +605,57 @@ final class Run {
 	 */
 	public function status(): string {
 		return (string) $this->column( 'status' );
+	}
+
+	/**
+	 * Reads the recorded usage back off the row, once.
+	 *
+	 * The counters are accumulated in memory and written out whole, which is
+	 * correct only while one object sees every call a run makes. A run advanced
+	 * one queued action at a time is a fresh object each time, so without this
+	 * each step's tokens overwrote the last step's, and the object that settles
+	 * the cost saw no usage at all — replacing the reservation with zero, so a
+	 * scheduled run reported spending nothing, the month-to-date total never
+	 * moved, and the section 7.4 cap could not fire.
+	 *
+	 * Read once and then trusted: within a single action this object is the only
+	 * writer, and re-reading before every accumulation would cost a query per
+	 * call to save nothing.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	private function load_usage(): void {
+		if ( $this->usage_loaded ) {
+			return;
+		}
+
+		// Set first: the read below must not recurse through a caller of this.
+		$this->usage_loaded = true;
+
+		global $wpdb;
+
+		$row = $wpdb->get_row(
+			$wpdb->prepare(
+				'SELECT text_model, image_model, input_tokens, output_tokens, image_count FROM %i WHERE id = %d',
+				Activation::table_name(),
+				$this->id
+			),
+			ARRAY_A
+		);
+
+		if ( ! is_array( $row ) ) {
+			return;
+		}
+
+		$this->usage = array(
+			'text_model'    => (string) $row['text_model'],
+			'image_model'   => (string) $row['image_model'],
+			'input_tokens'  => (int) $row['input_tokens'],
+			'output_tokens' => (int) $row['output_tokens'],
+			'image_count'   => (int) $row['image_count'],
+		);
 	}
 
 	/**
@@ -985,6 +1050,8 @@ final class Run {
 	 * @return int Cost in cents.
 	 */
 	private function measured_cents( ?Pricing_Table $pricing, int $grounded_calls = 0 ): int {
+		$this->load_usage();
+
 		if ( ! $this->has_usage() ) {
 			return 0;
 		}
