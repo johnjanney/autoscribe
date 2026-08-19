@@ -35,6 +35,14 @@ defined( 'ABSPATH' ) || exit;
 final class Generator {
 
 	/**
+	 * Error code for a run that something else closed first.
+	 *
+	 * @since 1.1.1
+	 * @var string
+	 */
+	public const CLOSE_RACE_LOST = 'autoscribe_run_already_closed';
+
+	/**
 	 * The ordered generation sequence.
 	 *
 	 * @since 1.1.0
@@ -218,9 +226,17 @@ final class Generator {
 		 * how one finished article becomes two emails and two schedules.
 		 */
 		if ( ! $run->succeed() ) {
+			/*
+			 * Its own code, because losing this race is not a failure and must not
+			 * be reported as one. Whoever won it has already sent the review mail
+			 * and armed the next occurrence; a loser that reported an ordinary
+			 * error would have the handler send a failure notice and re-arm on top
+			 * — the duplicate announcement this check exists to prevent, arriving
+			 * by the other door.
+			 */
 			return new WP_Error(
-				'autoscribe_state_not_recorded',
-				__( 'The post was published, but this run could not be closed in the run log — most likely because something else closed it first. No notification was sent and the schedule was left alone, so nothing has been done twice.', 'autoscribe' )
+				self::CLOSE_RACE_LOST,
+				__( 'This run was already closed by something else, so it was left alone. Whatever closed it has reported the outcome.', 'autoscribe' )
 			);
 		}
 

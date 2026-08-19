@@ -114,6 +114,34 @@ already returned a value, so the ones still returning `void` were never in it.
   — two workers could both find no stored article and both buy one. A
   compare-and-swap on the run's position now decides between them before either
   spends.
+
+  Two defects in that guard were found before release and are fixed with it. A
+  worker that lost the claim reported it the same way as a finished sequence, so
+  instead of standing down it finished the run — closing a run with no article
+  early on, or publishing before the winner had attached the image. And a claim
+  left behind by a killed worker could never be taken again, because the next
+  worker read the position with the claim marker stripped and asked for a value
+  the column no longer held; the stall sweeper releases an abandoned claim before
+  restarting, which it can do safely because it has already established that
+  nothing is advancing the run.
+- **A refused featured-image write was a fatal error, not a handled one.** The
+  error was built and then overwritten by the attachment ID a line later, so the
+  code below it called a method on an integer — `required` mode could not fail,
+  `fallback` could not fall back, and `optional` could not shrug. All three
+  crashed instead. Introduced by the featured-image verification above and caught
+  before release.
+- **Two new guards were cancelling each other out.** Putting force review into
+  the abort fingerprint stopped a run whenever the switch moved in either
+  direction, which meant the rule that keeps the stricter of the opening and
+  closing settings could never be reached — and tightening a safety catch would
+  have killed the run it was meant to protect. Force review is governed by that
+  rule alone; the fingerprint covers the settings where continuing under a
+  changed value is simply wrong.
+- **Losing the race to close a run was reported as a failure.** The winner had
+  already sent the review mail and armed the next occurrence, and the loser's
+  error then had the handler send a failure notice and re-arm on top — the
+  duplicate announcement the check was added to prevent, arriving by the other
+  door. It is now its own outcome and the loser stands down.
 - **A site default model changed mid-run applied to the rest of that run**, so a
   run could finish under a model its budget was never checked for. The site
   defaults a run depends on are part of what it was checked against.

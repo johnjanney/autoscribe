@@ -1260,6 +1260,37 @@ after its first step, which is what happened when I tried it.
 Uniqueness would have prevented a second action row. The claim prevents a second
 worker spending, which is the property that matters.
 
+**Two defects in the claim itself were caught before release**, both raised on the
+pull request that added it, and both worth recording because they are the cost of
+introducing a lock into a system that did not have one:
+
+- *A lost claim looked like a finished sequence.* Both returned the same value, so
+  the losing worker did not stand down — it finished the run, closing a run with
+  no article early on, or publishing before the winner had attached the image. A
+  lost claim is now its own outcome.
+- *A refused featured-image write became a fatal error.* The verification added
+  for CR-04 built its error and then let the next line overwrite it with the
+  attachment ID, so every image mode crashed on a refused thumbnail rather than
+  handling it.
+- *Two guards cancelled each other out.* Putting force review into the abort
+  fingerprint (CR-03) meant any change to it stopped the run, so the monotonic
+  rule added for the same finding could never be reached — and tightening a
+  safety catch would have killed the run it protects. The fingerprint covers the
+  settings where continuing under a changed value is wrong; force review is
+  governed by the monotonic rule alone.
+- *Losing the close race was reported as a failure.* The winner had already sent
+  the review mail and armed the next occurrence; the loser's error then had the
+  handler send a failure notice and re-arm on top. The duplicate announcement the
+  CR-05 check exists to prevent, arriving by the other door.
+- *An abandoned claim could never be taken again.* A worker killed mid-step leaves
+  the marker behind, and the next worker reads the position with the marker
+  stripped — so it asked to claim a value the column no longer held, and failed
+  every time. A run interrupted at any point after claiming could never resume and
+  was given up on instead: the guard defeating the sweeper that exists to recover
+  from exactly that. The sweeper now releases an abandoned claim before
+  restarting, which it can do safely because it has already established that
+  nothing is queued or running for the run.
+
 ## CR-07 — Rejected. `gemini-3.7-flash` is listed as a stable model today.
 
 This is the second review to raise it and the second time the cited page says the

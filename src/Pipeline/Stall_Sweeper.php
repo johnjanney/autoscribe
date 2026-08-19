@@ -363,6 +363,14 @@ final class Stall_Sweeper {
 		}
 
 		/*
+		 * Give up any claim the killed worker was holding. Nothing is queued or
+		 * running for this run — that is how it got here — so the claim belongs
+		 * to a worker that is not coming back, and leaving it would make the
+		 * restart fail its claim and stall again immediately.
+		 */
+		$this->recover_claim( $run_id );
+
+		/*
 		 * Count the restart before arming it. A restart that is recorded and then
 		 * fails to arm is swept again and counted again, which converges on
 		 * giving up; one that is armed and then fails to record would be restarted
@@ -379,6 +387,20 @@ final class Stall_Sweeper {
 		}
 
 		return true;
+	}
+
+	/**
+	 * Releases a claim left behind by a worker that never returned.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @param int $run_id Run to free.
+	 * @return bool True when a claim was released.
+	 */
+	public function recover_claim( int $run_id ): bool {
+		$run = Run::load( $run_id );
+
+		return null !== $run && $run->release_claim();
 	}
 
 	/**

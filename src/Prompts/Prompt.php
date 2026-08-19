@@ -399,15 +399,17 @@ final class Prompt {
 		 * model the budget was checked for. The default model of each provider
 		 * this prompt uses is therefore part of what the run was checked against.
 		 *
-		 * Force review is here for a different reason: not because a run should
-		 * fail when it changes, but so it cannot be *relaxed* under an open run
-		 * without anyone noticing. Tightening it is handled separately — see
-		 * Generator::final_status(), where an open run keeps the stricter of the
-		 * two settings.
+		 * Force review is deliberately *not* here. Including it would fail a run
+		 * whenever the switch moved in either direction, and failing a run because
+		 * its safety catch was tightened is perverse — worse, it would mean the
+		 * rule in Generator::final_status() that keeps the stricter of the two
+		 * settings could never be reached, because the run would already have been
+		 * stopped. The two guards would cancel out. That rule handles this
+		 * setting; this fingerprint handles the ones where continuing under a
+		 * changed value is simply wrong.
 		 */
 		$values['@default_text_model']  = Settings::default_model( $this->text_provider() );
 		$values['@default_image_model'] = Settings::default_model( $this->image_provider() );
-		$values['@force_review']        = Settings::force_review() ? '1' : '0';
 
 		ksort( $values );
 

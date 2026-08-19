@@ -739,6 +739,48 @@ final class Run {
 	}
 
 	/**
+	 * Gives up a claim left behind by a worker that never came back.
+	 *
+	 * A claim is deliberately not self-expiring: while a worker holds it, nothing
+	 * else should take the step. But a worker killed mid-step leaves the marker
+	 * in place, and the next worker reads the position with the marker stripped —
+	 * so it asks to claim a value the column no longer holds and fails, every
+	 * time. Left alone, that turns the guard into a trap: a run interrupted at any
+	 * point after claiming can never resume, and is given up on instead.
+	 *
+	 * Only the stall sweeper calls this, and only once it has established that
+	 * nothing is queued or running for the run — which is as close to "the worker
+	 * is gone" as this side of the system can get.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return bool True when a claim was released.
+	 */
+	public function release_claim(): bool {
+		global $wpdb;
+
+		$raw = $this->raw_step();
+
+		if ( ! str_starts_with( $raw, self::CLAIM_PREFIX ) ) {
+			return false;
+		}
+
+		$released = $wpdb->update(
+			Activation::table_name(),
+			array( 'step' => self::completed_step( $raw ) ),
+			array(
+				'id'     => $this->id,
+				'step'   => $raw,
+				'status' => self::STATUS_RUNNING,
+			),
+			array( '%s' ),
+			array( '%d', '%s', '%s' )
+		);
+
+		return is_numeric( $released ) && (int) $released > 0;
+	}
+
+	/**
 	 * Returns the last completed step, ignoring any claim marker on it.
 	 *
 	 * @since 1.1.1

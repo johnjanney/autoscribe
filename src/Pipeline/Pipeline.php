@@ -44,6 +44,19 @@ defined( 'ABSPATH' ) || exit;
 final class Pipeline {
 
 	/**
+	 * Returned when another worker holds the claim on this run's next step.
+	 *
+	 * Distinct from null, which means the sequence is finished. Reporting a lost
+	 * claim as "nothing left to do" made the losing worker publish the run: early
+	 * on it closed a run that had no article, and at the image step it could
+	 * publish before the worker holding the claim had attached the picture.
+	 *
+	 * @since 1.1.1
+	 * @var string
+	 */
+	public const CLAIM_LOST = 'claim_lost';
+
+	/**
 	 * The steps, in order, named as they are recorded in runs.step.
 	 *
 	 * @since 1.1.0
@@ -180,7 +193,7 @@ final class Pipeline {
 		 * The loser stops here having spent nothing.
 		 */
 		if ( ! $run->claim_step( $completed ) ) {
-			return null;
+			return self::CLAIM_LOST;
 		}
 
 		$result = $this->perform( $step, $prompt, $run );

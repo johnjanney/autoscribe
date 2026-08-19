@@ -110,6 +110,7 @@
 		quarter of an hour for the threshold would not be a test.
 		-->
 		<exclude-pattern>*/tests/Pipeline/Stall_SweeperTest.php</exclude-pattern>
+		<exclude-pattern>*/tests/Pipeline/Write_FailureTest.php</exclude-pattern>
 	</rule>
 
 	<!--
@@ -173,6 +174,7 @@
 	</rule>
 	<rule ref="WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode">
 		<exclude-pattern>*/tests/Providers/*</exclude-pattern>
+		<exclude-pattern>*/tests/Pipeline/Write_FailureTest.php</exclude-pattern>
 		<!--
 		The idempotency tests mock an OpenAI image response, which carries its
 		bytes as b64_json. Same documented wire format, same reason.

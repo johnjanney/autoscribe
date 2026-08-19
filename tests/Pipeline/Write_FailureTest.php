@@ -12,6 +12,7 @@ use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Queued_Run_Handler;
 use AutoScribe\Pipeline\Retry_Policy;
 use AutoScribe\Pipeline\Run;
+use AutoScribe\Pipeline\Stall_Sweeper;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Scheduling\Scheduler;
 use AutoScribe\Security\Key_Store;
@@ -140,11 +141,7 @@ final class Write_FailureTest extends WP_UnitTestCase {
 		$this->mock_provider_success();
 
 		$prompt_id = $this->create_prompt();
-		$handler   = new Queued_Run_Handler(
-			new Generator( new Provider_Registry() ),
-			new Scheduler(),
-			new Retry_Policy()
-		);
+		$handler   = $this->handler();
 
 		$handler->handle( $prompt_id );
 
@@ -170,6 +167,252 @@ final class Write_FailureTest extends WP_UnitTestCase {
 			$calls,
 			$this->captured_requests(),
 			'A worker that did not win the claim must not reach a provider.'
+		);
+	}
+
+	/**
+	 * A worker that loses the claim stands down; it does not finish the run.
+	 *
+	 * "No steps remain" and "somebody else is doing this step" are different
+	 * things, and returning the same value for both made the loser finish the
+	 * run: early on it closed a run with no article, and at the image step it
+	 * could publish before the winner had attached the picture.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return void
+	 */
+	public function test_a_worker_that_loses_the_claim_does_not_finish_the_run(): void {
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt();
+		$handler   = $this->handler();
+
+		$handler->handle( $prompt_id );
+
+		$run_id = (int) Run::latest_for_prompt( $prompt_id )['id'];
+
+		// Somebody else takes the first step's claim.
+		$this->assertTrue( Run::load( $run_id )->claim_step( '' ) );
+
+		$handler->handle_step( $run_id );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame(
+			Run::STATUS_RUNNING,
+			$row['status'],
+			'The loser must leave the run to the worker holding the claim.'
+		);
+		$this->assertSame( 0, (int) $row['post_id'] );
+	}
+
+	/**
+	 * A step abandoned mid-claim can be recovered.
+	 *
+	 * A worker killed after claiming leaves the claim marker behind. The sweeper
+	 * arms another action, and that worker reads the position with the marker
+	 * stripped — so it asked to claim a value the column no longer held, and
+	 * failed every time. Every recovery lost its claim, which meant a run
+	 * interrupted at any point after claiming could never resume and was given up
+	 * on instead: the sweeper defeated by the guard.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return void
+	 */
+	public function test_a_step_abandoned_mid_claim_can_be_recovered(): void {
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt();
+		$handler   = $this->handler();
+
+		$handler->handle( $prompt_id );
+
+		$run_id = (int) Run::latest_for_prompt( $prompt_id )['id'];
+
+		$handler->handle_step( $run_id );
+
+		$this->assertSame( 'budget_check', (string) Run::latest_for_prompt( $prompt_id )['step'] );
+
+		// A worker claims the next step and is then killed.
+		$this->assertTrue( Run::load( $run_id )->claim_step( 'budget_check' ) );
+
+		/*
+		 * Drive the sweep rather than calling the release directly: the property
+		 * under test is that a stalled run recovers, not that a method exists.
+		 * Calling it directly passes whether or not the sweeper uses it, which is
+		 * what the first version of this test did.
+		 */
+		global $wpdb;
+
+		$wpdb->update(
+			\AutoScribe\Activation::table_name(),
+			array( 'started_at' => gmdate( 'Y-m-d H:i:s', time() - ( Stall_Sweeper::threshold() * 2 ) ) ),
+			array( 'id' => $run_id ),
+			array( '%s' ),
+			array( '%d' )
+		);
+
+		( new Scheduler() )->cancel_step_actions( $run_id );
+
+		$this->assertSame( 1, ( new Stall_Sweeper( new Scheduler(), $handler ) )->handle() );
+
+		$handler->handle_step( $run_id );
+
+		$this->assertSame(
+			'propose_topic',
+			(string) Run::latest_for_prompt( $prompt_id )['step'],
+			'A recovered run has to be able to take its own claim again.'
+		);
+	}
+
+	/**
+	 * A refused featured-image write is handled, not fatal.
+	 *
+	 * The error was built correctly and then overwritten by the attachment ID a
+	 * line later, so the mode handling below it called get_error_code() on an
+	 * integer. Required mode could not fail, fallback mode could not fall back,
+	 * and optional mode could not shrug: all three fatalled instead.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return void
+	 */
+	public function test_a_refused_featured_image_write_is_handled(): void {
+		$this->mock_text_and_image_success();
+
+		$prompt_id = $this->create_prompt(
+			array(
+				'image_mode'     => 'required',
+				'image_provider' => 'openai_image',
+				'image_model'    => 'gpt-image-2',
+			)
+		);
+
+		Key_Store::set( 'openai_image', 'test-key' );
+
+		// Refuse the thumbnail write, so the attachment exists but never attaches.
+		$refuse = static function ( $check, $object_id, $meta_key ) {
+			unset( $object_id );
+
+			return '_thumbnail_id' === $meta_key ? false : $check;
+		};
+
+		add_filter( 'update_post_metadata', $refuse, 10, 3 );
+		add_filter( 'add_post_metadata', $refuse, 10, 3 );
+
+		$result = ( new Generator( new Provider_Registry() ) )->run( $prompt_id );
+
+		remove_filter( 'update_post_metadata', $refuse, 10 );
+		remove_filter( 'add_post_metadata', $refuse, 10 );
+
+		$this->assertWPError( $result, 'Required mode must fail rather than fatal.' );
+		$this->assertSame( 'autoscribe_thumbnail_not_set', $result->get_error_code() );
+	}
+
+	/**
+	 * Toggling force review mid-run does not stop the run.
+	 *
+	 * Two guards were fighting: putting force review in the abort fingerprint
+	 * failed the run whenever the switch moved in either direction, so the rule
+	 * that keeps the stricter of the opening and closing settings could never be
+	 * reached — and tightening a safety catch would have killed the run it was
+	 * meant to protect.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return void
+	 */
+	public function test_toggling_force_review_mid_run_holds_the_post_as_a_draft(): void {
+		$this->mock_provider_success();
+
+		update_option( 'autoscribe_settings', array( 'force_review' => true ) );
+
+		$prompt_id = $this->create_prompt( array( 'post_status_mode' => 'auto' ) );
+		$handler   = $this->handler();
+
+		$handler->handle( $prompt_id );
+
+		$run_id = (int) Run::latest_for_prompt( $prompt_id )['id'];
+
+		$handler->handle_step( $run_id );
+
+		// Switched off part-way through, after the run began under review.
+		update_option( 'autoscribe_settings', array( 'force_review' => false ) );
+
+		for ( $i = 0; $i < 6; $i++ ) {
+			$handler->handle_step( $run_id );
+		}
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame( Run::STATUS_SUCCESS, $row['status'], 'The run should finish, not be aborted.' );
+		$this->assertSame(
+			'draft',
+			get_post_status( (int) $row['post_id'] ),
+			'A run that began under review must not publish because the switch moved.'
+		);
+	}
+
+	/**
+	 * Answers text and image calls with valid payloads.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return void
+	 */
+	private function mock_text_and_image_success(): void {
+		$article  = $this->article_payload();
+		$proposal = array(
+			'title'     => (string) $article['title'],
+			'topic_key' => (string) $article['topic_key'],
+		);
+
+		$this->install_responder(
+			function ( $args ) use ( $article, $proposal ) {
+				$body = json_decode( (string) $args['body'], true );
+
+				if ( ! isset( $body['messages'] ) ) {
+					return array(
+						'headers'  => array(),
+						'body'     => (string) wp_json_encode(
+							array(
+								'data' => array(
+									array( 'b64_json' => base64_encode( (string) file_get_contents( DIR_TESTDATA . '/images/canola.jpg' ) ) ), // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+								),
+							)
+						),
+						'response' => array(
+							'code'    => 200,
+							'message' => 'OK',
+						),
+						'cookies'  => array(),
+						'filename' => null,
+					);
+				}
+
+				$payload = ( isset( $body['max_tokens'] ) && 512 === (int) $body['max_tokens'] )
+					? $proposal
+					: $article;
+
+				return $this->anthropic_response( $payload );
+			}
+		);
+	}
+
+	/**
+	 * Builds the queued handler under test.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return Queued_Run_Handler
+	 */
+	private function handler(): Queued_Run_Handler {
+		return new Queued_Run_Handler(
+			new Generator( new Provider_Registry() ),
+			new Scheduler(),
+			new Retry_Policy()
 		);
 	}
 
