@@ -133,7 +133,10 @@ bump.
   an absolute write rather than an increment, which now has a test saying so.
 - A stored article is re-validated before it is trusted. Paying twice is bad;
   publishing from a truncated payload row is worse, so a stored copy that no
-  longer satisfies the schema is regenerated rather than used.
+  longer satisfies the schema is regenerated rather than used. Discarding it
+  clears its source URLs too: they name text the replacement never read, and
+  leaving them behind would publish a provenance record for an article that was
+  thrown away.
 - `Run::merge_payload()` and `Run::payload()`, the read and write side of the
   document the split pipeline will pass step state through.
 - `Run::record_sources()` reports whether its write succeeded.
