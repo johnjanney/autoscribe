@@ -159,6 +159,24 @@ final class Step_Generate_Body {
 		$run->record_text_usage( $result->model(), $result->usage()->input_tokens(), $result->usage()->output_tokens() );
 
 		/*
+		 * Record that this run really made a grounded request, rather than
+		 * leaving settlement to infer it from the prompt's current setting. The
+		 * setting is mutable and the run outlives it: an editor who turns
+		 * grounding off after this call would have the surcharge dropped from a
+		 * request already paid for, and one who turns it on beforehand would have
+		 * a surcharge added for a request that never happened. Only the call site
+		 * knows, and only at the moment it calls.
+		 *
+		 * The repair call is sent ungrounded, so this is at most one per run.
+		 */
+		if ( $grounding && ! $run->merge_payload( array( 'grounded_calls' => 1 ) ) ) {
+			return new WP_Error(
+				'autoscribe_state_not_recorded',
+				__( 'The run log could not record that this article used web search, so the run was stopped rather than finishing with a cost that understates what it spent.', 'autoscribe' )
+			);
+		}
+
+		/*
 		 * Section 7.1: keep what the grounded call actually read. Recorded here
 		 * rather than returned, because this step returns the article and the
 		 * sources belong to the run, not to the article.

@@ -103,6 +103,20 @@ the stall sweeper — are what make the split worth having.
   `Run::merge_payload()`, which merges at the top level. The grounding sources
   recorded under section 7.1 were the data that would have been lost.
 
+- **A prompt deleted mid-chain killed the queue action instead of closing the
+  run.** The branch that handles a removed prompt went on to ask that prompt
+  whether grounding was enabled, which is a fatal when there is no prompt left.
+  The action died before the run could be failed or its chain cancelled, so the
+  run stayed open with its budget reservation held — the opposite of what the
+  branch exists to do.
+- **The grounded-request surcharge was settled from the prompt's current
+  setting.** A run outlives an edit, so that was wrong in both directions:
+  disabling grounding after the grounded call dropped the surcharge from a
+  request already paid for, and enabling it beforehand added a surcharge for a
+  request that never happened — the proposal call's own tokens are enough to make
+  settlement apply whatever count it is given. The step that makes the request
+  now records that it made one, and settlement reads that instead. Nothing else
+  can know: the surcharge is not part of the usage providers report.
 - **A retry the queue refused stopped the prompt silently.** The retry branch
   deliberately leaves the regular next occurrence unarmed, because a retry is
   outstanding — so when the queue would not take the retry, the prompt was left

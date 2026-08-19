@@ -9,7 +9,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-19T08:36:01-05:00\n"
+"POT-Creation-Date: 2026-08-19T09:03:57-05:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: autoscribe\n"
@@ -526,38 +526,38 @@ msgstr ""
 msgid "The generated file is not a type this site permits, despite being declared as %s."
 msgstr ""
 
-#: src/Pipeline/Generator.php:140
+#: src/Pipeline/Generator.php:139
 msgid "The run stopped making progress through its steps and was abandoned rather than repeated indefinitely."
 msgstr ""
 
-#: src/Pipeline/Generator.php:272
+#: src/Pipeline/Generator.php:271
 msgid "The settings this run was checked against could not be written to the run log, so the run was stopped rather than starting without a record of them."
 msgstr ""
 
 #. translators: %d: post ID.
-#: src/Pipeline/Generator.php:298
+#: src/Pipeline/Generator.php:297
 #, php-format
 msgid "No prompt exists with ID %d."
 msgstr ""
 
 #. translators: %d: post ID of the draft.
-#: src/Pipeline/Generator.php:387
+#: src/Pipeline/Generator.php:386
 #, php-format
 msgid "The draft left by the previous attempt (post %d) could not be bound to this run, so continuing would have created a second draft beside it. The run was stopped before any provider call."
 msgstr ""
 
-#: src/Pipeline/Generator.php:436
+#: src/Pipeline/Generator.php:435
 msgid "This run produced no article, so there is nothing to publish."
 msgstr ""
 
 #. translators: %s: article title.
-#: src/Pipeline/Generator.php:470
+#: src/Pipeline/Generator.php:469
 #, php-format
 msgid "AutoScribe draft ready for review: %s"
 msgstr ""
 
 #. translators: 1: article title, 2: opening of the article, 3: edit URL.
-#: src/Pipeline/Generator.php:475
+#: src/Pipeline/Generator.php:474
 #, php-format
 msgid ""
 "AutoScribe generated a draft and held it for review.\n"
@@ -571,13 +571,13 @@ msgid ""
 msgstr ""
 
 #. translators: %s: prompt title.
-#: src/Pipeline/Generator.php:507
+#: src/Pipeline/Generator.php:506
 #, php-format
 msgid "AutoScribe run failed: %s"
 msgstr ""
 
 #. translators: 1: prompt title, 2: error message, 3: edit URL.
-#: src/Pipeline/Generator.php:512
+#: src/Pipeline/Generator.php:511
 #, php-format
 msgid ""
 "An AutoScribe prompt failed and will not be retried.\n"
@@ -589,11 +589,11 @@ msgid ""
 "%3$s"
 msgstr ""
 
-#: src/Pipeline/Generator.php:539
+#: src/Pipeline/Generator.php:538
 msgid "AutoScribe has reached 80% of its monthly budget"
 msgstr ""
 
-#: src/Pipeline/Generator.php:540
+#: src/Pipeline/Generator.php:539
 msgid "Estimated AutoScribe spend for this month has passed 80 percent of the configured global cap. Runs will stop once the cap is reached. These figures are estimates; your provider billing is the authority."
 msgstr ""
 
@@ -617,7 +617,7 @@ msgstr ""
 msgid "The prompt was disabled or removed while this run was in progress."
 msgstr ""
 
-#: src/Pipeline/Queued_Run_Handler.php:259
+#: src/Pipeline/Queued_Run_Handler.php:235
 msgid "This prompt was edited while the run was in progress, so the run was stopped rather than finishing under settings it was never checked against. The next scheduled run will use the new settings."
 msgstr ""
 
@@ -665,30 +665,34 @@ msgstr ""
 msgid "This prompt asks for web search grounding, but %s does not offer it. Turn grounding off or choose another text provider."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:183
+#: src/Pipeline/Step_Generate_Body.php:175
+msgid "The run log could not record that this article used web search, so the run was stopped rather than finishing with a cost that understates what it spent."
+msgstr ""
+
+#: src/Pipeline/Step_Generate_Body.php:201
 msgid "The web search sources this article was based on could not be written to the run log. The run was stopped rather than publishing an article with no record of what it read."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:282
+#: src/Pipeline/Step_Generate_Body.php:300
 msgid "The sources belonging to a discarded article could not be cleared from the run log, so the run was stopped rather than risking them being published as the new article's citations."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:306
+#: src/Pipeline/Step_Generate_Body.php:324
 msgid "The generated article could not be written to the run log, so the run was stopped rather than continuing on state that would be lost."
 msgstr ""
 
 #. translators: %s: JSON schema describing the required response.
-#: src/Pipeline/Step_Generate_Body.php:332
+#: src/Pipeline/Step_Generate_Body.php:350
 #, php-format
 msgid "Return one JSON object and nothing else. No prose, no Markdown fences. It must satisfy this JSON Schema: %s"
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:366
+#: src/Pipeline/Step_Generate_Body.php:384
 msgid "Use it only as the agreed topic: write the article for it, and return exactly this title and topic_key in your response."
 msgstr ""
 
 #. translators: 1: original instruction, 2: fenced block holding the rejected response and the validation error.
-#: src/Pipeline/Step_Generate_Body.php:394
+#: src/Pipeline/Step_Generate_Body.php:412
 #, php-format
 msgid ""
 "Original request:\n"
@@ -699,7 +703,7 @@ msgid ""
 "Return a corrected JSON object and nothing else."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:397
+#: src/Pipeline/Step_Generate_Body.php:415
 msgid "Use it only as the response of yours that was rejected and the reason it was rejected."
 msgstr ""
 

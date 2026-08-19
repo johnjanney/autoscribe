@@ -94,8 +94,7 @@ final class Generator {
 			return $run;
 		}
 
-		$grounded = $prompt->grounding_enabled() ? 1 : 0;
-		$pricing  = new Pricing_Table();
+		$pricing = new Pricing_Table();
 
 		/*
 		 * The sequence itself lives in Pipeline, and this loop is one of its two
@@ -128,7 +127,7 @@ final class Generator {
 			}
 
 			if ( is_wp_error( $step ) ) {
-				$this->close_failed( $run, $step, $pricing, $grounded );
+				$this->close_failed( $run, $step, $pricing, $run->grounded_calls() );
 
 				return $step;
 			}
@@ -140,7 +139,7 @@ final class Generator {
 				__( 'The run stopped making progress through its steps and was abandoned rather than repeated indefinitely.', 'autoscribe' )
 			);
 
-			$this->close_failed( $run, $stalled, $pricing, $grounded );
+			$this->close_failed( $run, $stalled, $pricing, $run->grounded_calls() );
 
 			return $stalled;
 		}
@@ -148,12 +147,12 @@ final class Generator {
 		$article = $this->pipeline_article( $run );
 
 		if ( is_wp_error( $article ) ) {
-			$this->close_failed( $run, $article, $pricing, $grounded );
+			$this->close_failed( $run, $article, $pricing, $run->grounded_calls() );
 
 			return $article;
 		}
 
-		return $this->finalise( $prompt, $run, $article, $status_override, $pricing, $grounded );
+		return $this->finalise( $prompt, $run, $article, $status_override, $pricing, $run->grounded_calls() );
 	}
 
 	/**
