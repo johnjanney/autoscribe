@@ -103,6 +103,15 @@ the stall sweeper — are what make the split worth having.
   `Run::merge_payload()`, which merges at the top level. The grounding sources
   recorded under section 7.1 were the data that would have been lost.
 
+- **A prompt edited mid-run applied to the rest of that run.** Every step action
+  reloads the prompt, so an edit landing between two queue passes took effect for
+  the remaining steps: a larger model or a newly required image spending against
+  a cap that was checked for the old settings, and — the case that matters most —
+  a change of publication mode letting a run that began under review finish by
+  publishing, turning section 10's safety model off retrospectively for work
+  already in progress. A run now records a fingerprint of the settings it was
+  checked against and stops if they change. The next occurrence runs under the
+  new settings from the start, which is what the editor asked for.
 - **A scheduled run settled its cost as zero, so the monthly cap could not
   fire.** Token and image usage is accumulated in memory and written out whole,
   which is correct only while one object sees every call a run makes. Advanced

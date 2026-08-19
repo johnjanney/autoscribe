@@ -365,10 +365,39 @@ final class Prompt {
 	}
 
 	/**
-	 * Returns the cached next-run timestamp.
+	 * Returns a fingerprint of the settings a run depends on.
 	 *
-	 * Section 3.2 calls this display-only; the queue is the source of truth.
-	 * Stored as a UTC Unix timestamp, matching the runs table.
+	 * A run used to read its configuration once, because it happened entirely
+	 * inside one request. Spread across queued actions it reads the prompt again
+	 * at every step, so an edit landing part-way through is applied to the
+	 * remaining steps — settings that were never budget-checked, and, if the
+	 * publication mode changed, a run that began under review finishing by
+	 * publishing. Recording this at the start lets a later step notice.
+	 *
+	 * Built from the editor's own field list rather than from every meta key on
+	 * the post, which keeps it to the settings a person can actually change and
+	 * leaves out the ones the plugin writes to the prompt while it runs — the
+	 * cached next-run timestamp and the attempt counter would otherwise make
+	 * every run look edited.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return string
+	 */
+	public function config_fingerprint(): string {
+		$values = array();
+
+		foreach ( array_keys( Prompt_Fields::all() ) as $field ) {
+			$values[ $field ] = $this->raw( $field );
+		}
+
+		ksort( $values );
+
+		return hash( 'sha256', (string) wp_json_encode( $values ) );
+	}
+
+	/**
+	 * Returns the cached next-run timestamp.
 	 *
 	 * @since 0.4.0
 	 *

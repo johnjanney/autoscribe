@@ -246,6 +246,21 @@ final class Generator {
 			return $run;
 		}
 
+		$prompt = Prompt::load( $prompt_id );
+
+		if ( null === $prompt ) {
+			return $this->unknown_prompt( $prompt_id );
+		}
+
+		/*
+		 * Record which configuration this run was checked against. A run spread
+		 * across queued actions reads the prompt again at every step, so an edit
+		 * landing part-way through would apply to the rest of it — settings that
+		 * were never budget-checked, and a run that began under review finishing
+		 * by publishing. The queue driver compares this before each step.
+		 */
+		$run->merge_payload( array( 'config' => $prompt->config_fingerprint() ) );
+
 		$adopted = $this->adopt( $prompt_id, $run, $attempt );
 
 		return is_wp_error( $adopted ) ? $adopted : $run;

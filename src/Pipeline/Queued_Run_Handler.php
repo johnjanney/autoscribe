@@ -156,6 +156,15 @@ final class Queued_Run_Handler {
 			return;
 		}
 
+		$changed = $this->config_changed( $prompt, $run );
+
+		if ( null !== $changed ) {
+			$run->fail( $changed->get_error_message() );
+			$this->conclude( $prompt, $run->attempt(), $changed );
+
+			return;
+		}
+
 		$grounded = $prompt->grounding_enabled() ? 1 : 0;
 		$step     = $this->generator->advance( $prompt, $run );
 
@@ -178,6 +187,50 @@ final class Queued_Run_Handler {
 		}
 
 		$this->finish( $prompt, $run, $grounded );
+	}
+
+	/**
+	 * Returns an error when the prompt was edited after this run started.
+	 *
+	 * A run used to read its configuration once, because it happened inside a
+	 * single request. Spread across queued actions it reads the prompt again at
+	 * every step, so an edit landing part-way through applies to the remaining
+	 * steps: a larger model or a newly required image spends against a cap that
+	 * was checked for the old settings, and a change of publication mode can
+	 * publish a run that began under review — section 10's safety model turned
+	 * off retrospectively for work already in progress.
+	 *
+	 * Stopping is the honest answer rather than a cautious one. Carrying on means
+	 * finishing under settings nobody checked, and the alternative — re-checking
+	 * the budget and continuing — still leaves the earlier steps' output built
+	 * from configuration the run no longer has. The next occurrence runs with the
+	 * new settings from the start, which is what the editor asked for.
+	 *
+	 * A run with no recorded fingerprint is left alone. That is a run opened by
+	 * an earlier version whose chain is still in flight across the upgrade, and
+	 * failing it would be a worse answer than finishing it.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Prompt $prompt Prompt being run.
+	 * @param Run    $run    Run in progress.
+	 * @return WP_Error|null
+	 */
+	private function config_changed( Prompt $prompt, Run $run ): ?WP_Error {
+		$recorded = $run->payload()['config'] ?? '';
+
+		if ( ! is_string( $recorded ) || '' === $recorded ) {
+			return null;
+		}
+
+		if ( hash_equals( $recorded, $prompt->config_fingerprint() ) ) {
+			return null;
+		}
+
+		return new WP_Error(
+			'autoscribe_prompt_changed',
+			__( 'This prompt was edited while the run was in progress, so the run was stopped rather than finishing under settings it was never checked against. The next scheduled run will use the new settings.', 'autoscribe' )
+		);
 	}
 
 	/**
