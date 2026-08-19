@@ -13,7 +13,7 @@ everything, and inserts the post as a draft or publishes it.
 
 | | |
 |---|---|
-| **Version** | 1.1.1 |
+| **Version** | 1.1.2 |
 | **Requires WordPress** | 6.4 |
 | **Requires PHP** | 8.1 |
 | **License** | GPL-2.0-or-later |
@@ -191,10 +191,10 @@ way to tell it apart from the rest of the site.
 
 ## Status and known limitations
 
-Version 1.1.1. Three external audits have been run against this plugin, and all
+Version 1.1.2. Three external audits have been run against this plugin, and all
 three found real defects; the findings, the fixes, and the three findings
 rejected with evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`.
-291 tests run
+299 tests run
 against PHP 8.1, 8.2, and 8.3 on every push.
 
 Two brief requirements are knowingly not met: the live next-run readout and the
