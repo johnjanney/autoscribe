@@ -160,7 +160,7 @@ final class Generator {
 		$inherited = Run::adoptable_draft( $prompt_id, $run->id(), $attempt );
 
 		if ( null !== $inherited ) {
-			$run->record_post( $inherited );
+			$run->adopt_post( $inherited );
 		}
 
 		// Section 7.2: a cheap proposal call, so a duplicate is caught before

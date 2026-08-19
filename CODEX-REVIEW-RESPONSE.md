@@ -856,3 +856,79 @@ requirements named in the README rather than inferred from a passing test count.
 The recommendation for unattended publishing is unchanged and is in the README:
 keep review mode on, and set a spending limit at the provider, because no
 client-side cap is a hard ceiling.
+
+---
+---
+
+# Response to the Codex PR review of 1.0.2
+
+**Responding to:** the automated Codex review on
+[PR #1](https://github.com/johnjanney/autoscribe/pull/1), against `d348dd0`
+**Response date:** 19 August 2026
+**Release under response:** 1.0.2 → 1.0.3
+
+---
+
+## FR-12 — Confirmed. Fixed.
+
+> **P2 — Delay binding the inherited draft until assembly.** When a retry adopts
+> a draft but then hits a transient provider error during topic or body
+> generation, this early `record_post()` makes the failed retry row point to that
+> draft without updating the draft's `_autoscribe_run_id` metadata. The next
+> retry selects this row as its immediate predecessor, but `Run::adoptable_draft()`
+> rejects the draft because its metadata still names the original attempt; a
+> later successful attempt therefore creates a second draft.
+
+Correct in every particular, and it is a regression introduced by the 1.0.2 fix
+for FR-02. Version 1.0.1's ownership check asked only whether the run link was
+non-empty, so it did not care which run the link named. Tightening it to name the
+row being adopted from is what made the missing meta write matter.
+
+The path, verified:
+
+1. Attempt 1 assembles a draft and fails on the image. `Step_Assemble_Post` has
+   written `_autoscribe_run_id = run1` on the post, and `run1.post_id` is the
+   draft.
+2. Attempt 2 adopts. `record_post()` sets `run2.post_id` to the draft. The
+   proposal or body call then fails, so assembly never runs and nothing updates
+   the post's meta, which still reads `run1`.
+3. Attempt 3 selects `run2` as its predecessor, and every other condition holds —
+   failed, attempt 2, still a draft, untouched. The ownership check compares the
+   post's `run1` against `run2.id` and refuses.
+4. Attempt 3 assembles a second draft.
+
+`test_adoption_survives_a_retry_that_fails_before_assembly()` reproduces it: it
+failed with `null is identical to 5` before the fix and passes after.
+
+### On the two remedies offered
+
+The comment offers two. **The parenthetical one — transfer the post metadata at
+adoption — is the one taken**, because the primary suggestion does not hold on
+its own.
+
+Delaying the binding until assembly means a retry that fails before assembly
+leaves its run row with no post at all. The next attempt then selects that row as
+its predecessor, finds `post_id` empty, and has nothing to adopt — so it creates
+a second draft by a different route. The chain needs the failed row to keep
+pointing at the draft it adopted; what was missing was the other half of the
+handover, not the half that was there.
+
+`Run::adopt_post()` now does both together: it records the post on the run and
+moves the post's run link to that run in one operation. The invariant the check
+tests — the post's run link names the run that currently owns it — holds from the
+moment of adoption rather than only after a successful assembly. Splitting those
+two writes is what let them drift apart, so they no longer have separate callers.
+
+Two details worth stating, both checked:
+
+- **The human-edit guard is unaffected.** `update_post_meta()` does not touch
+  `post_modified`, so a draft adopted but never written to still compares as
+  untouched against the failed run's `finished_at`.
+- **The audit link stays meaningful.** Section 10 requires `_autoscribe_run_id`
+  on every generated post so a post can be traced to its run. Naming the run that
+  currently owns the draft is at least as truthful as naming an abandoned earlier
+  attempt, and `Step_Assemble_Post` still overwrites it on a successful write.
+
+The new test asserts both halves of the invariant — that the failed retry row
+still owns the draft, and that the next attempt adopts it — so neither remedy can
+be applied by halves in future without the suite noticing.

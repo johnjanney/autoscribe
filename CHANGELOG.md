@@ -87,6 +87,30 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-08-19
+
+An automated Codex review of the 1.0.2 pull request found a narrow regression in
+the draft-adoption tightening that release shipped. Confirmed, and fixed here
+with the regression test that reproduces it.
+
+### Fixed
+
+- **A retry that adopted a draft and then failed before assembly broke the
+  chain, and a later attempt created the second draft anyway.** Adoption is
+  allowed only when the post's `_autoscribe_run_id` names the run being adopted
+  from, and only `Step_Assemble_Post` writes that meta — so a retry that adopted
+  a draft and then fell over on the topic or body call left its run row pointing
+  at a draft that still named the attempt before it. The next attempt saw the
+  mismatch and refused, which is exactly the duplicate 1.0.2 set out to prevent.
+  Adoption now transfers the post's run link at the same moment it records the
+  post on the run, so the two never disagree.
+
+### Changed
+
+- `Run::adopt_post()` replaces a bare `record_post()` call at the adoption site.
+  Recording the post and moving its run link are one operation, and splitting
+  them is what allowed them to drift apart.
+
 ## [1.0.2] - 2026-08-18
 
 A second Codex review of the 1.0.1 release found that four of its fixes were
