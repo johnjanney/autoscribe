@@ -103,6 +103,15 @@ the stall sweeper — are what make the split worth having.
   `Run::merge_payload()`, which merges at the top level. The grounding sources
   recorded under section 7.1 were the data that would have been lost.
 
+- **A scheduled run settled its cost as zero, so the monthly cap could not
+  fire.** Token and image usage is accumulated in memory and written out whole,
+  which is correct only while one object sees every call a run makes. Advanced
+  one queued action at a time, each step's counters overwrote the last step's —
+  and the object that settles the cost saw no usage at all, replacing the
+  reservation with zero. Every scheduled run therefore reported spending nothing,
+  the month-to-date total never moved however many articles were generated, and
+  section 7.4's cap had nothing to act on. Usage is read back off the row before
+  it is added to.
 - **`Run::post_id()` reported no post for any run it had not opened itself.** It
   returned an in-memory property, which is correct only while a run exists solely
   inside the request that opened it. A run advanced one queued action at a time
