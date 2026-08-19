@@ -191,26 +191,17 @@ way to tell it apart from the rest of the site.
 
 ## Status and known limitations
 
-Version 1.0.5. Two external audits have been run against this plugin, and both
+Version 1.1.0. Two external audits have been run against this plugin, and both
 found real defects; the findings, the fixes, and the two findings rejected with
-evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 221 tests run
+evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 282 tests run
 against PHP 8.1, 8.2, and 8.3 on every push.
 
-Three brief requirements are knowingly not met: the single-action pipeline, the
-live next-run readout, and the screenshot. They are listed below with everything
-else worth knowing before you enable unattended publishing.
+Two brief requirements are knowingly not met: the live next-run readout and the
+screenshot. Both are listed below with everything else worth knowing before you
+enable unattended publishing.
 
-The first two items are the ones that matter most:
+The first item is the one that matters most:
 
-- **The generation pipeline runs as one Action Scheduler action, not one action
-  per step as section 5 of the brief requires.** A run takes 30 to 120 seconds
-  inside a single PHP request, so a host with a short `max_execution_time` can
-  terminate it part-way, and the queue cannot resume from the step that was
-  interrupted — a retry re-runs from the beginning, and pays for it. A draft left
-  behind by a failed run is adopted by that run's own retry rather than
-  duplicated, so this costs you repeated provider calls, not repeated posts. This
-  is the one outstanding architectural gap, and it is planned work rather than a
-  decision to skip.
 - **The monthly budget cap is enforced by a named database lock around the check
   and the reservation.** Concurrent workers on the same database serialise
   through it, so the cap holds against the batch execution Action Scheduler
@@ -220,6 +211,13 @@ The first two items are the ones that matter most:
   plugin falls back to a weaker row-order re-check that narrows the race without
   closing it. Your provider's own spending limit is the only hard ceiling; treat
   this cap as a brake, not a wall.
+- **A scheduled run is spread across several queued requests, so it takes
+  minutes rather than seconds.** One step per request is what keeps a host with a
+  short `max_execution_time` from killing an article part-way, and the cost is
+  wall-clock time: each step waits for the queue's next pass. "Run now" and
+  "Preview" are unaffected — both still answer in the request that asked. If your
+  queue only runs when someone visits the site, set up the system cron described
+  above, or a scheduled run will crawl.
 - The Settings screen's save path and its connection-test controls have no
   automated coverage. The prompt editor's save path does.
 - The "Next run" readout in the prompt editor reflects the *saved* schedule. It
@@ -234,8 +232,9 @@ The first two items are the ones that matter most:
   or still placeholders, and refuses to *read* records stored that way by version
   1.0.0. That path has no automated coverage, because the salts are PHP constants
   and a test cannot un-define them.
-- No test drives Action Scheduler itself; the queued run handler is tested by
-  calling it directly.
+- No test drives Action Scheduler itself. The queued handler is tested by
+  advancing a run one action at a time with a fresh handler each pass, which is
+  what the queue does, but the queue's own scheduling is not exercised.
 - CI runs against MySQL only. A MySQL/MariaDB divergence was found and fixed
   during development; nothing guards against the reverse.
 - Spend figures are estimates computed from reported token usage against a

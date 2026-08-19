@@ -182,7 +182,8 @@ result **without creating a post**. This is the one to use while you are
 tuning a prompt.
 
 **Run now** queues a real run that creates a post. The queue picks it up within
-a minute if your cron is set up correctly.
+a minute if your cron is set up correctly, and then works through the run one
+step at a time — see "How long a run takes" below.
 
 Both cost money and both appear in the run log. Preview is charged against the
 budget exactly like a real run, because it makes the same calls.
@@ -315,6 +316,34 @@ Statuses:
 | `skipped_budget` | Stopped before spending, because a cap was reached |
 | `skipped_duplicate` | The topic was already covered, so the article was never written |
 
+### How long a run takes
+
+A scheduled run is not one long request. It is a short one per step — budget
+check, topic, article, post, image, publish — each queued separately, so a
+generated article arrives some minutes after its scheduled time rather than
+seconds after it.
+
+That is deliberate, and it is what lets the plugin work on ordinary shared
+hosting. A whole run takes 30 to 120 seconds of provider time; hosts that cut
+requests off at 30 seconds would kill it part-way, every time. One step per
+request means the longest single request is one provider call.
+
+The practical consequences:
+
+- **Set up the system cron described in the README.** Without it the queue only
+  advances when somebody visits the site, and a run that needs six passes will
+  crawl — or stop entirely on a quiet site.
+- **Preview and Run now are unaffected in feel.** Preview answers in the request
+  that asked for it. Run now queues, as it always has.
+- **A run that stops part-way is picked up again.** If your host kills a request,
+  nothing is left half-finished for ever: an automatic sweep restarts the run,
+  and after two attempts gives up on it, releases whatever it had set aside
+  against your monthly budget, and records why in the run log. A run log entry
+  saying it "stopped part-way" means your host is ending requests early — the
+  system cron setup is the usual fix.
+
+---
+
 A failed run is retried automatically up to three times, after 5 minutes, then
 30 minutes, then an hour — but only when the failure was a transport-level one:
 the network dropped, the provider rate-limited the request, or the provider was
@@ -397,6 +426,38 @@ your provider's dashboard and update the rates.
 
 **A model ID stopped working.** Providers retire models. Put the new ID in the
 prompt's model field or in Settings — nothing needs a plugin update.
+
+---
+
+## Filters
+
+Three settings are adjustable in code, for the cases where a site's needs differ
+from the defaults. Put these in a small must-use plugin rather than a theme's
+`functions.php`, so they survive a theme change.
+
+```php
+// Treat topics as duplicates only when they are very similar indeed.
+add_filter( 'autoscribe_topic_similarity_threshold', fn() => 90 );
+
+// Retry on one more provider error code you have seen come and go.
+add_filter( 'autoscribe_transient_error_codes', function ( array $codes ) {
+    $codes[] = 'autoscribe_provider_error';
+
+    return $codes;
+} );
+
+// Wait half an hour before treating an unattended run as stalled.
+add_filter( 'autoscribe_stall_threshold', fn() => 30 * MINUTE_IN_SECONDS );
+```
+
+`autoscribe_transient_error_codes` is the one to be careful with. Every code you
+add is a decision to spend money making the same call again, which is why the
+default list holds only the three failures that mean the request never reached
+the provider at all.
+
+`autoscribe_stall_threshold` has a floor of two minutes, because a value below
+one provider timeout would have the sweeper competing with runs that are simply
+working.
 
 ---
 

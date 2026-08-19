@@ -28,6 +28,7 @@ earlier entry
 | [D-07](#d-07) | The pipeline runs synchronously inside one action | ⚠️ |
 | [D-08](#d-08) | The run row is the budget reservation | ⚠️ |
 | [D-09](#d-09) | Action Scheduler does not retry, so the plugin does | ⚠️ |
+| [D-09b](#d-09b) | A scheduled run is advanced one step per queued request | ✅ |
 | [D-10](#d-10) | A retry opens a new run row | ✅ |
 | [D-11](#d-11) | Duplicate detection counts drafts, not just published posts | ⚠️ |
 | [D-12](#d-12) | `post_exists()` is not used | ⚠️ |
@@ -207,10 +208,17 @@ rows.
 ### D-10
 **A retry opens a new run row.** ✅
 
-Every step is idempotent keyed by `run_id` — `Step_Assemble_Post` returns the
-existing post rather than creating a second one. Reusing the failed row for a
-retry would therefore make each step believe its work was already done and skip
-it, producing a "successful" run that did nothing.
+Every step is idempotent keyed by `run_id`, so reusing the failed row for a retry
+would make each step believe its work was already done and skip it, producing a
+"successful" run that did nothing.
+
+*Revisited in 1.1.0 and unchanged.* The pipeline split was expected to invert
+this: if a run can resume from where it stopped, the argument went, a retry
+should resume too. It does not follow. The step chain lives *within* one run — a
+resumed run picks up its own row, which is what makes the idempotency useful —
+while a retry is a fresh attempt at work that failed, and wants a clean row for
+the same reason it always did. The stall sweeper resumes; retries still start
+over.
 
 ### D-11
 **Duplicate detection counts drafts, not just published posts.** ⚠️
@@ -344,6 +352,27 @@ test asserts the round trip for every field.
 no edit. This was demonstrated when `append_sources` was added: the round-trip
 test picked it up unchanged.
 
+### D-09b
+**A scheduled run is advanced one step per queued request.** ✅
+
+§5 asks for this and 1.0.x did not do it: the whole pipeline ran inside one
+action, so a host with a short `max_execution_time` could kill an article
+part-way. Each request now carries at most one provider call.
+
+Two consequences worth naming, because neither is obvious from the requirement:
+
+*Splitting does not give recovery.* Action Scheduler records a killed action as
+failed and stops rather than retrying — the same fact D-09 is about — so a killed
+step leaves a run open with nothing queued to advance it. `Stall_Sweeper` is what
+closes that, and a run is judged stalled by whether anything is queued to advance
+it rather than by age, because age cannot tell a stalled run from a slow one.
+
+*Splitting created a cost leak that had to be closed with it.* The budget
+reservation is written before the first paid call and read by the cap while the
+run is open, so an abandoned run held its estimate against the monthly cap for
+ever. Giving up on a stalled run settles it from measured usage, which gives back
+everything it did not spend.
+
 ### D-19
 **"Run now" queues; it does not stream.** ⚠️
 
@@ -356,6 +385,11 @@ reports the outcome.
 
 *Consequence:* there is no live progress indication. The user queues a run and
 then looks at the run log. Acceptable, but not what the brief pictured.
+
+*Since 1.1.0* the gap between queueing and a finished post is larger, because the
+run is advanced one step per queued request (D-09b). The run log's step column is
+the progress indication the brief wanted a stream for — it names the last step
+that finished.
 
 ### D-20
 **The next-run readout is server-rendered, not live.** ⚠️

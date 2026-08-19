@@ -87,11 +87,24 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
-Phases 1 to 5 of the pipeline split scoped in `docs/PIPELINE-SPLIT.md`.
-Phase 3 is the first part a site would notice: a scheduled run is now advanced
-one step per queued request instead of running end to end in one. It is on `main`
-rather than in a release because the phases still to come — the finalise step and
-the stall sweeper — are what make the split worth having.
+## [1.1.0] - 2026-08-19
+
+**The generation pipeline is split across queued requests.** Section 5 of the
+project brief asked for this and 1.0.x did not do it; both external audits raised
+it, and it was the last requirement of substance left unmet. The work is scoped
+in `docs/PIPELINE-SPLIT.md`, which also records what each phase found.
+
+**What changes for a site.** A scheduled run is advanced one step per queued
+request rather than running end to end in one. Each request now carries at most
+one provider call, so a host that cuts requests off after 30 seconds no longer
+kills an article part-way. The cost is wall-clock time: a generated article
+arrives some minutes after its scheduled time rather than seconds after it, and a
+site whose queue only advances on visits needs the system cron described in the
+README more than it did before. "Run now" and "Preview" are unchanged in feel —
+both still answer in the request that asked.
+
+**Upgrade note.** Runs in flight when the plugin is upgraded finish under the old
+behaviour; nothing needs migrating. The runs table is unchanged.
 
 ### Fixed
 
