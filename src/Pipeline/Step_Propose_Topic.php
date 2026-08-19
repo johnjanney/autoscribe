@@ -145,7 +145,9 @@ final class Step_Propose_Topic {
 				return $result;
 			}
 
-			$run->record_text_usage( $result->model(), $result->usage()->input_tokens(), $result->usage()->output_tokens() );
+			if ( ! $run->record_text_usage( $result->model(), $result->usage()->input_tokens(), $result->usage()->output_tokens() ) ) {
+				return $this->usage_not_recorded();
+			}
 
 			$proposal = $this->decode( $result->text() );
 
@@ -204,6 +206,26 @@ final class Step_Propose_Topic {
 			),
 			'required'             => array( 'title', 'topic_key' ),
 			'additionalProperties' => false,
+		);
+	}
+
+	/**
+	 * Returns the error for a paid call whose usage could not be stored.
+	 *
+	 * The provider has answered and charged for it, so the money is spent. The
+	 * counters are held in memory, and the object that settles this run is the
+	 * object that made the call — so stopping here books the charge, while
+	 * carrying on would lose it, because the next queued action loads a fresh run
+	 * and reads the row.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return WP_Error
+	 */
+	private function usage_not_recorded(): WP_Error {
+		return new WP_Error(
+			'autoscribe_usage_not_recorded',
+			__( 'A provider call was made and charged for, but the run log would not record what it used. The run was stopped so the charge is still counted against the monthly cap.', 'autoscribe' )
 		);
 	}
 

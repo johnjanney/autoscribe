@@ -10,6 +10,561 @@
 > the two sections differ. The original 1.0.0 audit remains below as a historical
 > record.
 
+> **Fresh review:** The next section reviews revision `076b6dd`, tagged as
+> version 1.1.0. It supersedes both earlier reviews where the results differ.
+
+## Fresh review — version 1.1.0
+
+**Review date:** 19 August 2026
+
+**Reviewed revision:** `076b6dd70ea3091780137639683d4a5ea86b2c47` on
+`main`, tag `v1.1.0`
+
+**Documents reviewed:** `docs/PROJECT-BRIEF.md`, `docs/PIPELINE-SPLIT.md`,
+`CHANGELOG.md`, `CODEX-REVIEW-RESPONSE.md`, `README.md`, `INSTRUCTIONS.md`,
+`DECISIONS.md`, the production code, the tests, and the 1.1.0 release archive
+
+**Current result:** **Conditional fail. Do not use version 1.1.0 for unattended
+automatic publication until CR-01 through CR-06 are fixed.**
+
+**Current quality score:** **7.2/10**
+
+### Executive assessment
+
+Version 1.1.0 is a large and useful improvement. Scheduled runs now persist
+their intermediate state and advance through separate Action Scheduler actions.
+The new stall sweeper can recover a run after a terminated request. The named
+database lock fixes the main concurrent budget-reservation race from version
+1.0.1. Draft adoption is much safer. The response-size, image-size, key-storage,
+content-sanitization, nonce, capability, and HTTP controls remain good.
+
+The release does not yet meet all of its main claims. A topic action can make
+two provider calls. A body action can also make two provider calls. Therefore,
+the release claim that each queued request makes at most one provider call is
+false. A 30-second host can still terminate a request during either 120-second
+call. The stall sweeper limits the damage, but it can repeat a paid call after
+the termination.
+
+The most important new security-related defect is in cost recording. The code
+still ignores failed database writes for text-token and image usage. A provider
+can charge for a successful call, a later payload write can succeed, and the
+next action can finish the run without the missing usage. The monthly spend
+total and budget warning then understate the charge.
+
+The final result for the project brief is:
+
+| Question | Assessment |
+|---|---|
+| Does the plugin achieve the brief? | **Substantially, but not completely.** The major features exist. The queue split now exists. Run now still does not stream, the next-run display is not live, and some pipeline and threshold choices intentionally differ from the brief. |
+| How well does it achieve the brief? | **Good structure, good routine-path coverage, and weak failure-path assurance.** The normal path is well designed. Database-write failures, duplicate queue delivery, live provider contracts, and the real Action Scheduler path need more work. |
+| Is there drift? | **Yes.** The one-call-per-request claim is false. Changelog and README text about Run now conflict with the code and with `DECISIONS.md`. The README version is still 1.0.0. The current Google model documents also conflict with the first suggested Google model. |
+| Are there security vulnerabilities? | **Yes, but no critical remote exploit was found.** CR-01 can bypass financial accounting after an isolated database-write failure. CR-03 can apply a changed global model after the budget check. CR-06 permits duplicate paid effects if the same run step executes concurrently. Prompt injection remains a residual content-integrity risk when automatic publication is enabled. |
+
+### Verification results
+
+| Check | Result | Evidence |
+|---|---:|---|
+| Git state | Pass | `main`, `origin/main`, and tag `v1.1.0` resolve to `076b6dd`. The worktree was clean before this review file changed. |
+| Composer manifest | Pass | `composer validate --no-check-publish` reports a valid manifest. |
+| Dependency advisories | Pass | `composer audit --locked` reports no known security advisory. |
+| WordPress coding standards | Pass | PHPCS checked 110 files with no error. |
+| PHPUnit | Pass | 286 tests and 1,066 assertions passed with PHP 8.1, WordPress, and MySQL. |
+| Release archive | Pass | `build/autoscribe-1.1.0.zip` passed `unzip -t`. Its production source matched the reviewed source. Its Composer autoload files correctly differ because the archive contains production dependencies only. |
+| Live provider calls | Not run | No funded provider key was supplied. No prompt or site data was sent to a provider. |
+| Real Action Scheduler dispatch | Not covered | Tests call handlers and scheduling wrappers with mocks. They do not execute the complete bundled queue path. `docs/PIPELINE-SPLIT.md` also records this gap ([pipeline plan](docs/PIPELINE-SPLIT.md#L234)). |
+| Concurrent duplicate step | Not covered | No test starts two workers on the same `run_id`. See CR-06. |
+| Database-write fault injection | Not covered | No test makes only the usage or terminal-state update fail. See CR-01 and CR-05. |
+
+### Security finding order
+
+There is no verified critical vulnerability. I found no unauthenticated remote
+code execution, SQL injection, stored cross-site scripting, privilege bypass,
+or CSRF defect in the reviewed code. The findings below use security severity
+when confidentiality, integrity, availability, or financial control is at risk.
+They use quality severity for requirement, reliability, and documentation drift.
+
+1. **High — CR-01:** paid usage can be lost after a database-write failure.
+2. **High — CR-03:** mutable global model settings are not part of the run
+   configuration snapshot and can invalidate the budget check.
+3. **Medium — CR-06:** queued steps have no atomic run claim, so concurrent
+   duplicate actions can repeat paid effects.
+4. **Residual risk:** provider search results and local titles can still contain
+   prompt-injection text. The delimiter reduces the risk but cannot remove it.
+   Review mode remains the correct default.
+
+## Fresh findings
+
+### CR-01 — High — A successful paid call can be omitted from cost accounting
+
+**Category:** Security business logic, financial integrity, database failure
+handling
+
+**Verified facts**
+
+- `Run::record_text_usage()` returns `void` and discards the result of the
+  database update ([Run](src/Pipeline/Run.php#L319)).
+- `Run::record_image()` does the same ([Run](src/Pipeline/Run.php#L359)).
+- The topic step, both body calls, and the image step call these methods without
+  a result that they can check ([topic step](src/Pipeline/Step_Propose_Topic.php#L148),
+  [body step](src/Pipeline/Step_Generate_Body.php#L159),
+  [body repair](src/Pipeline/Step_Generate_Body.php#L232),
+  [image step](src/Pipeline/Step_Generate_Image.php#L115)).
+- The same steps then write payload state. Those later writes do return an error
+  on failure. An isolated usage-write failure does not prevent a later payload
+  write from succeeding.
+- A new `Run` object is loaded for the next queued action. It reads usage from
+  the database. It cannot recover usage that existed only in the earlier PHP
+  object.
+- `Run::update()` explicitly states that only the reservation caller acts on a
+  failed update ([Run](src/Pipeline/Run.php#L1260)).
+
+**Confirmed failure sequence**
+
+1. The provider returns a successful topic, body, repair, or image response.
+2. The provider has charged the account.
+3. The usage-column update returns `false`.
+4. The payload and `runs.step` updates succeed.
+5. The next queue action loads the run. It sees the persisted output but not the
+   missing tokens or image count.
+6. Settlement uses the incomplete usage and records too little cost.
+
+**Impact**
+
+The run log, month-to-date spend, 80-percent warning, and later cap checks can
+all understate real provider charges. This is a fail-open financial control.
+The condition requires a database update to fail in isolation. It is not a
+verified remote attack path, but the result directly breaks the cap's integrity.
+
+**Required fix**
+
+- Make `record_text_usage()` and `record_image()` return `bool` or `WP_Error`.
+- Stop the step when the usage write fails. Close the run in the same request so
+  settlement can use the in-memory usage that the provider already charged.
+- If the terminal write also fails, preserve a durable recovery record or keep
+  the run open for the sweeper. Do not report success.
+- Add fault-injection tests for the proposal, first body, repair, and image
+  usage writes. Assert that each charge remains in `cost_cents`.
+
+### CR-02 — High — The queue split does not provide one provider call per request
+
+**Category:** Objective completion, performance, timeout resilience, drift
+
+**Verified facts**
+
+- The 1.1.0 changelog says that each request carries at most one provider call
+  and that a 30-second host no longer kills an article part-way
+  ([changelog](CHANGELOG.md#L97)).
+- The pipeline design says the same ([pipeline plan](docs/PIPELINE-SPLIT.md#L242)).
+- The topic action contains a loop that can call the provider twice
+  ([topic step](src/Pipeline/Step_Propose_Topic.php#L133)).
+- The body action makes an initial call and can make a repair call in the same
+  request ([body step](src/Pipeline/Step_Generate_Body.php#L153),
+  [repair call](src/Pipeline/Step_Generate_Body.php#L215)).
+- Each provider call has a 120-second HTTP timeout. One topic or body action can
+  therefore spend up to approximately 240 seconds in provider calls, before
+  local work.
+- `INSTRUCTIONS.md` correctly says that a hard 30-second limit can still
+  terminate a step ([instructions](INSTRUCTIONS.md#L335)). This contradicts the
+  changelog.
+
+**Impact**
+
+The main version 1.1.0 objective is only partly complete. The split reduces the
+size of a failure, but it does not give the documented request bound. A host can
+terminate the action after the provider has charged it and before the result is
+stored. The sweeper can then repeat the call. The same action can also occupy a
+queue worker for four minutes.
+
+**Required fix**
+
+- Persist proposal-attempt and repair-attempt state as separate pipeline
+  positions. Schedule the second proposal or repair as a new action.
+- Set a per-action provider-call count of one and test it.
+- Do not claim that a 30-second limit is safe while the provider timeout is 120
+  seconds. State that the sweeper recovers the run after a termination.
+- If the current two-call actions are intentional, revise the objective and all
+  release text. That is a documented deviation, not completion of the current
+  design claim.
+
+### CR-03 — High — The run fingerprint excludes global settings that control cost and publication
+
+**Category:** Financial integrity, publication safety, configuration consistency
+
+**Verified facts**
+
+- The fingerprint contains only prompt fields
+  ([Prompt](src/Prompts/Prompt.php#L387)).
+- A blank prompt model resolves through the mutable site default
+  ([Model Resolver](src/Providers/Model_Resolver.php#L42)).
+- The budget estimate and each later provider step resolve that default again.
+  The run does not store the resolved model IDs.
+- The final publication status reads the current global `force_review` value
+  ([Generator](src/Pipeline/Generator.php#L552)). It does not retain the value
+  from the start of the run.
+- The queue handler compares only the prompt fingerprint before each step
+  ([Queued Run Handler](src/Pipeline/Queued_Run_Handler.php#L190)).
+
+**Confirmed behavior**
+
+If an administrator changes a site default model after `budget_check`, a later
+topic, body, or image step can use the new model. The estimate was made for the
+old model. The run can also contain output from different model settings.
+
+If `force_review` was on when the run started and an administrator turns it off
+before finalization, an `auto` prompt can publish. The prompt fingerprint does
+not detect the change. This does not bypass the current value of the switch,
+because an administrator changed it. It does violate the code's stated rule
+that a queued run must not finish under settings that were not checked.
+
+**Required fix**
+
+- Store a run configuration snapshot that contains the resolved text model,
+  resolved image model, provider slugs, relevant pricing version or rates, and
+  the initial review policy.
+- Use the stored model IDs for all later calls, or abort when a relevant global
+  setting changes.
+- Make the review rule monotonic for an open run: hold the post as a draft if
+  force review was on at run start **or** is on at finalization.
+- Add tests that change global defaults and force-review state between actions.
+
+### CR-04 — Medium — Required and fallback image modes can report success without a featured image
+
+**Category:** Functional correctness, content integrity
+
+**Verified facts**
+
+- The generated-image path ignores the result of `set_post_thumbnail()` and
+  then records the attachment as settled
+  ([image step](src/Pipeline/Step_Generate_Image.php#L169)).
+- The fallback path also ignores the result
+  ([image step](src/Pipeline/Step_Generate_Image.php#L186)).
+- Re-entry ignores the result a third time
+  ([image step](src/Pipeline/Step_Generate_Image.php#L236)).
+- WordPress documents that `set_post_thumbnail()` returns `false` on failure.
+  It can also return `false` when the same value is already present
+  ([WordPress `set_post_thumbnail()` reference](https://developer.wordpress.org/reference/functions/set_post_thumbnail/)).
+- `Image_Sideloader` also ignores the result of attachment metadata generation
+  and update ([Image Sideloader](src/Media/Image_Sideloader.php#L142)).
+
+**Impact**
+
+A prompt in `required` mode can continue and publish even when WordPress did not
+set the featured image. A fallback prompt can also continue without its fallback
+image. The payload then prevents a later action from trying again.
+
+**Required fix**
+
+- Check metadata generation and update results.
+- After each thumbnail write, verify that `get_post_thumbnail_id( $post_id )`
+  equals the required attachment ID. This handles the valid "already equal"
+  return case.
+- Return an error for required mode when verification fails. Apply the stated
+  fallback or optional policy only after a verified failure.
+- Add tests for metadata failure, thumbnail-write failure, an invalid fallback
+  ID, and the idempotent already-equal case.
+
+### CR-05 — Medium — Finalization and terminal run writes can fail while the queue reports completion
+
+**Category:** State integrity, recovery, notification correctness
+
+**Verified facts**
+
+- `settle_cost()` returns the calculated amount even if `record_cost()` fails
+  ([Run](src/Pipeline/Run.php#L1187)).
+- `succeed()` discards its database result
+  ([Run](src/Pipeline/Run.php#L1202)).
+- `fail()` and `skip()` also discard their results
+  ([Run](src/Pipeline/Run.php#L1228), [Run](src/Pipeline/Run.php#L1119)).
+- `Generator::finalise()` calls settlement and success, then sends notices and
+  returns a success array without verifying either write
+  ([Generator](src/Pipeline/Generator.php#L204)).
+- The queue handler then concludes the run and arms the next occurrence.
+
+**Impact**
+
+A post can publish while its run remains `running`. The stall sweeper can later
+restart that row and finalise it again. Review mail, budget mail, and schedule
+changes can occur more than once. A failed settlement can leave the original
+reservation in place. A failed `fail()` or `skip()` can also leave an open row
+while the handler acts as if it is closed.
+
+**Required fix**
+
+- Make every terminal transition return a checked result.
+- Use one conditional database update for cost, status, error, and
+  `finished_at`. Require the current status to be `running`.
+- Do not send notices or re-arm the prompt until the terminal state is durable.
+- Add one-write-failure tests for success, failure, skip, and settlement.
+
+### CR-06 — Medium — Step idempotency is not atomic under duplicate delivery
+
+**Category:** Financial integrity, queue concurrency, idempotency
+
+**Verified facts**
+
+- `schedule_step()` does not request a unique Action Scheduler action. The
+  Action Scheduler API defaults the `unique` parameter to `false`
+  ([Scheduler](src/Scheduling/Scheduler.php#L194),
+  [Action Scheduler API](https://actionscheduler.org/api/)).
+- The handler checks `status`, then reads the current step, performs the work,
+  and writes the new step. There is no per-run lease, lock, or compare-and-swap
+  claim ([Queued Run Handler](src/Pipeline/Queued_Run_Handler.php#L119)).
+- Each idempotency guard is a read followed later by a provider or post side
+  effect. Two workers can both read the same missing payload key before either
+  writes it.
+- The test suite re-enters steps sequentially. It does not execute the same
+  `run_id` concurrently.
+
+**Inference from the verified code**
+
+If two pending actions exist for one run, both workers can pass the status and
+payload checks. They can make duplicate provider calls. They can also race on
+usage totals and payload merges. Action Scheduler normally prevents two workers
+from claiming one action row, but it does not make two separate action rows for
+the same run into one row. The scheduler wrapper currently permits those rows.
+
+**Required fix**
+
+- Request unique step scheduling as a first guard.
+- Add an atomic run-step claim. Store a lease or use a conditional update that
+  succeeds for only one worker at the expected step version.
+- Make usage accumulation atomic in SQL, or keep it under the same run claim.
+- Add a two-worker integration test for topic, body, image, and finalization.
+
+### CR-07 — Medium — The first Google model suggestion is not in the current model catalog
+
+**Category:** Provider-contract drift, operational reliability
+
+**Verified facts**
+
+- The first Google suggestion is `gemini-3.7-flash`
+  ([Google adapter](src/Providers/Text/Google.php#L82)). A blank prompt model and
+  blank site default select this first suggestion.
+- On 19 August 2026, Google's current model catalog lists `gemini-3.6-flash`,
+  `gemini-3.5-flash`, and `gemini-3.5-flash-lite` as stable text models. It does
+  not list `gemini-3.7-flash`
+  ([Google Gemini model catalog](https://ai.google.dev/gemini-api/docs/models)).
+- Google's current deprecation table also does not list 3.7
+  ([Google Gemini deprecations](https://ai.google.dev/gemini-api/docs/deprecations)).
+- A different first-party migration page still contains 3.7 in examples
+  ([Google Interactions breaking-change guide](https://ai.google.dev/gemini-api/docs/interactions-breaking-changes-may-2026)).
+- `CODEX-REVIEW-RESPONSE.md` says that the latest-model and model-catalog pages
+  listed 3.7 when retrieved on 18 August. Those pages have changed since that
+  response.
+- No live Models API request with a funded key was run.
+
+**Assessment**
+
+Google's current documents conflict. Therefore, this review does not claim that
+the model endpoint is definitively removed. Its status is **not found in the
+current model catalog**. It is not safe to present it as the current first
+generally available choice without a live capability check.
+
+**Required fix**
+
+- Put `gemini-3.6-flash` first until the current model endpoint confirms 3.7.
+- Treat suggestions as updateable release data. Add a release check against
+  each provider's current first-party model catalog.
+- Keep the user-editable model field and connection test. They are good controls
+  for this fast-moving dependency.
+
+### CR-08 — Medium — The stall sweep can issue about 2,000 Action Scheduler queries every five minutes
+
+**Category:** Performance, database load, scalability
+
+**Verified facts**
+
+- One sweep can read 20 pages of 100 runs
+  ([Stall Sweeper](src/Pipeline/Stall_Sweeper.php#L102)).
+- For every candidate, it calls `has_step_action()`
+  ([Stall Sweeper](src/Pipeline/Stall_Sweeper.php#L244)).
+- `has_step_action()` performs a separate Action Scheduler query
+  ([Scheduler](src/Scheduling/Scheduler.php#L243)).
+- A sweep runs every five minutes
+  ([Stall Sweeper](src/Pipeline/Stall_Sweeper.php#L59)).
+
+**Impact**
+
+On a busy or backed-up site, one sweep can make approximately 2,000 queue-store
+queries plus its run-page queries. This is an N+1 query design. The code comment
+calls the bounded sweep a short request, but 2,000 database round trips can be
+slow enough to compete with the queue that it monitors.
+
+**Required fix**
+
+- Fetch pending and running step actions for a page of run IDs in one query, or
+  use a small recovery table or heartbeat column that can be joined in bulk.
+- Add a composite run index suitable for the sweep query, after checking the
+  real MySQL query plan.
+- Add a query-count performance test for a full page and for the maximum scan.
+
+### CR-09 — Low — The monthly warning is not exactly once under concurrency
+
+**Category:** Notification correctness, concurrency
+
+**Verified facts**
+
+- `should_send_warning()` reads the option, updates it, and then returns `true`
+  ([Budget Guard](src/Cost/Budget_Guard.php#L277)).
+- The read and update are not atomic. Concurrent finalizers can both read the old
+  month before either writes the new month.
+
+**Impact**
+
+Two concurrent runs can send more than the one monthly warning required by the
+brief. This does not change the spend cap.
+
+**Required fix**
+
+Claim the month with an atomic insert or compare-and-swap operation. Send mail
+only for the worker that acquired the claim. Add a concurrent test.
+
+### CR-10 — Medium — Release documentation contains direct contradictions
+
+**Category:** Release quality, user guidance, requirements drift
+
+**Verified facts**
+
+- The README still reports version 1.0.0 while the plugin and tag are 1.1.0
+  ([README](README.md#L14)).
+- The changelog says Run now and Preview both answer in the request that asked
+  ([changelog](CHANGELOG.md#L103)). The code queues Run now and redirects
+  ([Actions](src/Admin/Actions.php#L221)).
+- A later changelog entry says Run now keeps the synchronous path
+  ([changelog](CHANGELOG.md#L306)). It does not.
+- `DECISIONS.md` and `INSTRUCTIONS.md` correctly state that Run now queues
+  ([decisions](DECISIONS.md#L377), [instructions](INSTRUCTIONS.md#L343)).
+- README also says that Run now and Preview both answer in the same request
+  ([README](README.md#L214)).
+- The one-provider-call claim conflicts with CR-02.
+
+**Required fix**
+
+- Change the README version to 1.1.0.
+- State that Preview is synchronous and Run now is asynchronous.
+- Replace the one-call claim with the actual current maximum, or split the
+  second calls into new actions.
+- Keep the known deviations in one current section. Do not make users reconcile
+  README, changelog, decisions, and instructions themselves.
+
+## Current requirements drift
+
+The following deviations remain after version 1.1.0. Most are already disclosed
+in `DECISIONS.md` or README. Disclosure makes the project honest, but it does not
+make the brief complete.
+
+| Brief item | Current state | Assessment |
+|---|---|---|
+| One short Action Scheduler request per generation step | Steps are queued separately, but topic and body can each make two provider calls. | **Partial; CR-02** |
+| Step order includes Gather Context, then image, then assembly | No separate Gather Context step exists. Assembly intentionally precedes image so required-image failure leaves a draft. | **Documented design change** |
+| Run now queues and streams the result | Run now queues and redirects to the editor. It does not stream progress or the result. | **Open, documented in D-19** |
+| Live next-run readout | The readout shows saved state and does not update while controls change. | **Open, documented** |
+| Duplicate threshold defaults to 82 percent | The code defaults to 78 percent. | **Intentional drift** |
+| README screenshot | **Not found in documents.** README states that no screenshot is present. | **Open** |
+| Plain clone is directly usable | Composer production dependencies must be installed, or the release archive must be used. | **Documented installation constraint** |
+| Action Scheduler integration test | Handler and wrapper tests exist. No test dispatches the bundled queue end to end. | **Open test gap** |
+
+## Code quality assessment for version 1.1.0
+
+### Strengths
+
+- The new `Pipeline` class gives both drivers one ordered step definition.
+- Queue state is persisted in the run row. A fresh handler can resume it.
+- Payload writes now merge top-level keys and check most state failures.
+- The stall sweeper distinguishes a slow run from a run with no pending or
+  running step action.
+- The named MySQL lock correctly serializes the normal budget check and
+  reservation path.
+- Draft adoption has strict attempt, ownership, status, and modification checks.
+- The HTTP layer limits JSON responses. The media layer limits bytes and decoded
+  pixels and uses `wp_safe_remote_get()` for provider URLs.
+- Provider content is validated and post HTML is sanitized before insertion.
+- Admin mutation paths use nonces and the custom management capability.
+- Code comments explain complex state decisions. PHPCS is clean.
+- The test count increased from 200 to 286, with good new coverage for
+  sequential step resume and stall recovery.
+
+### Weaknesses
+
+- The code checks some critical database writes but still ignores usage and
+  terminal-state writes. This creates inconsistent failure policy.
+- Idempotency guards are sequential guards, not atomic concurrency controls.
+- The queue split moved retry state into payload, but it did not split all
+  provider calls into separate requests.
+- Several comments and release claims state a stronger property than the code
+  supplies.
+- Global mutable dependencies are resolved repeatedly instead of being stored
+  on the run.
+- The stall sweep favors completeness over database efficiency and creates an
+  N+1 query pattern.
+- Provider contract tests use mocks only. They cannot detect a model removal or
+  a first-party response-schema change by themselves.
+
+## Performance assessment for version 1.1.0
+
+| Area | Rating | Assessment |
+|---|---:|---|
+| Scheduled pipeline | **Improved, fair** | Normal steps are separate queue requests. Topic and body can still make two serial 120-second calls. |
+| Stall recovery | **Functionally good, performance weak** | Recovery is bounded and paged, but the maximum scan has about 2,000 queue queries. |
+| Budget check | **Good normal path** | The named lock encloses a small check-and-reserve section. The 10-second wait is acceptable for a rare collision. |
+| Run payload | **Fair** | The full article JSON is read and rewritten as one long-text payload. The size is bounded indirectly by provider and validator limits. |
+| Run-log and spend queries | **Fair** | Pagination and date indexes exist. The sweep needs an index and query-plan review for `(status, started_at, id)`. |
+| Media handling | **Good limits, incomplete errors** | Byte, pixel, MIME, and SSRF controls are good. Metadata and thumbnail results need checks. |
+| Retention | **Good** | Run pruning and UI pagination bound long-term storage and display work. |
+
+## Test assessment and required additions
+
+The passing suite gives good confidence in normal single-worker behavior. It
+does not prove the highest-risk properties of this release.
+
+Add these tests in priority order:
+
+1. Fail each usage update after a successful provider response. Assert that the
+   run stops and records the charge.
+2. Execute topic and body through the queue and assert one provider call per
+   dispatched action.
+3. Start two workers for the same run and assert one step claim, one provider
+   call, one image, one finalization, and one notification.
+4. Fail cost settlement and every terminal-status update independently.
+5. Change default models and force-review state between queue actions.
+6. Fail attachment metadata and thumbnail assignment in all image modes.
+7. Dispatch the actual bundled Action Scheduler action from scheduling through
+   completion. Test activation, deactivation, and recurring sweep actions.
+8. Measure sweep query count at 100 and 2,000 candidate rows.
+9. Add MariaDB CI and a built-archive activation smoke test.
+10. Add an explicit release check for current first-party provider model IDs and
+    response fixtures. Do not use production keys in ordinary unit tests.
+
+## Required remediation order
+
+1. Fix usage-write and terminal-write error handling.
+2. Make each queued action perform no more than one provider call, or correct
+   the objective and documentation.
+3. Snapshot resolved global configuration and preserve review safety for open
+   runs.
+4. Verify image metadata and featured-image assignment.
+5. Add an atomic per-run step claim and unique scheduling.
+6. Correct the Google suggestion after a current live capability check.
+7. Replace the stall-sweeper N+1 query pattern.
+8. Make the monthly warning claim atomic.
+9. Correct the README and changelog contradictions.
+10. Add the missing concurrent, failure-injection, and real-queue tests.
+
+## Fresh review conclusion
+
+AutoScribe 1.1.0 is closer to the project brief and is materially safer than
+1.0.1. The pipeline is now resumable, the main budget race is fixed, and the
+test suite is strong on the routine path. These are substantial improvements.
+
+The release is not ready for unattended automatic publication. A database
+failure can remove paid usage from the cap. The new queue split still permits
+two provider calls in one action. Global model changes can occur after the
+budget check. Image and terminal-state failures can be reported as success. The
+queue also lacks an atomic run claim for duplicate delivery.
+
+After CR-01 through CR-06 are fixed and tested with real concurrency and
+failure injection, the project should be reviewed again for production use.
+
 ## Follow-up review — version 1.0.1
 
 **Follow-up date:** 18 August 2026

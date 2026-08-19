@@ -317,7 +317,19 @@ final class Actions {
 		}
 
 		$run->record_step( 'preview' );
-		$run->settle_cost( new Pricing_Table(), $run->grounded_calls() );
+
+		$settled = $run->settle_cost( new Pricing_Table(), $run->grounded_calls() );
+
+		if ( is_wp_error( $settled ) ) {
+			return $settled;
+		}
+
+		/*
+		 * A preview that cannot be closed still returns its article: it created
+		 * no post and armed nothing, so an open row is a tidiness problem the
+		 * sweeper will settle, not a reason to throw away work the user paid for
+		 * and is waiting to read.
+		 */
 		$run->succeed();
 
 		return $article;

@@ -291,6 +291,19 @@ final class Budget_Guard {
 			return false;
 		}
 
+		/*
+		 * add_option() rather than update_option(), because only one caller can
+		 * create a row that does not exist: the option name carries the month, so
+		 * claiming it is an insert and the loser of a race is told so. Reading
+		 * then updating would let two runs finishing together both see the old
+		 * month and both send the one email section 7.4 allows per month.
+		 *
+		 * The plain option is kept in step for anything that reads it.
+		 */
+		if ( ! add_option( self::NOTICE_SENT_OPTION . '_' . $month, time(), '', false ) ) {
+			return false;
+		}
+
 		update_option( self::NOTICE_SENT_OPTION, $month, false );
 
 		return true;

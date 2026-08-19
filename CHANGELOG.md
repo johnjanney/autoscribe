@@ -87,6 +87,65 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-08-19
+
+A third external review, against 1.1.0. Ten findings; nine confirmed and one
+rejected on evidence. The reasoning for each is in `CODEX-REVIEW-RESPONSE.md`.
+
+Two of these are financial-control defects that pre-date the pipeline split, and
+one of them is the same shape as several the split already fixed: a write whose
+result nobody consumed. The audit that found those was scoped to methods that
+already returned a value, so the ones still returning `void` were never in it.
+
+### Fixed
+
+- **A provider call that was charged for could vanish from the monthly total.**
+  Recording token and image usage returned nothing, so a refused write left the
+  step to finish and the next queued action to load a fresh run and read the row.
+  The charge was real; the record of it was not. Both writes now report, and a
+  step that cannot store what it just spent stops the run — the object that made
+  the call is the object that settles it, so the charge is still booked.
+- **A run could publish, fail to close, and announce itself anyway.** The review
+  email went out and the next occurrence was armed off a transition that had not
+  happened, and the stall sweeper would later find the still-open row and do both
+  again. Every ending is now one conditional update that only an open run
+  accepts, and nothing is announced until it succeeds.
+- **Two workers could both perform the same step.** The per-step guards are reads
+  — two workers could both find no stored article and both buy one. A
+  compare-and-swap on the run's position now decides between them before either
+  spends.
+- **A site default model changed mid-run applied to the rest of that run**, so a
+  run could finish under a model its budget was never checked for. The site
+  defaults a run depends on are part of what it was checked against.
+- **Force review could be switched off under a run already in progress**, and the
+  article it began under review would publish. An open run now keeps the stricter
+  of the setting it started under and the setting at the end: turning review on
+  mid-run still takes effect, turning it off never applies to work already under
+  way.
+- **A featured image could be reported as attached when it was not.**
+  `set_post_thumbnail()` returns false both when it fails and when the post
+  already carries that thumbnail, so its result cannot tell a refusal from a
+  no-op. The post is asked what its thumbnail is instead — which is what section
+  6's `required` mode is about, since a run reporting success without a featured
+  image has published the thing that mode exists to prevent. Attachment metadata
+  is verified the same way.
+- **The stall sweep made one queue query per candidate run** — up to two thousand
+  round trips against the queue it exists to watch. One query per page now.
+- **The monthly budget warning could be sent twice** by two runs finishing
+  together. The month is claimed with an insert, which only one caller can win.
+
+### Changed
+
+- Release documentation no longer claims that each queued request makes one
+  provider call. It does not: the topic step asks again after a collision and the
+  article step makes one repair call, so a step can make two calls at up to 120
+  seconds each. What the split buys is that a killed request costs a step rather
+  than an article, and that the sweeper restarts what was killed.
+- Release documentation no longer says "Run now" answers in the request that
+  asked. It queues, and always has — `DECISIONS.md` D-19 records why. Preview is
+  the one that answers synchronously.
+- The README version table said 1.0.0. It had been wrong since 1.0.1.
+
 ## [1.1.0] - 2026-08-19
 
 **The generation pipeline is split across queued requests.** Section 5 of the
@@ -96,12 +155,12 @@ in `docs/PIPELINE-SPLIT.md`, which also records what each phase found.
 
 **What changes for a site.** A scheduled run is advanced one step per queued
 request rather than running end to end in one. Each request now carries at most
-one provider call, so a host that cuts requests off after 30 seconds no longer
-kills an article part-way. The cost is wall-clock time: a generated article
-arrives some minutes after its scheduled time rather than seconds after it, and a
-site whose queue only advances on visits needs the system cron described in the
-README more than it did before. "Run now" and "Preview" are unchanged in feel —
-both still answer in the request that asked.
+far less work, so a host that cuts requests off early costs a step rather than a
+whole article. The cost is wall-clock time: a generated article arrives some
+minutes after its scheduled time rather than seconds after it, and a site whose
+queue only advances on visits needs the system cron described in the README more
+than it did before. Preview still answers in the request that asked for it; Run
+now queues, as it always has.
 
 **Upgrade note.** Runs in flight when the plugin is upgraded finish under the old
 behaviour; nothing needs migrating. The runs table is unchanged.
@@ -305,13 +364,16 @@ behaviour; nothing needs migrating. The runs table is unchanged.
 
 - **A scheduled run is advanced one queued action per step.** Section 5 asks for
   this because a run takes 30 to 120 seconds and a host with a short
-  `max_execution_time` terminates it part-way. Each request now carries at most
-  one provider call, so what a kill costs is one step rather than an article.
+  `max_execution_time` terminates it part-way. What a kill costs is now one step
+  rather than an article — though not one provider call: the topic step asks
+  again after a collision and the article step makes one repair call, so a single
+  step can make two.
 
   The new `autoscribe_run_step` hook carries a run ID and nothing else, and the
   position is read from `runs.step` — one hook rather than one per step, so the
   queue never holds routing the run row could contradict. "Run now" and Preview
-  keep the synchronous path, and both drivers advance the same sequence.
+  keep their existing behaviour — Preview answers in its own request, Run now
+  queues — and both drivers advance the same sequence.
 
   **What this does not yet give is recovery.** Action Scheduler marks a killed
   action failed and stops; it does not retry. A killed step still strands a run

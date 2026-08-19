@@ -35,6 +35,18 @@ final class Run {
 	public const STATUS_RUNNING = 'running';
 
 	/**
+	 * Prefix marking a step as claimed by a worker that is performing it.
+	 *
+	 * Kept in the same column as the completed step so the claim and the position
+	 * move together in one atomic update. Anything reading the position strips it
+	 * with completed_step().
+	 *
+	 * @since 1.1.1
+	 * @var string
+	 */
+	public const CLAIM_PREFIX = 'doing:';
+
+	/**
 	 * Status for a completed run.
 	 *
 	 * @since 0.3.0
@@ -314,16 +326,24 @@ final class Run {
 	 * @param string $model         Model that served the call.
 	 * @param int    $input_tokens  Prompt tokens billed.
 	 * @param int    $output_tokens Generated tokens billed.
-	 * @return void
+	 * @return bool True when the usage reached the database.
 	 */
-	public function record_text_usage( string $model, int $input_tokens, int $output_tokens ): void {
+	public function record_text_usage( string $model, int $input_tokens, int $output_tokens ): bool {
 		$this->load_usage();
 
 		$this->usage['text_model']    = $model;
 		$this->usage['input_tokens']  = (int) $this->usage['input_tokens'] + max( 0, $input_tokens );
 		$this->usage['output_tokens'] = (int) $this->usage['output_tokens'] + max( 0, $output_tokens );
 
-		$this->update(
+		/*
+		 * The counters are kept in memory whether or not the write lands, and the
+		 * caller is told. A provider that answered has charged for it, so the
+		 * charge is real even when the row will not take it — the object that
+		 * settles this run is the object that made the call, so stopping here
+		 * still books the money. Reporting success and carrying on would lose it:
+		 * the next queued action loads a fresh run and reads the row.
+		 */
+		return $this->update(
 			array(
 				'text_model'    => $model,
 				'input_tokens'  => (int) $this->usage['input_tokens'],
@@ -354,15 +374,17 @@ final class Run {
 	 * @since 0.3.0
 	 *
 	 * @param string $model Image model used.
-	 * @return void
+	 * @return bool True when the usage reached the database.
 	 */
-	public function record_image( string $model ): void {
+	public function record_image( string $model ): bool {
 		$this->load_usage();
 
 		$this->usage['image_model'] = $model;
 		$this->usage['image_count'] = 1;
 
-		$this->update(
+		// See record_text_usage(): a picture the provider billed for is billed
+		// for whether or not the row accepts the counter.
+		return $this->update(
 			array(
 				'image_model' => $model,
 				'image_count' => 1,
@@ -491,6 +513,22 @@ final class Run {
 		$this->payload = is_array( $decoded ) ? $decoded : array();
 
 		return $this->payload;
+	}
+
+	/**
+	 * Whether force review was on when this run opened.
+	 *
+	 * Recorded at the start because the setting is global and mutable, and a run
+	 * now spans several requests. Section 10 makes the difference between draft
+	 * and published the whole safety model, and a model that can be switched off
+	 * halfway through an article is not one.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return bool
+	 */
+	public function started_under_review(): bool {
+		return ! empty( $this->payload()['force_review'] );
 	}
 
 	/**
@@ -643,7 +681,75 @@ final class Run {
 	 * @return string
 	 */
 	public function step(): string {
+		return self::completed_step( (string) $this->column( 'step' ) );
+	}
+
+	/**
+	 * Returns the step column as stored, claim marker and all.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @return string
+	 */
+	public function raw_step(): string {
 		return (string) $this->column( 'step' );
+	}
+
+	/**
+	 * Claims the right to perform one step of this run.
+	 *
+	 * The idempotency guards each step carries are reads followed by a paid call:
+	 * two workers can both find no stored article and both buy one. Action
+	 * Scheduler will not hand one action row to two workers, but nothing stopped
+	 * two rows existing for the same run, and nothing stopped a sweeper restart
+	 * arriving beside a slow original.
+	 *
+	 * This is a compare-and-swap on the run's position. The winner moves the row
+	 * from the step it expected to a claim marker; the loser's update matches no
+	 * row and it stands down. Both then behave correctly rather than both
+	 * spending.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @param string $expected The last completed step this worker read.
+	 * @return bool True when this worker holds the claim.
+	 */
+	public function claim_step( string $expected ): bool {
+		global $wpdb;
+
+		/*
+		 * A run that has completed nothing has step NULL rather than an empty
+		 * string, and NULL matches nothing in SQL — including itself. Comparing
+		 * against the empty string alone would make every first claim fail, and
+		 * every run would stop before its first step.
+		 */
+		$claimed = $wpdb->query(
+			$wpdb->prepare(
+				'UPDATE %i SET step = %s WHERE id = %d AND status = %s AND COALESCE( step, %s ) = %s',
+				Activation::table_name(),
+				self::CLAIM_PREFIX . $expected,
+				$this->id,
+				self::STATUS_RUNNING,
+				'',
+				$expected
+			)
+		);
+
+		return is_numeric( $claimed ) && (int) $claimed > 0;
+	}
+
+	/**
+	 * Returns the last completed step, ignoring any claim marker on it.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @param string $step Raw column value.
+	 * @return string
+	 */
+	public static function completed_step( string $step ): string {
+		return str_starts_with( $step, self::CLAIM_PREFIX )
+			? substr( $step, strlen( self::CLAIM_PREFIX ) )
+			: $step;
 	}
 
 	/**
@@ -1109,10 +1215,10 @@ final class Run {
 	 * @since 0.5.0
 	 *
 	 * @param int $cents Actual cost.
-	 * @return void
+	 * @return bool True when the write reached the database.
 	 */
-	public function record_cost( int $cents ): void {
-		$this->update( array( 'cost_cents' => $cents ), array( '%d' ) );
+	public function record_cost( int $cents ): bool {
+		return $this->update( array( 'cost_cents' => $cents ), array( '%d' ) );
 	}
 
 	/**
@@ -1130,15 +1236,14 @@ final class Run {
 	 * @param string             $status  One of the skipped status constants.
 	 * @param string             $reason  Human-readable explanation.
 	 * @param Pricing_Table|null $pricing Rate table, or null to build a default.
-	 * @return void
+	 * @return bool True when this call is the one that closed the run.
 	 */
-	public function skip( string $status, string $reason, ?Pricing_Table $pricing = null ): void {
-		$this->update(
+	public function skip( string $status, string $reason, ?Pricing_Table $pricing = null ): bool {
+		return $this->close(
 			array(
-				'status'      => $status,
-				'error'       => $reason,
-				'cost_cents'  => $this->measured_cents( $pricing ),
-				'finished_at' => current_time( 'mysql', true ),
+				'status'     => $status,
+				'error'      => $reason,
+				'cost_cents' => $this->measured_cents( $pricing ),
 			),
 			array( '%s', '%s', '%d', '%s' )
 		);
@@ -1184,10 +1289,15 @@ final class Run {
 	 * @param int           $grounded_calls  Number of grounded requests made.
 	 * @return int Cost in cents.
 	 */
-	public function settle_cost( Pricing_Table $pricing, int $grounded_calls = 0 ): int {
+	public function settle_cost( Pricing_Table $pricing, int $grounded_calls = 0 ): int|WP_Error {
 		$cents = $this->measured_cents( $pricing, $grounded_calls );
 
-		$this->record_cost( $cents );
+		if ( ! $this->record_cost( $cents ) ) {
+			return new WP_Error(
+				'autoscribe_state_not_recorded',
+				__( 'The cost of this run could not be written to the run log, so the reservation it made against the monthly cap still stands. The run was not reported as finished.', 'autoscribe' )
+			);
+		}
 
 		return $cents;
 	}
@@ -1197,16 +1307,61 @@ final class Run {
 	 *
 	 * @since 0.3.0
 	 *
-	 * @return void
+	 * @return bool True when this call is the one that closed the run.
 	 */
-	public function succeed(): void {
-		$this->update(
-			array(
-				'status'      => self::STATUS_SUCCESS,
-				'finished_at' => current_time( 'mysql', true ),
-			),
+	public function succeed(): bool {
+		return $this->close(
+			array( 'status' => self::STATUS_SUCCESS ),
 			array( '%s', '%s' )
 		);
+	}
+
+	/**
+	 * Writes a terminal state, and only for a run that is still open.
+	 *
+	 * Every ending goes through one conditional update. The condition is what
+	 * makes it a transition rather than a write: a second worker, a stall sweep
+	 * that has already given up, and a duplicate queued action all lose the race
+	 * instead of closing a run twice — and closing twice means a second review
+	 * email, a second re-arm, and a settled cost overwritten by a later one.
+	 *
+	 * Returning whether it happened is the other half. The callers that send mail
+	 * and arm the next occurrence should do so because this run ended, not
+	 * because they asked it to.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @param array<string, mixed> $data    Columns to write, without finished_at.
+	 * @param string[]             $formats Formats, including one for finished_at.
+	 * @return bool True when this call is the one that closed the run.
+	 */
+	private function close( array $data, array $formats ): bool {
+		global $wpdb;
+
+		$data['finished_at'] = current_time( 'mysql', true );
+
+		/*
+		 * A multi-column WHERE rather than hand-built SQL: wpdb::update() takes
+		 * one, and it gives the conditional transition without a string this file
+		 * would have to assemble and prepare itself.
+		 *
+		 * Zero affected rows is unambiguous here, in a way it is not for an
+		 * ordinary update. A status transition always changes the status, so a
+		 * row that matched would always have been written; nothing written means
+		 * nothing matched, which means the run is no longer open.
+		 */
+		$updated = $wpdb->update(
+			Activation::table_name(),
+			$data,
+			array(
+				'id'     => $this->id,
+				'status' => self::STATUS_RUNNING,
+			),
+			$formats,
+			array( '%d', '%s' )
+		);
+
+		return is_numeric( $updated ) && (int) $updated > 0;
 	}
 
 	/**
@@ -1223,15 +1378,14 @@ final class Run {
 	 * @param string             $message        Human-readable failure reason.
 	 * @param Pricing_Table|null $pricing        Rate table, or null to build a default.
 	 * @param int                $grounded_calls Number of grounded requests made.
-	 * @return void
+	 * @return bool True when this call is the one that closed the run.
 	 */
-	public function fail( string $message, ?Pricing_Table $pricing = null, int $grounded_calls = 0 ): void {
-		$this->update(
+	public function fail( string $message, ?Pricing_Table $pricing = null, int $grounded_calls = 0 ): bool {
+		return $this->close(
 			array(
-				'status'      => self::STATUS_FAILED,
-				'error'       => $message,
-				'cost_cents'  => $this->measured_cents( $pricing, $grounded_calls ),
-				'finished_at' => current_time( 'mysql', true ),
+				'status'     => self::STATUS_FAILED,
+				'error'      => $message,
+				'cost_cents' => $this->measured_cents( $pricing, $grounded_calls ),
 			),
 			array( '%s', '%s', '%d', '%s' )
 		);

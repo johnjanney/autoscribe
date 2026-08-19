@@ -251,6 +251,8 @@ final class Stall_Sweeper {
 				break;
 			}
 
+			$busy = $this->scheduler->runs_with_step_actions( $candidates );
+
 			foreach ( $candidates as $run_id ) {
 				/*
 				 * The cursor follows the run being examined, not the end of the
@@ -261,7 +263,7 @@ final class Stall_Sweeper {
 				 */
 				$after = $run_id;
 
-				if ( $this->scheduler->has_step_action( $run_id ) ) {
+				if ( isset( $busy[ $run_id ] ) ) {
 					// Waiting its turn, or working. Not stalled.
 					continue;
 				}

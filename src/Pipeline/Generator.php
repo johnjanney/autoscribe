@@ -177,7 +177,7 @@ final class Generator {
 		$post_id       = (int) $run->post_id();
 		$attachment_id = (int) ( $run->payload()['image']['attachment_id'] ?? 0 );
 
-		$status = $this->final_status( $prompt, $status_override );
+		$status = $this->final_status( $prompt, $status_override, $run );
 
 		/*
 		 * A refused status transition used to pass unnoticed, and the run then
@@ -205,7 +205,24 @@ final class Generator {
 		// now that the providers have reported their usage.
 		$cost = $run->settle_cost( $pricing, $grounded );
 
-		$run->succeed();
+		if ( is_wp_error( $cost ) ) {
+			return $cost;
+		}
+
+		/*
+		 * Nothing is announced until the run is durably closed. succeed() is a
+		 * conditional transition, so it is false both when the write failed and
+		 * when something else had already closed this run — a duplicate action,
+		 * or a stall sweep that gave up on it. Sending the review mail and arming
+		 * the next occurrence off the back of a transition that did not happen is
+		 * how one finished article becomes two emails and two schedules.
+		 */
+		if ( ! $run->succeed() ) {
+			return new WP_Error(
+				'autoscribe_state_not_recorded',
+				__( 'The post was published, but this run could not be closed in the run log — most likely because something else closed it first. No notification was sent and the schedule was left alone, so nothing has been done twice.', 'autoscribe' )
+			);
+		}
 
 		if ( 'draft' === $status ) {
 			$this->send_review_notice( $article, $post_id );
@@ -258,7 +275,12 @@ final class Generator {
 		 * were never budget-checked, and a run that began under review finishing
 		 * by publishing. The queue driver compares this before each step.
 		 */
-		if ( ! $run->merge_payload( array( 'config' => $prompt->config_fingerprint() ) ) ) {
+		$opened = array(
+			'config'       => $prompt->config_fingerprint(),
+			'force_review' => Settings::force_review() ? 1 : 0,
+		);
+
+		if ( ! $run->merge_payload( $opened ) ) {
 			/*
 			 * A missing fingerprint is read downstream as "opened by an earlier
 			 * version", which is right for an upgrade and wrong for a write that
@@ -547,16 +569,24 @@ final class Generator {
 	 *
 	 * @param Prompt      $prompt   Prompt being run.
 	 * @param string|null $override Explicit status, or null.
+	 * @param Run|null    $run      Run being finished, when there is one.
 	 * @return string
 	 */
-	private function final_status( Prompt $prompt, ?string $override ): string {
+	private function final_status( Prompt $prompt, ?string $override, ?Run $run = null ): string {
 		/*
 		 * Section 10's global override wins over everything, including an explicit
 		 * caller override. It is the safety catch for the moment a provider changes
 		 * behaviour or a prompt starts producing garbage, and a catch that any
 		 * caller can step around is not a catch. Checked first for that reason.
+		 *
+		 * It is also checked against the moment the run *started*, not only the
+		 * moment it ends. A run spans several requests now, so switching the catch
+		 * off part-way would publish work that began under review — the safety
+		 * model turned off retrospectively for an article already being written.
+		 * The stricter of the two settings wins, so turning it on mid-run still
+		 * takes effect and turning it off never applies to work already under way.
 		 */
-		if ( Settings::force_review() ) {
+		if ( Settings::force_review() || ( $run instanceof Run && $run->started_under_review() ) ) {
 			return 'draft';
 		}
 

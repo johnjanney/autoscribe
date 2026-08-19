@@ -139,7 +139,7 @@ docblock says so.
 
 So after the split, a host that kills a step still leaves a run stuck in
 `running` forever, exactly as today. What changes is only that the *window* for
-being killed is one provider call instead of six.
+being killed is one step instead of the whole article.
 
 Resume needs a **stall sweeper**: a recurring action that finds rows in `running`
 whose last write is older than some threshold, and re-dispatches them at their
@@ -239,8 +239,11 @@ if the dispatcher is transparent — that is the main safety net. Beyond it:
 
 ## 8. What this buys, and what it does not
 
-**Buys:** each queued request becomes one provider call, so a 30-second
-`max_execution_time` host stops killing runs mid-article. A failed step repeats
+**Buys:** a killed request costs one step instead of the whole article, and the
+sweeper restarts what was killed. It does **not** buy one provider call per
+request — the topic step asks again after a collision and the article step makes
+one repair call, so a step can make two calls at up to 120 seconds each. A
+30-second host can still lose a step; it no longer loses the article. A failed step repeats
 only that step rather than re-paying for the whole pipeline. `runs.step` becomes
 a genuine progress indicator.
 
@@ -262,7 +265,10 @@ run, or make the pipeline faster; it makes it slower in wall-clock terms.
    suggested. Restarts are counted *before* being armed: a restart recorded and
    then not armed is swept again and counted again, converging on giving up,
    while one armed and then not recorded would restart for ever.
-3. ~~**Run-now latency.**~~ **Kept the synchronous path.** The concern
+3. ~~**Run-now latency.**~~ **Kept the synchronous driver.** Note this is about
+   the *driver*, not the button: Run now queues an action and always has (D-19),
+   and Preview is the caller that runs the sequence in its own request. The
+   concern
    was two sequencers drifting apart, so there is only one — `Pipeline` owns the
    order and both drivers advance it. `Generator` loops it inside one request;
    the queue driver advances it one action at a time. Neither knows the order.

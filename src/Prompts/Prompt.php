@@ -7,6 +7,7 @@
 
 namespace AutoScribe\Prompts;
 
+use AutoScribe\Admin\Settings;
 use AutoScribe\Scheduling\Schedule;
 use WP_Error;
 use WP_Post;
@@ -390,6 +391,23 @@ final class Prompt {
 		foreach ( array_keys( Prompt_Fields::all() ) as $field ) {
 			$values[ $field ] = $this->raw( $field );
 		}
+
+		/*
+		 * Site settings count too, and leaving them out made the guard narrower
+		 * than it reads. A prompt with a blank model field resolves through the
+		 * site default at every step, so changing that default mid-run swaps the
+		 * model the budget was checked for. The default model of each provider
+		 * this prompt uses is therefore part of what the run was checked against.
+		 *
+		 * Force review is here for a different reason: not because a run should
+		 * fail when it changes, but so it cannot be *relaxed* under an open run
+		 * without anyone noticing. Tightening it is handled separately — see
+		 * Generator::final_status(), where an open run keeps the stricter of the
+		 * two settings.
+		 */
+		$values['@default_text_model']  = Settings::default_model( $this->text_provider() );
+		$values['@default_image_model'] = Settings::default_model( $this->image_provider() );
+		$values['@force_review']        = Settings::force_review() ? '1' : '0';
 
 		ksort( $values );
 

@@ -201,6 +201,19 @@ final class Scheduler {
 			return $this->unavailable();
 		}
 
+		/*
+		 * Not unique, and that is not an oversight. Action Scheduler's uniqueness
+		 * counts actions that are pending *or* in progress, and every step arms
+		 * its successor from inside itself — so the action doing the arming is
+		 * itself the duplicate, and the whole chain stops after its first step.
+		 * Tried, and it does exactly that.
+		 *
+		 * Duplicate delivery is guarded where it can actually be guarded:
+		 * Run::claim_step() is a compare-and-swap on the run's position, so of
+		 * two workers reaching the same run only one proceeds. Uniqueness would
+		 * have stopped a second row existing; the claim stops a second worker
+		 * spending, which is the property that matters.
+		 */
 		$armed = as_schedule_single_action( time(), self::HOOK_RUN_STEP, array( 'run_id' => $run_id ), self::GROUP );
 
 		return $this->armed( $armed ) ? true : $this->not_armed();
@@ -225,6 +238,89 @@ final class Scheduler {
 		}
 
 		as_unschedule_all_actions( self::HOOK_RUN_STEP, array( 'run_id' => $run_id ), self::GROUP );
+	}
+
+	/**
+	 * Returns which of these runs have a queued or running step action.
+	 *
+	 * One query for a page of runs rather than one per run. Asking individually
+	 * turned a bounded sweep into two thousand queue-store round trips against
+	 * the very queue it is there to watch, which is a strange way to look after
+	 * something.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @param int[] $run_ids Runs to ask about.
+	 * @return array<int, true> The subset that has an action, keyed by run ID.
+	 */
+	public function runs_with_step_actions( array $run_ids ): array {
+		global $wpdb;
+
+		$run_ids = array_values( array_unique( array_map( 'intval', $run_ids ) ) );
+
+		if ( array() === $run_ids || ! $this->is_available() ) {
+			return array();
+		}
+
+		$table = $wpdb->prefix . 'actionscheduler_actions';
+
+		// The store may be the legacy post-based one, which has no such table.
+		if ( $table !== $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) ) {
+			return $this->one_by_one( $run_ids );
+		}
+
+		$found = array();
+
+		foreach ( $run_ids as $run_id ) {
+			$found[ $run_id ] = true;
+		}
+
+		$rows = $wpdb->get_col(
+			$wpdb->prepare(
+				'SELECT args FROM %i WHERE hook = %s AND status IN ( %s, %s )',
+				$table,
+				self::HOOK_RUN_STEP,
+				\ActionScheduler_Store::STATUS_PENDING,
+				\ActionScheduler_Store::STATUS_RUNNING
+			)
+		);
+
+		$busy = array();
+
+		foreach ( (array) $rows as $args ) {
+			$decoded = json_decode( (string) $args, true );
+			$run_id  = is_array( $decoded ) ? (int) ( $decoded['run_id'] ?? 0 ) : 0;
+
+			if ( isset( $found[ $run_id ] ) ) {
+				$busy[ $run_id ] = true;
+			}
+		}
+
+		return $busy;
+	}
+
+	/**
+	 * Falls back to asking about each run separately.
+	 *
+	 * For a store this code cannot query directly — the legacy post-based one,
+	 * or a replacement someone has substituted. Slow, but correct, and the
+	 * alternative is guessing about runs that may be mid-flight.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @param int[] $run_ids Runs to ask about.
+	 * @return array<int, true>
+	 */
+	private function one_by_one( array $run_ids ): array {
+		$busy = array();
+
+		foreach ( $run_ids as $run_id ) {
+			if ( $this->has_step_action( $run_id ) ) {
+				$busy[ $run_id ] = true;
+			}
+		}
+
+		return $busy;
 	}
 
 	/**

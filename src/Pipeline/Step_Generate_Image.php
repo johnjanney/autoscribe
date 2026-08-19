@@ -112,8 +112,11 @@ final class Step_Generate_Image {
 
 		$result = $provider->generate_image( $api_key, $model, $this->image_prompt( $prompt, $article ) );
 
-		if ( ! is_wp_error( $result ) ) {
-			$run->record_image( $result->model() );
+		if ( ! is_wp_error( $result ) && ! $run->record_image( $result->model() ) ) {
+			return new WP_Error(
+				'autoscribe_usage_not_recorded',
+				__( 'An image was generated and charged for, but the run log would not record it. The run was stopped so the charge is still counted against the monthly cap.', 'autoscribe' )
+			);
 		}
 
 		return $result;
@@ -167,9 +170,14 @@ final class Step_Generate_Image {
 			);
 
 			if ( ! is_wp_error( $attachment_id ) ) {
-				set_post_thumbnail( $post_id, $attachment_id );
-
-				return $this->remember( $run, (int) $attachment_id );
+				if ( ! $this->set_thumbnail( $post_id, (int) $attachment_id ) ) {
+					$image = new WP_Error(
+						'autoscribe_thumbnail_not_set',
+						__( 'The featured image was generated but WordPress would not attach it to the post.', 'autoscribe' )
+					);
+				} else {
+					return $this->remember( $run, (int) $attachment_id );
+				}
 			}
 
 			$image = $attachment_id;
@@ -183,9 +191,7 @@ final class Step_Generate_Image {
 			return $image;
 		}
 
-		if ( 'fallback' === $mode && $prompt->fallback_image_id() > 0 ) {
-			set_post_thumbnail( $post_id, $prompt->fallback_image_id() );
-
+		if ( 'fallback' === $mode && $this->set_thumbnail( $post_id, $prompt->fallback_image_id() ) ) {
 			return $this->remember( $run, $prompt->fallback_image_id() );
 		}
 
@@ -233,9 +239,33 @@ final class Step_Generate_Image {
 			return null;
 		}
 
+		return $this->set_thumbnail( $post_id, $attachment_id ) ? $attachment_id : null;
+	}
+
+	/**
+	 * Attaches a featured image and confirms it is really attached.
+	 *
+	 * WordPress returns false from set_post_thumbnail() when it fails *and* when
+	 * the post already carries that same thumbnail, so its return value cannot tell a
+	 * refusal from a no-op. Asking the post what its thumbnail is answers the
+	 * question that actually matters, and it is the question section 6's
+	 * `required` mode turns on: a run that reports success without a featured
+	 * image has published exactly what that mode exists to prevent.
+	 *
+	 * @since 1.1.1
+	 *
+	 * @param int $post_id       Post to attach to.
+	 * @param int $attachment_id Attachment to attach, or 0 to check nothing.
+	 * @return bool
+	 */
+	private function set_thumbnail( int $post_id, int $attachment_id ): bool {
+		if ( $attachment_id <= 0 ) {
+			return false;
+		}
+
 		set_post_thumbnail( $post_id, $attachment_id );
 
-		return $attachment_id;
+		return (int) get_post_thumbnail_id( $post_id ) === $attachment_id;
 	}
 
 	/**
