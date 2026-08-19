@@ -270,6 +270,72 @@ behaviour; nothing needs migrating. The runs table is unchanged.
   was truncated or written by an older version of the plugin is exactly where
   that stops being true on its own.
 
+- **Recovery for runs the queue stopped advancing.** Splitting the pipeline did
+  not give this on its own: Action Scheduler records a killed action as failed
+  and stops, so a step killed by a PHP timeout left a run open with nothing
+  queued to advance it and nothing that would ever pick it up. A recurring sweep
+  restarts such a run twice and then gives up on it.
+
+  Whether a run is stalled is decided by whether anything is queued or running to
+  advance it, not by how long it has been open — age cannot tell a stalled run
+  from a slow one, and a legitimate run takes several queue passes. Age is used
+  only to keep the sweeper away from runs too young to judge. Fifteen minutes by
+  default, filterable through `autoscribe_stall_threshold`.
+
+  The scan pages past healthy runs rather than reading a fixed number of the
+  oldest: a busy queue can hold more healthy open runs than one batch, and
+  reading only the oldest would re-read the same healthy rows every sweep and
+  never reach a newer stalled one — leaving it holding its reservation for as
+  long as the backlog lasted. A prompt that has been switched off is treated like
+  one that has been deleted, so giving up on its run does not arm it again and
+  leave a disabled prompt showing a next-run time.
+
+- **Giving up on a run releases what it reserved.** This is the point of the
+  sweep rather than a detail of it. The estimated cost is written onto a run
+  before its first paid call so that concurrent runs can see it, and the section
+  7.4 cap reads every open run's reservation — so a run abandoned mid-flight held
+  its estimate against the monthly cap for ever. The cap would fill with money
+  nobody spent and prompts would start skipping for no visible reason. **That
+  failure mode did not exist before the split**; it is the debt the split took
+  on.
+
+### Changed
+
+- **A scheduled run is advanced one queued action per step.** Section 5 asks for
+  this because a run takes 30 to 120 seconds and a host with a short
+  `max_execution_time` terminates it part-way. Each request now carries at most
+  one provider call, so what a kill costs is one step rather than an article.
+
+  The new `autoscribe_run_step` hook carries a run ID and nothing else, and the
+  position is read from `runs.step` — one hook rather than one per step, so the
+  queue never holds routing the run row could contradict. "Run now" and Preview
+  keep the synchronous path, and both drivers advance the same sequence.
+
+  **What this does not yet give is recovery.** Action Scheduler marks a killed
+  action failed and stops; it does not retry. A killed step still strands a run
+  until the stall sweeper lands. The window shrinks from six provider calls to
+  one; it does not close.
+- **The step order moved out of `Generator` and into a `Pipeline` class.**
+  Section 5 needs a run to be resumable from its row alone, because a queued
+  action arrives knowing only a run ID — and an order expressed as a sequence of
+  statements inside one method cannot be resumed, only restarted. `Pipeline`
+  holds the list and executes one step at a time, taking every step's input from
+  the run rather than from a local variable, which is what phases 1 and 2 were
+  building towards.
+
+  `Generator` keeps the synchronous path that "Run now" and Preview need, and
+  drives the same sequence in a loop. There is deliberately one list and two
+  drivers: two lists would be two descriptions of one order, and the one that
+  drifts is the one nobody is looking at.
+
+- The featured image work — the provider call, the sideload, the thumbnail, and
+  the decision about what to do when no image can be had — moved out of
+  `Generator` and into `Step_Generate_Image`, where the other four steps'
+  equivalents already live. It had a practical cost as well as an untidy shape:
+  the idempotency guard belongs with the paid call, and a guard in the
+  orchestrator could not be tested, because the orchestrator runs the pipeline
+  once and never re-enters.
+
 ## [1.0.5] - 2026-08-19
 
 Version 1.0.4 handled a failed draft adoption by carrying on and trusting
@@ -337,73 +403,7 @@ time.
   had succeeded would hide the old draft from duplicate detection and then write
   a second one beside it. The run stands down as a duplicate instead.
 
-### Added
-
-- **Recovery for runs the queue stopped advancing.** Splitting the pipeline did
-  not give this on its own: Action Scheduler records a killed action as failed
-  and stops, so a step killed by a PHP timeout left a run open with nothing
-  queued to advance it and nothing that would ever pick it up. A recurring sweep
-  restarts such a run twice and then gives up on it.
-
-  Whether a run is stalled is decided by whether anything is queued or running to
-  advance it, not by how long it has been open — age cannot tell a stalled run
-  from a slow one, and a legitimate run takes several queue passes. Age is used
-  only to keep the sweeper away from runs too young to judge. Fifteen minutes by
-  default, filterable through `autoscribe_stall_threshold`.
-
-  The scan pages past healthy runs rather than reading a fixed number of the
-  oldest: a busy queue can hold more healthy open runs than one batch, and
-  reading only the oldest would re-read the same healthy rows every sweep and
-  never reach a newer stalled one — leaving it holding its reservation for as
-  long as the backlog lasted. A prompt that has been switched off is treated like
-  one that has been deleted, so giving up on its run does not arm it again and
-  leave a disabled prompt showing a next-run time.
-
-- **Giving up on a run releases what it reserved.** This is the point of the
-  sweep rather than a detail of it. The estimated cost is written onto a run
-  before its first paid call so that concurrent runs can see it, and the section
-  7.4 cap reads every open run's reservation — so a run abandoned mid-flight held
-  its estimate against the monthly cap for ever. The cap would fill with money
-  nobody spent and prompts would start skipping for no visible reason. **That
-  failure mode did not exist before the split**; it is the debt the split took
-  on.
-
 ### Changed
-
-- **A scheduled run is advanced one queued action per step.** Section 5 asks for
-  this because a run takes 30 to 120 seconds and a host with a short
-  `max_execution_time` terminates it part-way. Each request now carries at most
-  one provider call, so what a kill costs is one step rather than an article.
-
-  The new `autoscribe_run_step` hook carries a run ID and nothing else, and the
-  position is read from `runs.step` — one hook rather than one per step, so the
-  queue never holds routing the run row could contradict. "Run now" and Preview
-  keep the synchronous path, and both drivers advance the same sequence.
-
-  **What this does not yet give is recovery.** Action Scheduler marks a killed
-  action failed and stops; it does not retry. A killed step still strands a run
-  until the stall sweeper lands. The window shrinks from six provider calls to
-  one; it does not close.
-- **The step order moved out of `Generator` and into a `Pipeline` class.**
-  Section 5 needs a run to be resumable from its row alone, because a queued
-  action arrives knowing only a run ID — and an order expressed as a sequence of
-  statements inside one method cannot be resumed, only restarted. `Pipeline`
-  holds the list and executes one step at a time, taking every step's input from
-  the run rather than from a local variable, which is what phases 1 and 2 were
-  building towards.
-
-  `Generator` keeps the synchronous path that "Run now" and Preview need, and
-  drives the same sequence in a loop. There is deliberately one list and two
-  drivers: two lists would be two descriptions of one order, and the one that
-  drifts is the one nobody is looking at.
-
-- The featured image work — the provider call, the sideload, the thumbnail, and
-  the decision about what to do when no image can be had — moved out of
-  `Generator` and into `Step_Generate_Image`, where the other four steps'
-  equivalents already live. It had a practical cost as well as an untidy shape:
-  the idempotency guard belongs with the paid call, and a guard in the
-  orchestrator could not be tested, because the orchestrator runs the pipeline
-  once and never re-enters.
 
 - `Run::adopt_post()` and `Run::record_post()` return whether their writes
   reached the database.
