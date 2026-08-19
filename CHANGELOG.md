@@ -87,6 +87,10 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-08-19
+
+One fix, against the guard 1.1.2 introduced.
+
 ### Fixed
 
 - **A run the sweeper had already recovered once could never be closed, and held
