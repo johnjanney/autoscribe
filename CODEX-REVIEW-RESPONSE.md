@@ -1397,3 +1397,43 @@ defects that predate the pipeline split and that my own audit should have caught
 1.1.1 is a patch release. The known deviations from the brief are unchanged: Run
 now does not stream, the next-run readout is not live, the duplicate threshold is
 78 rather than 82, and there is still no screenshot.
+
+---
+
+# Follow-up after 1.1.2 — the empty stored step
+
+**Confirmed. Fixed.**
+
+The sixth corrective round on the same guard, and the first where the fault was
+introduced by the previous round rather than merely survived by it.
+
+1.1.2 tied the sweeper's terminal write to the position it observed. `close_at()`
+passed that position to `wpdb::update()`, converting an observed empty string to
+NULL on the reasoning that an un-advanced run stores NULL. That is true of a run
+that has never advanced. It is not true of a run the sweeper has already
+recovered: `release_claim()` writes back `completed_step()`, which at the first
+step is the empty string, not NULL. So the column held `''` while the WHERE asked
+for `IS NULL`, and the two never met.
+
+The consequence is worse than a failed write. `give_up()` refuses to close, the
+run stays `running`, and `Budget_Guard` goes on counting its reservation against
+the monthly cap. Nothing ever releases it, because the only thing that would is
+the close that cannot match. A few stalled runs are enough to make the cap deny
+every subsequent run.
+
+The fix is the comparison `claim_step()` already uses — `COALESCE( step, '' )` —
+which required writing the statement out, because `wpdb::update()` cannot put a
+function in its WHERE. One static prepared statement, per D-26.
+
+**What this round says about the previous five.** Each earlier round narrowed a
+window; this one was a plain disagreement between two methods about how the same
+value is spelled. `claim_step()` had the answer already — the COALESCE was there,
+written for exactly this reason — and the new code beside it re-derived a
+different one instead of reusing it. The lesson is narrower than the earlier
+ones and worth stating separately: when a column has more than one representation
+of the same state, the reconciliation belongs in one place that every reader
+shares, not repeated per query from memory.
+
+The regression test releases a first-step claim and then asks the sweeper to give
+up, and fails against a strict `step = ''` match as well as against the `IS NULL`
+match it replaced.

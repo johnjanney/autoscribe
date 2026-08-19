@@ -614,6 +614,57 @@ final class Write_FailureTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A run whose first-step claim was released can still be given up on.
+	 *
+	 * Releasing a first-step claim writes the completed position back as an empty
+	 * string, because nothing has completed. The conditional close treated an
+	 * observed empty position as SQL NULL, which matches neither — so once a run
+	 * had been through one recovery, no later sweep could ever close it, and it
+	 * held its budget reservation against the monthly cap indefinitely. The
+	 * sweeper's own recovery made the run unrecoverable.
+	 *
+	 * @since 1.1.3
+	 *
+	 * @return void
+	 */
+	public function test_a_run_recovered_at_its_first_step_can_still_be_closed(): void {
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+
+		$run_id = $run->id();
+
+		// A worker claims the first step and is killed; a sweep releases it.
+		$this->assertTrue( $run->claim_step( '' ) );
+
+		$observed = Run::load( $run_id )->raw_step();
+
+		$this->assertTrue( Run::load( $run_id )->release_claim( $observed ) );
+		$this->assertSame( '', Run::load( $run_id )->raw_step(), 'The released position is an empty string.' );
+
+		$run->merge_payload( array( 'sweeps' => Stall_Sweeper::MAX_RESTARTS ) );
+
+		global $wpdb;
+
+		$wpdb->update(
+			\AutoScribe\Activation::table_name(),
+			array( 'started_at' => gmdate( 'Y-m-d H:i:s', time() - ( Stall_Sweeper::threshold() * 2 ) ) ),
+			array( 'id' => $run_id ),
+			array( '%s' ),
+			array( '%d' )
+		);
+
+		$sweeper = new Stall_Sweeper( new Scheduler(), $this->handler() );
+
+		$this->assertTrue( $sweeper->recover( $run_id, '' ) );
+		$this->assertSame(
+			Run::STATUS_FAILED,
+			Run::load( $run_id )->status(),
+			'A run at its restart limit must be closable however its position is stored.'
+		);
+	}
+
+	/**
 	 * Builds the queued handler under test.
 	 *
 	 * @since 1.1.1
