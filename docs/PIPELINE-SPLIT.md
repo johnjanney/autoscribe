@@ -209,7 +209,7 @@ Each phase is independently landable and leaves the plugin working.
 | 3a | ✅ Extract the sequence into `Pipeline`; `Generator` drives it in a loop | Medium | Done. Pure refactor — every existing test passes unchanged, which is the safety net |
 | 3b | ✅ Dispatcher, `autoscribe_run_step` hook, queued path advances one step per action | Medium | Done. `Run::post_id()` had to start reading the row — it returned an in-memory property that only the object which wrote it ever had |
 | 4 | ✅ Re-arm on every terminal path | Small | Done. The finalise *step* turned out to need no work — see below |
-| 5 | **Stall sweeper** + reservation release on give-up | Medium | §4.4 and §5; do not defer this one |
+| 5 | ✅ **Stall sweeper** + reservation release on give-up | Medium | Done. Staleness is decided by whether anything is queued to advance the run, not by age — age alone cannot tell a stalled run from a slow one |
 | 6 | Docs: `DECISIONS.md` D-10, README known-limitations, `INSTRUCTIONS.md` on latency | Small | |
 
 Phases 1 and 2 are worth doing whether or not the rest follows.

@@ -16,6 +16,7 @@ use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Queued_Run_Handler;
 use AutoScribe\Pipeline\Retry_Policy;
 use AutoScribe\Pipeline\Run_Retention;
+use AutoScribe\Pipeline\Stall_Sweeper;
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Prompts\Prompt_Post_Type;
 use AutoScribe\Providers\Provider_Registry;
@@ -72,6 +73,14 @@ final class Plugin {
 	private Queued_Run_Handler $queued_runs;
 
 	/**
+	 * Recovery for runs the queue stopped advancing.
+	 *
+	 * @since 1.1.0
+	 * @var Stall_Sweeper
+	 */
+	private Stall_Sweeper $sweeper;
+
+	/**
 	 * Builds the container.
 	 *
 	 * @since 0.1.0
@@ -85,6 +94,7 @@ final class Plugin {
 			$this->scheduler,
 			new Retry_Policy()
 		);
+		$this->sweeper          = new Stall_Sweeper( $this->scheduler, $this->queued_runs );
 	}
 
 	/**
@@ -139,10 +149,12 @@ final class Plugin {
 		add_action( Scheduler::HOOK_RUN_PROMPT, array( $this->queued_runs, 'handle' ) );
 		add_action( Scheduler::HOOK_RUN_STEP, array( $this->queued_runs, 'handle_step' ) );
 		add_action( Run_Retention::HOOK, array( Run_Retention::class, 'handle' ) );
+		add_action( Stall_Sweeper::HOOK, array( $this->sweeper, 'handle' ) );
 		add_action( 'save_post_' . Prompt_Post_Type::POST_TYPE, array( $this, 'rearm_prompt' ) );
 		add_action( 'trashed_post', array( $this, 'cancel_prompt' ) );
 		add_action( 'untrashed_post', array( $this, 'rearm_prompt' ) );
 		add_action( 'init', array( Run_Retention::class, 'schedule' ), 20 );
+		add_action( 'init', array( Stall_Sweeper::class, 'schedule' ), 20 );
 
 		if ( is_admin() ) {
 			$this->boot_admin();

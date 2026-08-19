@@ -870,6 +870,58 @@ final class Run {
 	}
 
 	/**
+	 * Returns the IDs of runs that are open and older than the given moment.
+	 *
+	 * Age alone does not make a run stalled — a long one is still working — so
+	 * the caller pairs this with a check for whether anything is queued to
+	 * advance it. Age is the guard against acting on a run that has simply not
+	 * been picked up yet.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param string $before_utc UTC MySQL timestamp; runs started before this.
+	 * @param int    $limit      Most rows to return.
+	 * @return int[]
+	 */
+	public static function open_before( string $before_utc, int $limit = 50 ): array {
+		global $wpdb;
+
+		$ids = $wpdb->get_col(
+			$wpdb->prepare(
+				'SELECT id FROM %i WHERE status = %s AND started_at < %s ORDER BY id ASC LIMIT %d',
+				Activation::table_name(),
+				self::STATUS_RUNNING,
+				$before_utc,
+				max( 1, $limit )
+			)
+		);
+
+		return array_map( 'intval', (array) $ids );
+	}
+
+	/**
+	 * Returns how many times a sweeper has re-dispatched this run.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return int
+	 */
+	public function sweeps(): int {
+		return max( 0, (int) ( $this->payload()['sweeps'] ?? 0 ) );
+	}
+
+	/**
+	 * Records another sweeper re-dispatch.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return bool True when the count reached the database.
+	 */
+	public function record_sweep(): bool {
+		return $this->merge_payload( array( 'sweeps' => $this->sweeps() + 1 ) );
+	}
+
+	/**
 	 * Returns run rows matching the given filters, newest first.
 	 *
 	 * Section 9.3 wants the log filterable by prompt, status, and month. Month is

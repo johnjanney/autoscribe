@@ -96,6 +96,12 @@
 		column pass the test, which is the failure the tests exist to catch.
 		-->
 		<exclude-pattern>*/tests/Pipeline/Run_PayloadTest.php</exclude-pattern>
+		<!--
+		The stall tests backdate a run's started_at so the sweeper will judge it.
+		Run::start() always stamps the current time, and a test that waited a
+		quarter of an hour for the threshold would not be a test.
+		-->
+		<exclude-pattern>*/tests/Pipeline/Stall_SweeperTest.php</exclude-pattern>
 	</rule>
 
 	<!--

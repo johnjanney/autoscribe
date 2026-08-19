@@ -8,6 +8,7 @@
 namespace AutoScribe;
 
 use AutoScribe\Pipeline\Run_Retention;
+use AutoScribe\Pipeline\Stall_Sweeper;
 use AutoScribe\Scheduling\Scheduler;
 use WP_Role;
 
@@ -143,6 +144,7 @@ final class Activation {
 		}
 
 		Run_Retention::unschedule();
+		Stall_Sweeper::unschedule();
 
 		flush_rewrite_rules();
 	}
