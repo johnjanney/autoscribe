@@ -274,6 +274,85 @@ final class Draft_AdoptionTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A failed ownership write leaves no half-adopted state behind.
+	 *
+	 * `update_post_meta()` can fail — a database error, or a filter on
+	 * `update_post_metadata` short-circuiting the write — and until 1.0.4 the
+	 * result was discarded. The run row had already been bound to the draft by
+	 * then, so a failure reproduced the exact state 1.0.3 fixed: a run naming the
+	 * draft while the draft still named the attempt before it, and the next
+	 * attempt refusing it and building a duplicate.
+	 *
+	 * Adoption is now all or nothing. When the ownership write does not take, the
+	 * run row is left alone and the draft still belongs to whoever owned it.
+	 *
+	 * @since 1.0.4
+	 *
+	 * @return void
+	 */
+	public function test_a_failed_ownership_write_adopts_nothing(): void {
+		$prompt_id = $this->create_failing_image_prompt();
+
+		$this->mock_text_success_and_image_failure();
+
+		( new Generator( new Provider_Registry() ) )->run( $prompt_id, null, 1 );
+		$draft = $this->failed_post_id( $prompt_id );
+		$owner = (int) get_post_meta( $draft, Step_Assemble_Post::RUN_ID_META, true );
+
+		$run = Run::start( $prompt_id, 2 );
+
+		$this->assertNotWPError( $run );
+
+		// Refuse the ownership write the way a filter or a database error would.
+		$block = static function () {
+			return false;
+		};
+
+		add_filter( 'update_post_metadata', $block );
+
+		$adopted = $run->adopt_post( $draft );
+
+		remove_filter( 'update_post_metadata', $block );
+
+		$this->assertFalse( $adopted, 'Adoption must report the failure rather than half-completing.' );
+		$this->assertSame(
+			$owner,
+			(int) get_post_meta( $draft, Step_Assemble_Post::RUN_ID_META, true ),
+			'The draft must still belong to the run that owned it.'
+		);
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertIsArray( $row );
+		$this->assertSame( 0, (int) $row['post_id'], 'The run row must not be bound to a draft it did not adopt.' );
+	}
+
+	/**
+	 * A successful adoption reports that it succeeded.
+	 *
+	 * @since 1.0.4
+	 *
+	 * @return void
+	 */
+	public function test_a_successful_adoption_reports_success(): void {
+		$prompt_id = $this->create_failing_image_prompt();
+
+		$this->mock_text_success_and_image_failure();
+
+		( new Generator( new Provider_Registry() ) )->run( $prompt_id, null, 1 );
+		$draft = $this->failed_post_id( $prompt_id );
+
+		$run = Run::start( $prompt_id, 2 );
+
+		$this->assertNotWPError( $run );
+		$this->assertTrue( $run->adopt_post( $draft ) );
+		$this->assertSame(
+			$run->id(),
+			(int) get_post_meta( $draft, Step_Assemble_Post::RUN_ID_META, true )
+		);
+	}
+
+	/**
 	 * Builds a prompt whose image call will fail the run.
 	 *
 	 * Section 6's "required" mode fails the run and leaves the draft behind,

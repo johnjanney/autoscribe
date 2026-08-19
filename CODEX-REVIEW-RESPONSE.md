@@ -932,3 +932,57 @@ Two details worth stating, both checked:
 The new test asserts both halves of the invariant — that the failed retry row
 still owns the draft, and that the next attempt adopts it — so neither remedy can
 be applied by halves in future without the suite noticing.
+
+---
+
+## FR-13 — Confirmed. Fixed.
+
+> **P2 — Abort adoption when the ownership write fails.** When the `wp_postmeta`
+> write fails — for example because of a database error or a metadata filter —
+> `update_post_meta()` returns `false`, but this method continues after the run
+> row has already been bound to the draft. If the retry then fails before
+> assembly, the run row names the current attempt while the post metadata still
+> names the earlier one, so the next retry rejects the draft and can create the
+> same duplicate this change is intended to prevent.
+
+Correct, and the sting is that it is the *same* defect as FR-12 re-entering
+through a failure path. The 1.0.3 fix made adoption depend on two writes and
+checked neither, so any failure of the second one landed back in the state the
+fix existed to prevent. A fix that only works when nothing goes wrong is not much
+of a fix.
+
+Two things were wrong, not one:
+
+1. **Neither result was checked.**
+2. **The order was backwards.** The run row was bound first, so the write that
+   can fail for reasons outside the plugin's control was the one that ran second
+   — which is the arrangement where a failure leaves the most damage behind.
+
+**Fix.** Adoption is now all or nothing, and the order is reversed so the cheaper
+failure changes nothing at all:
+
+- The ownership write goes first. If it does not take, the run row has not been
+  touched, so the draft still belongs to whoever owned it and there is nothing to
+  undo.
+- The run row is bound only after that, and if *that* write fails the ownership
+  is put back where it was and the in-memory post ID is cleared.
+- `adopt_post()` returns whether the draft now belongs to this run.
+
+**One detail the finding does not mention, and it matters here.**
+`update_post_meta()` returns `false` on failure *and* when the value being stored
+already equals the stored one. A plain `if ( ! update_post_meta( ... ) )` would
+therefore be wrong in a way that is easy to miss and hard to reproduce. The write
+is verified by reading the value back and comparing it to this run's ID, which is
+correct for both cases. In today's flow the meta always names an earlier run so
+the equal-value case cannot arise — but that is a property of the current call
+site, not of the method, and it is not one to depend on.
+
+**What a failed adoption now does.** `Generator` treats it as no adoption rather
+than pressing on. That matters because the adopted post ID is also what excludes
+the draft from duplicate detection: carrying on would hide the old draft from the
+dedupe check and then write a second one beside it, which is the outcome the
+whole mechanism exists to prevent. Standing down as a duplicate is the better
+failure — it leaves one draft and one clear reason in the run log.
+
+Two tests cover it: a blocked ownership write adopts nothing, changes nothing,
+and says so; and a successful adoption reports success and moves the link.
