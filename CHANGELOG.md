@@ -102,10 +102,19 @@ for are what earn the version bump.
   `Run::merge_payload()`, which merges at the top level. The grounding sources
   recorded under section 7.1 were the data that would have been lost.
 
+- **The payload cache was assigned before the write was attempted.** A refused
+  write left the merged document in memory, so the object went on reporting keys
+  the row did not contain, and a later write persisted the rejected patch along
+  with it. `Run::record_sources()` had the same fault one level up — and that is
+  the one that reaches published content, since the section 7.1 sources block is
+  built from it. Both now cache only once the write is accepted, and drop the
+  cache on a refusal so the next read goes back to the database.
+
 ### Added
 
 - `Run::merge_payload()` and `Run::payload()`, the read and write side of the
   document the split pipeline will pass step state through.
+- `Run::record_sources()` reports whether its write succeeded.
 - `Article::to_array()` and `Article_Validator::from_array()`, so an article can
   be stored and rebuilt. Rebuilding re-validates rather than trusting the store:
   an `Article` exists only where the schema was satisfied, and a payload row that
