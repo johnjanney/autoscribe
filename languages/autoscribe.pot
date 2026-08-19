@@ -9,7 +9,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-19T08:22:41-05:00\n"
+"POT-Creation-Date: 2026-08-19T08:30:33-05:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: autoscribe\n"
@@ -1248,7 +1248,11 @@ msgstr ""
 msgid "The %1$s parameter is invalid. Expected %2$s."
 msgstr ""
 
-#: src/Scheduling/Scheduler.php:311
+#: src/Scheduling/Scheduler.php:319
+msgid "The action queue would not accept the job. Check that the Action Scheduler tables exist and are writable."
+msgstr ""
+
+#: src/Scheduling/Scheduler.php:345
 msgid "Action Scheduler is not loaded, so runs cannot be queued."
 msgstr ""
 

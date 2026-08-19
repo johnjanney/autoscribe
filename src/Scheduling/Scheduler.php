@@ -118,9 +118,9 @@ final class Scheduler {
 
 		$timestamp = $next->getTimestamp();
 
-		as_schedule_single_action( $timestamp, self::HOOK_RUN_PROMPT, $this->args( $prompt_id ), self::GROUP );
+		$armed = as_schedule_single_action( $timestamp, self::HOOK_RUN_PROMPT, $this->args( $prompt_id ), self::GROUP );
 
-		return $timestamp;
+		return $this->armed( $armed ) ? $timestamp : $this->not_armed();
 	}
 
 	/**
@@ -201,9 +201,9 @@ final class Scheduler {
 			return $this->unavailable();
 		}
 
-		as_schedule_single_action( time(), self::HOOK_RUN_STEP, array( 'run_id' => $run_id ), self::GROUP );
+		$armed = as_schedule_single_action( time(), self::HOOK_RUN_STEP, array( 'run_id' => $run_id ), self::GROUP );
 
-		return true;
+		return $this->armed( $armed ) ? true : $this->not_armed();
 	}
 
 	/**
@@ -225,9 +225,9 @@ final class Scheduler {
 
 		$timestamp = time() + max( 1, $delay_seconds );
 
-		as_schedule_single_action( $timestamp, self::HOOK_RUN_PROMPT, $this->args( $prompt_id ), self::GROUP );
+		$armed = as_schedule_single_action( $timestamp, self::HOOK_RUN_PROMPT, $this->args( $prompt_id ), self::GROUP );
 
-		return $timestamp;
+		return $this->armed( $armed ) ? $timestamp : $this->not_armed();
 	}
 
 	/**
@@ -284,6 +284,40 @@ final class Scheduler {
 		}
 
 		return $date instanceof \DateTimeInterface ? $date->getTimestamp() : null;
+	}
+
+	/**
+	 * Whether Action Scheduler accepted an action.
+	 *
+	 * It returns the new action's ID, and 0 when it could not create one — a
+	 * queue-table write failure, most plainly. Every arming call in this class
+	 * discarded that, and each discarded it into a different silence: a failed
+	 * step left a run in `running` with no next action and its budget
+	 * reservation held indefinitely; a failed retry dropped the attempt; and a
+	 * failed re-arm stopped the prompt for ever, which is the one thing section
+	 * 4.3 exists to prevent.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param mixed $result Whatever as_schedule_single_action() returned.
+	 * @return bool
+	 */
+	private function armed( $result ): bool {
+		return is_numeric( $result ) && (int) $result > 0;
+	}
+
+	/**
+	 * Returns the error for an action the queue would not accept.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return WP_Error
+	 */
+	private function not_armed(): WP_Error {
+		return new WP_Error(
+			'autoscribe_action_not_scheduled',
+			__( 'The action queue would not accept the job. Check that the Action Scheduler tables exist and are writable.', 'autoscribe' )
+		);
 	}
 
 	/**

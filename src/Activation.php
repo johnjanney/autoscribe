@@ -120,7 +120,26 @@ final class Activation {
 		// Action Scheduler actions behind, which the queue keeps picking up and
 		// failing for as long as the site runs.
 		if ( function_exists( 'as_unschedule_all_actions' ) ) {
-			as_unschedule_all_actions( Scheduler::HOOK_RUN_PROMPT, array(), Scheduler::GROUP );
+			/*
+			 * By hook alone, and deliberately. as_unschedule_all_actions() only
+			 * takes its cancel-everything-for-this-hook shortcut when the group
+			 * is left out; given a hook *and* a group with empty args it falls
+			 * through to matching actions whose args are exactly empty, and every
+			 * action this plugin arms carries a prompt or run ID. Passing the
+			 * group — which this call did until 1.1.0 — therefore cancelled
+			 * nothing at all, and deactivating the plugin left its whole queue
+			 * armed. Both hook names are plugin-specific, so cancelling by hook
+			 * cannot reach another plugin's actions.
+			 *
+			 * The step actions matter as much as the prompt ones. They are keyed
+			 * by run rather than by prompt, so nothing else clears them: left
+			 * behind, they either strand their runs — Action Scheduler can be
+			 * supplied by another active plugin and go on consuming actions whose
+			 * callback this plugin no longer registers — or sit in the queue and
+			 * resume a half-finished run whenever the plugin is switched back on.
+			 */
+			as_unschedule_all_actions( Scheduler::HOOK_RUN_PROMPT );
+			as_unschedule_all_actions( Scheduler::HOOK_RUN_STEP );
 		}
 
 		Run_Retention::unschedule();
