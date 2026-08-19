@@ -114,7 +114,7 @@ final class Queued_Run_Handler {
 		$armed = $this->scheduler->schedule_step( $run->id() );
 
 		if ( is_wp_error( $armed ) ) {
-			$run->fail( $armed->get_error_message() );
+			$run->fail( $armed->get_error_message(), null, $this->grounded_calls( $prompt ) );
 			$this->conclude( $prompt, $attempt, $armed );
 		}
 	}
@@ -150,7 +150,11 @@ final class Queued_Run_Handler {
 			 * keyed by run rather than by prompt, so the check lives here instead
 			 * — and this way it also catches a prompt disabled between two steps.
 			 */
-			$run->fail( __( 'The prompt was disabled or removed while this run was in progress.', 'autoscribe' ) );
+			$run->fail(
+				__( 'The prompt was disabled or removed while this run was in progress.', 'autoscribe' ),
+				null,
+				$this->grounded_calls( $prompt )
+			);
 			$this->scheduler->cancel( $prompt_id );
 
 			return;
@@ -159,7 +163,7 @@ final class Queued_Run_Handler {
 		$changed = $this->config_changed( $prompt, $run );
 
 		if ( null !== $changed ) {
-			$run->fail( $changed->get_error_message() );
+			$run->fail( $changed->get_error_message(), null, $this->grounded_calls( $prompt ) );
 			$this->conclude( $prompt, $run->attempt(), $changed );
 
 			return;
@@ -187,6 +191,29 @@ final class Queued_Run_Handler {
 		}
 
 		$this->finish( $prompt, $run, $grounded );
+	}
+
+	/**
+	 * Returns the number of grounded requests to settle a run against.
+	 *
+	 * Run::fail() settles from measured usage, and the grounded-request charge is
+	 * not part of that measurement — it has to be passed in. Every abort path
+	 * here left it at zero, so a run that had already paid for a grounded body
+	 * call settled for less than it spent and the month-to-date total the section
+	 * 7.4 cap reads was short by the difference.
+	 *
+	 * The prompt's setting rather than a count of calls actually made: settlement
+	 * ignores it entirely when no usage was recorded, so a run that stopped
+	 * before the body call is unaffected, and over-stating a cap is the safe
+	 * direction to be wrong in.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Prompt $prompt Prompt being run.
+	 * @return int
+	 */
+	private function grounded_calls( Prompt $prompt ): int {
+		return $prompt->grounding_enabled() ? 1 : 0;
 	}
 
 	/**

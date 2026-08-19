@@ -225,6 +225,47 @@ final class PipelineTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A post that cannot be linked to its run stops the run.
+	 *
+	 * Later steps read the post back off the run rather than receiving it as an
+	 * argument, because they run in separate requests. A refused link therefore
+	 * leaves a post nothing points at: the image step would attach its picture to
+	 * post 0, and publishing would look for a post that was never recorded.
+	 *
+	 * Found by auditing the writes whose results were still being discarded,
+	 * rather than by a review — this is the same fault as six others, at a site
+	 * nobody had reported.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @return void
+	 */
+	public function test_a_post_that_cannot_be_linked_stops_the_run(): void {
+		global $wpdb;
+
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt();
+
+		$break = static function ( $query ) {
+			return str_contains( (string) $query, 'SET `post_id`' )
+				? 'UPDATE autoscribe_no_such_table SET post_id = 1 WHERE id = 1'
+				: $query;
+		};
+
+		add_filter( 'query', $break );
+		$wpdb->suppress_errors( true );
+
+		$result = ( new Generator( new Provider_Registry() ) )->run( $prompt_id );
+
+		$wpdb->suppress_errors( false );
+		remove_filter( 'query', $break );
+
+		$this->assertWPError( $result );
+		$this->assertSame( 'autoscribe_state_not_recorded', $result->get_error_code() );
+	}
+
+	/**
 	 * A failing step stops the sequence where it failed.
 	 *
 	 * @since 1.1.0

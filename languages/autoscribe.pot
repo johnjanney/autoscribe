@@ -9,7 +9,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-19T08:30:33-05:00\n"
+"POT-Creation-Date: 2026-08-19T08:36:01-05:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: autoscribe\n"
@@ -530,30 +530,34 @@ msgstr ""
 msgid "The run stopped making progress through its steps and was abandoned rather than repeated indefinitely."
 msgstr ""
 
+#: src/Pipeline/Generator.php:272
+msgid "The settings this run was checked against could not be written to the run log, so the run was stopped rather than starting without a record of them."
+msgstr ""
+
 #. translators: %d: post ID.
-#: src/Pipeline/Generator.php:282
+#: src/Pipeline/Generator.php:298
 #, php-format
 msgid "No prompt exists with ID %d."
 msgstr ""
 
 #. translators: %d: post ID of the draft.
-#: src/Pipeline/Generator.php:371
+#: src/Pipeline/Generator.php:387
 #, php-format
 msgid "The draft left by the previous attempt (post %d) could not be bound to this run, so continuing would have created a second draft beside it. The run was stopped before any provider call."
 msgstr ""
 
-#: src/Pipeline/Generator.php:420
+#: src/Pipeline/Generator.php:436
 msgid "This run produced no article, so there is nothing to publish."
 msgstr ""
 
 #. translators: %s: article title.
-#: src/Pipeline/Generator.php:454
+#: src/Pipeline/Generator.php:470
 #, php-format
 msgid "AutoScribe draft ready for review: %s"
 msgstr ""
 
 #. translators: 1: article title, 2: opening of the article, 3: edit URL.
-#: src/Pipeline/Generator.php:459
+#: src/Pipeline/Generator.php:475
 #, php-format
 msgid ""
 "AutoScribe generated a draft and held it for review.\n"
@@ -567,13 +571,13 @@ msgid ""
 msgstr ""
 
 #. translators: %s: prompt title.
-#: src/Pipeline/Generator.php:491
+#: src/Pipeline/Generator.php:507
 #, php-format
 msgid "AutoScribe run failed: %s"
 msgstr ""
 
 #. translators: 1: prompt title, 2: error message, 3: edit URL.
-#: src/Pipeline/Generator.php:496
+#: src/Pipeline/Generator.php:512
 #, php-format
 msgid ""
 "An AutoScribe prompt failed and will not be retried.\n"
@@ -585,11 +589,11 @@ msgid ""
 "%3$s"
 msgstr ""
 
-#: src/Pipeline/Generator.php:523
+#: src/Pipeline/Generator.php:539
 msgid "AutoScribe has reached 80% of its monthly budget"
 msgstr ""
 
-#: src/Pipeline/Generator.php:524
+#: src/Pipeline/Generator.php:540
 msgid "Estimated AutoScribe spend for this month has passed 80 percent of the configured global cap. Runs will stop once the cap is reached. These figures are estimates; your provider billing is the authority."
 msgstr ""
 
@@ -609,11 +613,11 @@ msgstr ""
 msgid "This run has no generated article to work from, so it cannot continue."
 msgstr ""
 
-#: src/Pipeline/Queued_Run_Handler.php:153
+#: src/Pipeline/Queued_Run_Handler.php:154
 msgid "The prompt was disabled or removed while this run was in progress."
 msgstr ""
 
-#: src/Pipeline/Queued_Run_Handler.php:232
+#: src/Pipeline/Queued_Run_Handler.php:259
 msgid "This prompt was edited while the run was in progress, so the run was stopped rather than finishing under settings it was never checked against. The next scheduled run will use the new settings."
 msgstr ""
 
@@ -631,6 +635,12 @@ msgstr ""
 
 #: src/Pipeline/Step_Assemble_Post.php:166
 msgid "A dangerous URI scheme survived sanitisation; the article was discarded."
+msgstr ""
+
+#. translators: %d: post ID.
+#: src/Pipeline/Step_Assemble_Post.php:238
+#, php-format
+msgid "The generated post (%d) could not be linked to this run, so the run was stopped rather than continuing without knowing what it had written."
 msgstr ""
 
 #: src/Pipeline/Step_Budget_Check.php:108

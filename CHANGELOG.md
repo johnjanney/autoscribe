@@ -103,6 +103,22 @@ the stall sweeper — are what make the split worth having.
   `Run::merge_payload()`, which merges at the top level. The grounding sources
   recorded under section 7.1 were the data that would have been lost.
 
+- **A generated post could be left with nothing pointing at it.** Later steps
+  read the post back off the run rather than receiving it as an argument, because
+  they run in separate requests, and the write that links them discarded its
+  result. A refused link left the image step attaching its picture to post 0 and
+  publishing looking for a post that was never recorded. Found by auditing the
+  remaining discarded write results rather than by a review.
+- **Aborting a run part-way did not charge for the grounded call it had made.**
+  Settlement measures token and image usage; the grounded-request charge is
+  passed in, and every abort path left it at zero. A run stopped after its
+  grounded body call therefore settled for less than it spent, and the
+  month-to-date total the cap reads was short by the difference.
+- **A run whose settings fingerprint could not be stored started anyway.** A
+  missing fingerprint is read as "opened by an earlier version", which is right
+  for an upgrade and wrong for a failed write: the run would then accept any edit
+  silently — the guard added above turned off by the one failure it most needs to
+  survive.
 - **Deactivating the plugin left its whole queue armed.** The teardown passed a
   hook *and* a group with empty arguments, which makes Action Scheduler skip its
   cancel-everything-for-this-hook shortcut and match only actions whose arguments
