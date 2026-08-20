@@ -13,7 +13,7 @@ everything, and inserts the post as a draft or publishes it.
 
 | | |
 |---|---|
-| **Version** | 1.12.0 |
+| **Version** | 1.13.0 |
 | **Requires WordPress** | 6.4 |
 | **Requires PHP** | 8.1 |
 | **License** | GPL-2.0-or-later |
@@ -264,9 +264,15 @@ The first item is the one that matters most:
   sessions deterministically rather than running them in parallel: one PHP
   process still executes one statement at a time, so a true wall-clock race is
   still not exercised.
-- No test drives Action Scheduler itself. The queued handler is tested by
-  advancing a run one action at a time with a fresh handler each pass, which is
-  what the queue does, but the queue's own scheduling is not exercised.
+- Action Scheduler is driven by one test class only
+  (`tests/Scheduling/Queue_DispatchTest.php`), which hands a prompt to the real
+  queue runner and asserts on what comes out: the post, the run row, the next
+  occurrence, and whether anything was left failed. Everything else advances a
+  run one action at a time with a fresh handler each pass, which is what the
+  queue does without asking the queue. The dispatch tests run the runner
+  in-process, so what they do not cover is what only a second process can show:
+  two runners claiming from the store at once, and the delay between an action
+  being armed and the system cron arriving to run it.
 - CI runs against MySQL only. A MySQL/MariaDB divergence was found and fixed
   during development; nothing guards against the reverse.
 - Spend figures are estimates computed from reported token usage against a

@@ -87,6 +87,41 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-08-20
+
+Tests, not behaviour: the queue now runs the plugin in the suite, instead of the
+suite doing the queue's job and taking its word for the rest.
+
+Every pipeline test until now advanced a run by calling the handler directly, one
+step at a time. That is a faithful description of what Action Scheduler does, and
+it assumes everything around it: that the hooks are registered at all, that a
+prompt id survives being encoded into an action row and read back, that a step
+arming its successor produces an action the runner picks up, and that a finished
+run leaves the next occurrence armed. A prompt that runs once and is never armed
+again looks exactly like a prompt that works — and that is the defect a live site
+reported in 1.10.0.
+
+### Added
+
+- **Action Scheduler dispatch tests.** `Queue_DispatchTest` hands a prompt to the
+  real `ActionScheduler_QueueRunner` and asserts on what comes out: a published
+  post carrying its run id, a run row marked successful, the next occurrence
+  armed and matching what the editor is shown, no action left failed in the
+  store, a provider failure that closes the chain rather than leaving it open,
+  and the recurring sweep putting an unqueued prompt back in the queue.
+
+  Each was checked by removal — unregistering the step hook, skipping the
+  re-arm, and unregistering the sweep each fail the expected test for the
+  expected reason.
+
+  Two details of the harness are worth recording, because both silently make the
+  tests pass while doing nothing. The plugin never arms an action for the current
+  second, so a drain that asks once finds an empty queue and reports success; the
+  drain waits for an action that is about to come due, and stops at anything
+  further out. And the two-connection tests commit, so their actions outlive
+  them; the store is emptied at the start of each dispatch test, or a count of
+  what the queue completed is answered by somebody else's leftovers.
+
 ## [1.12.0] - 2026-08-20
 
 A test harness rather than a fix: two database connections, so the guards this

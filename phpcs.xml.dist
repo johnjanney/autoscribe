@@ -172,6 +172,15 @@
 		plugin's own table and about posts, and neither has a wrapper.
 		-->
 		<exclude-pattern>*/tests/Support/Two_Connection_Test_Case.php</exclude-pattern>
+
+		<!--
+		The dispatch tests ask Action Scheduler's own tables what the queue did:
+		when the next action comes due, how many finished, how many failed. There
+		is no API for those questions that does not go through the store this test
+		exists to observe, and the store is emptied the same way for the same
+		reason.
+		-->
+		<exclude-pattern>*/tests/Scheduling/Queue_DispatchTest.php</exclude-pattern>
 	</rule>
 
 	<!--

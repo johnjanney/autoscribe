@@ -113,6 +113,25 @@ Keep them here rather than spreading them through the suite. They are an order o
 magnitude slower than a rolled-back test, and the ordinary tests still describe
 intent better than these do.
 
+## Queue dispatch tests
+
+`tests/Scheduling/Queue_DispatchTest.php` is the only place the real
+`ActionScheduler_QueueRunner` runs this plugin. Everything else calls the handler
+directly, which is faster and says where a chain broke, and takes the queue's
+word for the hooks being registered and the arguments surviving the round trip.
+
+If you add to it, two things will otherwise make a test pass while doing nothing:
+
+- **Nothing is ever armed for the current second.** A retry and a "Run now" are
+  both `time() + 1`, deliberately, so a runner already mid-pass cannot claim an
+  action that is still being set up. A drain that asks the runner once finds an
+  empty queue and returns happily. `drain()` waits for an action that is about to
+  come due and stops at anything further out, which is what keeps it from
+  sleeping through to the next scheduled occurrence.
+- **The two-connection tests commit, so their actions outlive them.** Any
+  assertion counting what the queue completed has to empty the store first, or it
+  is counting somebody else's leftovers.
+
 ## Adding a dependency
 
 Ask first. Every production dependency ships to every install; every dev
