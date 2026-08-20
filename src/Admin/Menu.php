@@ -44,6 +44,14 @@ final class Menu {
 	private Settings_Page $settings_page;
 
 	/**
+	 * Queue health check, for the Run Log warning.
+	 *
+	 * @since 1.13.2
+	 * @var Queue_Health
+	 */
+	private Queue_Health $queue_health;
+
+	/**
 	 * Builds the menu.
 	 *
 	 * @since 0.7.0
@@ -53,6 +61,7 @@ final class Menu {
 	 */
 	public function __construct( Provider_Registry $providers, Scheduler $scheduler ) {
 		$this->settings_page = new Settings_Page( $providers, $scheduler );
+		$this->queue_health  = new Queue_Health( $scheduler );
 	}
 
 	/**
@@ -117,6 +126,13 @@ final class Menu {
 
 		echo '<div class="wrap">';
 		echo '<h1>' . esc_html__( 'AutoScribe Run Log', 'autoscribe' ) . '</h1>';
+
+		$stalled = $this->queue_health->stall_warning();
+
+		if ( null !== $stalled ) {
+			printf( '<div class="notice notice-warning"><p>%s</p></div>', esc_html( $stalled ) );
+		}
+
 		echo '<p>' . esc_html__( 'Spend figures are estimates computed from reported token usage. Your provider billing is the authority.', 'autoscribe' ) . '</p>';
 
 		printf(

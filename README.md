@@ -13,7 +13,7 @@ everything, and inserts the post as a draft or publishes it.
 
 | | |
 |---|---|
-| **Version** | 1.13.1 |
+| **Version** | 1.13.2 |
 | **Requires WordPress** | 6.4 |
 | **Requires PHP** | 8.1 |
 | **License** | GPL-2.0-or-later |
@@ -231,7 +231,10 @@ The first item is the one that matters most:
   short `max_execution_time` from killing a whole article, and the cost is
   wall-clock time: each step waits for the queue's next pass. If your queue only
   runs when someone visits the site, set up the system cron described above, or a
-  scheduled run will crawl.
+  scheduled run will crawl — it advances while you are clicking around the admin
+  and stops when you stop, which looks exactly like a plugin that hangs. When
+  that happens the Run Log says so above the table, rather than leaving a row
+  marked "running" to be interpreted.
 
   **Preview** still answers in the request that asked for it. **Run now** queues
   a run and returns immediately; the run log reports the outcome. It has always

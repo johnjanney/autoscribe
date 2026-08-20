@@ -159,6 +159,10 @@
 		-->
 		<exclude-pattern>*/tests/Pipeline/Preview_RunTest.php</exclude-pattern>
 		<!--
+		The queue-health test backdates an open run so it counts as waiting.
+		-->
+		<exclude-pattern>*/tests/Admin/Queue_HealthTest.php</exclude-pattern>
+		<!--
 		The stale-worker test closes a run from inside the query filter, in the
 		gap between finalisation's claim and the ownership read it guards. There
 		is no API for "issue this statement at this point in another statement's

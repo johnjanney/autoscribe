@@ -87,6 +87,37 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.13.2] - 2026-08-20
+
+### Added
+
+- **The Run Log says when a run is waiting on a queue nobody is running.** A run
+  is five short queued requests rather than one long one, so every step needs
+  the queue to fire again. Where WP-Cron is doing that job it only fires on page
+  loads, so a run advances while an administrator is clicking around the admin
+  and stops the moment they stop — which is indistinguishable, from the Run Log,
+  from a plugin that hangs.
+
+  The Settings screen has reported the cron configuration since 0.7.0, under
+  System health. Nobody goes to Settings to find out why a run says "running".
+  The Run Log now carries the warning itself, and only when both halves are
+  true: a run has been open for more than five minutes *and* the queue has
+  finished nothing in that time. An old run on a working queue is the stall
+  sweeper's business and says nothing, and a quiet queue with nothing waiting on
+  it is a quiet site.
+
+### Fixed
+
+- **The two-connection tests no longer leave queue rows behind.** They commit,
+  by design, and they cancelled the actions they had armed — but a cancelled
+  action is still a row, and a step action is keyed by run ID, a number the runs
+  table hands out again once those rows are deleted and the auto-increment
+  counter resets. Ninety-odd stale `autoscribe_run_step` rows had accumulated in
+  the development database, and any later test whose run drew a matching ID was
+  told by the queue that its run was alive. It surfaced as an unrelated
+  concurrency test failing at random. The harness now deletes every queue row it
+  created, by watermark, the same way it already handled runs and posts.
+
 ## [1.13.1] - 2026-08-20
 
 A scheduled run failed on a live site with "The topic proposal was not JSON."

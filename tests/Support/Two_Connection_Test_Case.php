@@ -61,6 +61,14 @@ abstract class Two_Connection_Test_Case extends WP_UnitTestCase {
 	private int $post_watermark = 0;
 
 	/**
+	 * Highest queue action that existed before this test.
+	 *
+	 * @since 1.13.2
+	 * @var int
+	 */
+	private int $action_watermark = 0;
+
+	/**
 	 * Leaves the per-test transaction behind and takes a watermark instead.
 	 *
 	 * @since 1.12.0
@@ -90,6 +98,10 @@ abstract class Two_Connection_Test_Case extends WP_UnitTestCase {
 
 		$this->run_watermark  = (int) $wpdb->get_var( 'SELECT COALESCE( MAX( id ), 0 ) FROM ' . Activation::table_name() ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Fixed identifier from Activation.
 		$this->post_watermark = (int) $wpdb->get_var( "SELECT COALESCE( MAX( ID ), 0 ) FROM {$wpdb->posts}" );
+
+		$this->action_watermark = (int) $wpdb->get_var(
+			"SELECT COALESCE( MAX( action_id ), 0 ) FROM {$wpdb->prefix}actionscheduler_actions"
+		);
 	}
 
 	/**
@@ -121,6 +133,8 @@ abstract class Two_Connection_Test_Case extends WP_UnitTestCase {
 		}
 
 		$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->postmeta} WHERE post_id > %d", $this->post_watermark ) );
+
+		$this->remove_queued_actions();
 
 		parent::tear_down();
 	}
@@ -164,6 +178,42 @@ abstract class Two_Connection_Test_Case extends WP_UnitTestCase {
 
 		return (int) $wpdb->get_var(
 			$wpdb->prepare( 'SELECT COUNT(*) FROM ' . Activation::table_name() . ' WHERE prompt_id = %d', $prompt_id ) // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- Fixed identifier from Activation.
+		);
+	}
+
+	/**
+	 * Deletes the queue rows this test committed.
+	 *
+	 * Cancelling is not enough, and the difference took a while to find. A
+	 * cancelled action is still a row, a committed row outlives the test that
+	 * wrote it, and a step action is keyed by run ID — a number the runs table
+	 * hands out again after these tests delete their rows and the auto-increment
+	 * counter is reset. A later, unrelated test then asks whether anything is
+	 * queued for its run, finds somebody else's month-old action, and concludes
+	 * the run is alive. It failed as a flake in a class that touches none of
+	 * this.
+	 *
+	 * Everything above the watermark goes, logs first for the foreign key.
+	 *
+	 * @since 1.13.2
+	 *
+	 * @return void
+	 */
+	private function remove_queued_actions(): void {
+		global $wpdb;
+
+		$wpdb->query(
+			$wpdb->prepare(
+				"DELETE FROM {$wpdb->prefix}actionscheduler_logs WHERE action_id > %d",
+				$this->action_watermark
+			)
+		);
+
+		$wpdb->query(
+			$wpdb->prepare(
+				"DELETE FROM {$wpdb->prefix}actionscheduler_actions WHERE action_id > %d",
+				$this->action_watermark
+			)
 		);
 	}
 
