@@ -7,6 +7,8 @@
 
 namespace AutoScribe\Tests\Support;
 
+use AutoScribe\Pipeline\Step_Propose_Topic;
+
 defined( 'ABSPATH' ) || exit;
 
 /**
@@ -94,7 +96,8 @@ trait Mocks_Provider {
 	 * Answers the proposal call and the body call with valid payloads.
 	 *
 	 * The two are told apart by the token ceiling: the proposal call asks for
-	 * 512 and the body call asks for more, which is the same distinction the
+	 * the proposal step's own ceiling and the body call asks for more, which is
+	 * the same distinction the
 	 * pipeline itself relies on.
 	 *
 	 * @since 0.8.0
@@ -113,7 +116,7 @@ trait Mocks_Provider {
 		$this->install_responder(
 			function ( $args ) use ( $article, $proposal, $extra ) {
 				$body    = json_decode( (string) $args['body'], true );
-				$payload = ( isset( $body['max_tokens'] ) && 512 === (int) $body['max_tokens'] )
+				$payload = ( isset( $body['max_tokens'] ) && Step_Propose_Topic::PROPOSAL_TOKENS === (int) $body['max_tokens'] )
 					? $proposal
 					: $article;
 

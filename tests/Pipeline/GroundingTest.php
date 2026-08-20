@@ -9,6 +9,7 @@ namespace AutoScribe\Tests\Pipeline;
 
 use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Run;
+use AutoScribe\Pipeline\Step_Propose_Topic;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Providers\Response\Source_Extractor;
 use AutoScribe\Security\Key_Store;
@@ -486,7 +487,7 @@ final class GroundingTest extends WP_UnitTestCase {
 			static function ( $args ) use ( $article, $proposal ) {
 				$body = json_decode( (string) $args['body'], true );
 
-				$payload = ( isset( $body['max_tokens'] ) && 512 === (int) $body['max_tokens'] )
+				$payload = ( isset( $body['max_tokens'] ) && Step_Propose_Topic::PROPOSAL_TOKENS === (int) $body['max_tokens'] )
 					? $proposal
 					: $article;
 

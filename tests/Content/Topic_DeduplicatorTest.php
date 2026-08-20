@@ -10,6 +10,7 @@ namespace AutoScribe\Tests\Content;
 use AutoScribe\Content\Topic_Deduplicator;
 use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Run;
+use AutoScribe\Pipeline\Step_Propose_Topic;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Security\Key_Store;
 use AutoScribe\Tests\Support\Creates_Prompts;
@@ -19,7 +20,8 @@ use WP_UnitTestCase;
  * Covers section 7.2 duplicate avoidance.
  *
  * The central test proves the rejection happens before the body call by
- * inspecting every outgoing request. A proposal call asks for 512 tokens and a
+ * inspecting every outgoing request. A proposal call asks for the proposal
+ * step's own ceiling and a
  * two-field schema; a body call asks for the full article schema containing
  * content_html. Asserting that no captured request carries content_html is
  * direct evidence that the expensive call never happened, rather than an
@@ -162,7 +164,7 @@ final class Topic_DeduplicatorTest extends WP_UnitTestCase {
 			$encoded = (string) wp_json_encode( $request['body'] );
 
 			$this->assertStringNotContainsString( 'content_html', $encoded, 'request ' . $index );
-			$this->assertSame( 512, $request['body']['max_tokens'], 'request ' . $index );
+			$this->assertSame( Step_Propose_Topic::PROPOSAL_TOKENS, $request['body']['max_tokens'], 'request ' . $index );
 		}
 
 		// No generated post was written. Every post the pipeline creates carries

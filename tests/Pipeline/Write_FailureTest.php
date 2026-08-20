@@ -14,6 +14,7 @@ use AutoScribe\Pipeline\Queued_Run_Handler;
 use AutoScribe\Pipeline\Retry_Policy;
 use AutoScribe\Pipeline\Run;
 use AutoScribe\Pipeline\Stall_Sweeper;
+use AutoScribe\Pipeline\Step_Propose_Topic;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Scheduling\Scheduler;
 use AutoScribe\Security\Key_Store;
@@ -395,7 +396,7 @@ final class Write_FailureTest extends WP_UnitTestCase {
 					);
 				}
 
-				$payload = ( isset( $body['max_tokens'] ) && 512 === (int) $body['max_tokens'] )
+				$payload = ( isset( $body['max_tokens'] ) && Step_Propose_Topic::PROPOSAL_TOKENS === (int) $body['max_tokens'] )
 					? $proposal
 					: $article;
 

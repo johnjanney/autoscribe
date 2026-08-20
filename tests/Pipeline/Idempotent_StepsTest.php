@@ -471,7 +471,7 @@ final class Idempotent_StepsTest extends WP_UnitTestCase {
 					);
 				}
 
-				$payload = ( isset( $body['max_tokens'] ) && 512 === (int) $body['max_tokens'] )
+				$payload = ( isset( $body['max_tokens'] ) && Step_Propose_Topic::PROPOSAL_TOKENS === (int) $body['max_tokens'] )
 					? $proposal
 					: $article;
 

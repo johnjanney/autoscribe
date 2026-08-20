@@ -80,6 +80,8 @@ final class Queue_DispatchTest extends WP_UnitTestCase {
 		Key_Store::set( 'anthropic', 'test-key' );
 
 		$this->empty_the_queue();
+
+		add_filter( 'action_scheduler_queue_runner_time_limit', array( $this, 'generous_time_limit' ) );
 	}
 
 	/**
@@ -90,9 +92,34 @@ final class Queue_DispatchTest extends WP_UnitTestCase {
 	 * @return void
 	 */
 	public function tear_down(): void {
+		remove_filter( 'action_scheduler_queue_runner_time_limit', array( $this, 'generous_time_limit' ) );
+
 		$this->remove_provider_mock();
 
 		parent::tear_down();
+	}
+
+	/**
+	 * Stops the runner counting the rest of the suite against its time limit.
+	 *
+	 * Action Scheduler's runner is a singleton, and it measures elapsed time from
+	 * when it was *constructed* rather than from when a batch started. In a web
+	 * request those are the same instant. In a test suite the object is built
+	 * once and reached hundreds of tests later, so the runner opens a batch,
+	 * decides it is nearly out of its thirty seconds, and stops — leaving a
+	 * half-finished chain and a run still marked running.
+	 *
+	 * That is a property of the harness rather than of the plugin, and it fails
+	 * by suite position: these tests passed alone and failed in the full run on
+	 * the day a file was added ahead of them. The limit is lifted for the
+	 * duration, so what the drain observes is the chain rather than the clock.
+	 *
+	 * @since 1.13.1
+	 *
+	 * @return int Seconds.
+	 */
+	public function generous_time_limit(): int {
+		return HOUR_IN_SECONDS;
 	}
 
 	/**

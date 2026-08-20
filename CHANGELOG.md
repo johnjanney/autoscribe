@@ -87,6 +87,47 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.13.1] - 2026-08-20
+
+A scheduled run failed on a live site with "The topic proposal was not JSON."
+The model had been asked for a title and a slug and answered with something
+else, and that single malformed answer ended the run: the day's article was
+never written.
+
+### Fixed
+
+- **A malformed topic proposal is now repaired rather than fatal.** Section 5.1
+  allows one repair request per run on a validation failure. The body step made
+  it; the proposal step did not. Nor was there a retry to fall back on — an
+  unusable response is permanent as far as `Retry_Policy` is concerned, and
+  rightly so, since a scheduled retry would send the identical request. So the
+  proposal step now sends one repair, quoting the rejected response and the
+  reason it was rejected, and one only: the allowance belongs to the run, not to
+  each proposal attempt, so a collision re-ask that also comes back malformed
+  does not buy a second.
+
+- **The proposal call asks for a larger output ceiling.** It asked for 512
+  tokens, which is generous for a title and a slug and not generous at all for a
+  model that reasons before it answers: on the current generation that budget
+  covers the model's own reasoning too, so a ceiling sized for the answer can be
+  reached before the answer begins. The ceiling is a limit rather than a
+  purchase — an unused token is not billed — so it is now 2048.
+
+- **A failed proposal says what came back.** "The topic proposal was not JSON."
+  was the whole of what the Run Log could tell anybody, which is not enough to
+  tell a refusal from a preamble from a response cut off mid-object — and those
+  want different responses from whoever reads it. The error now distinguishes
+  the three and quotes the first 200 characters of what the model actually
+  returned, flattened and escaped.
+
+### Changed
+
+- The queue dispatch tests lift Action Scheduler's runner time limit for their
+  duration. The runner is a singleton that measures elapsed time from when it
+  was constructed, which in a test suite is hundreds of tests before it is used,
+  so it would open a batch, judge itself nearly out of time, and stop — failing
+  by suite position rather than by anything the plugin did.
+
 ## [1.13.0] - 2026-08-20
 
 Tests, not behaviour: the queue now runs the plugin in the suite, instead of the

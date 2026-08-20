@@ -9,6 +9,7 @@ namespace AutoScribe\Tests\Admin;
 
 use AutoScribe\Admin\Settings;
 use AutoScribe\Pipeline\Generator;
+use AutoScribe\Pipeline\Step_Propose_Topic;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Security\Key_Store;
 use AutoScribe\Tests\Support\Creates_Prompts;
@@ -102,8 +103,8 @@ final class Force_ReviewTest extends WP_UnitTestCase {
 
 			$body = json_decode( (string) $args['body'], true );
 
-			// The proposal call asks for 512 tokens; the body call asks for more.
-			$payload = ( isset( $body['max_tokens'] ) && 512 === (int) $body['max_tokens'] )
+			// The proposal call asks for the proposal ceiling; the body call asks for more.
+			$payload = ( isset( $body['max_tokens'] ) && Step_Propose_Topic::PROPOSAL_TOKENS === (int) $body['max_tokens'] )
 				? $proposal
 				: $article;
 
