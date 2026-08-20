@@ -73,3 +73,29 @@ npx wp-env run cli --env-cwd=wp-content/plugins/autoscribe \
   --exclude=vendor,tests,dev,build,node_modules,bin
 bin/build.sh
 ```
+
+### Check the model catalogs before you tag
+
+The first entry of each adapter's `suggested_models()` is what a prompt with no
+model and no site default actually calls, so it is the plugin's real default
+whatever section 2.2 says about model IDs being configuration. Model catalogs
+change every few months and a default that has been retired is a plugin that
+cannot generate anything.
+
+Open each provider's own model list, confirm the first suggestion is still
+generally available, and update the retrieval date recorded in the adapter's
+docblock — whether or not the list changed. If you have a funded key, the
+Settings screen's **Test connection** control makes the same call the pipeline
+would, which is the only check that proves the string works rather than merely
+appearing on a page.
+
+- Anthropic: <https://docs.claude.com/en/docs/about-claude/models/overview>
+- OpenAI: <https://platform.openai.com/docs/models>
+- Google: <https://ai.google.dev/gemini-api/docs/models> and
+  <https://ai.google.dev/gemini-api/docs/latest-model>
+- DeepSeek: <https://api-docs.deepseek.com/quick_start/pricing>
+
+This is deliberately not a test. A test that calls a provider fails when a
+network does, needs a funded key in CI, and would put the suite's correctness in
+somebody else's hands. `GoogleTest` instead pins the string this build claims, so
+changing it is a deliberate act rather than a reordering nobody notices.

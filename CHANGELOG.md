@@ -87,6 +87,107 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-19
+
+A fourth external review, against 1.1.3. Eight findings: seven confirmed and one
+rejected on evidence retrieved from the provider's own documentation on the day
+of the review. The reasoning for each is in `CODEX-REVIEW-RESPONSE.md`.
+
+The theme is the one the previous round started and did not finish: a write whose
+result nobody consumed. Closing a run answered a Boolean, and the two ways of
+answering false — somebody else closed it, and the database refused the write —
+are opposite situations that were being treated as one. Everything below follows
+from separating them.
+
+MINOR rather than PATCH: the runs table gains a column, `Run` and the SEO adapter
+contract change shape, and fallback image mode now refuses a configuration it
+used to accept.
+
+### Fixed
+
+- **A refused terminal write behaved like a completed run.** The queue mailed the
+  failure, armed the next occurrence, and left the run open — so when the stall
+  sweep later closed the row properly, both happened again. Worse, a run left open
+  that way loses whatever usage was held only in memory, so a paid call could
+  vanish from the month-to-date total the section 7.4 cap reads.
+
+  Closing now answers one of three things: this caller closed it, somebody else
+  had already closed it, or the write failed. Every ending in the queue driver
+  passes that answer to the one place that decides what happens next. A lost race
+  stands down silently; a refused write reports an operational fault, leaves the
+  run recoverable, and announces nothing.
+
+- **A run stopped mid-step could settle below what it had spent.** A worker killed
+  during a paid call may have been charged for work no counter records. Settling
+  such a run from its counters alone writes a figure known to be incomplete. The
+  reservation is now kept as a floor in that case only — where a claim was
+  interrupted, or where the failure being closed is an unrecorded charge. A run
+  that stalled between steps still gives its reservation back in full.
+
+- **Two stall sweeps could restart the same run, and either could erase a
+  worker's output.** The restart count lived in the payload document — the same
+  JSON every step reads whole and writes whole — so counting a restart carried a
+  stale copy of that document back over whatever a worker had recorded in
+  between: a topic, an article, its sources, or an image outcome. The next step
+  then repeated a paid call or failed on state that was no longer there.
+
+  The count now has its own column and is incremented conditionally, which makes
+  it the sweeper's claim as well as its counter. Payload writes and the position
+  write are conditional on the claim the worker holds, so a worker that has been
+  swept and replaced can no longer write over its replacement — it stands down
+  instead, without closing a run that now belongs to somebody else.
+
+- **Fallback image mode could publish with no image at all.** Section 6 defines
+  the mode as a promise that there is always a picture. If the fallback ID was
+  zero, named a deleted attachment, or WordPress refused the thumbnail write, the
+  run published without one — silently becoming optional mode in exactly the case
+  the mode was chosen for. An unattachable fallback now fails the run and leaves
+  the draft for a person, and the prompt editor refuses to store fallback mode
+  unless the ID names an image in the media library.
+
+- **A post could be published with no link to the run that produced it.** Section
+  10's `_autoscribe_run_id`, the deduplication topic key, the SEO metadata, the
+  categories, the tags, and the run log's own copy of the title were all written
+  and none of the results inspected. Every one of them is now read back or
+  checked, and a post that cannot carry them stays a draft rather than being
+  published incomplete while the run reports success.
+
+- **Finalisation had no claim.** It was the only part of a run that did not, so
+  two queued actions could both transition the post and both write a settled cost
+  before one of them lost the close race. Nothing was charged twice, but every
+  plugin listening for a publish ran twice. It now claims the run's position like
+  any step.
+
+### Changed
+
+- **A run fixes its models and rates when it opens, and uses them throughout.** A
+  blank model field resolves through the adapter's suggestion list, which is code
+  rather than configuration, so a plugin upgrade could change the model a run in
+  flight was using — the topic proposed by one model and the article written by
+  another. The pricing table could likewise be edited between the budget check and
+  the settlement, changing what an open reservation gave back. Both are now
+  recorded on the run at the moment it opens; an edit applies to the next run.
+
+- **The Google adapter's model list carries the date its catalog was checked.**
+  The order is unchanged: `gemini-3.7-flash` is still first, confirmed against
+  Google's model catalog and migration guide on 19 August 2026, both of which name
+  it as the current stable Flash model and the migration target. The docblock now
+  records where that came from and when, so the next person to touch the list
+  knows what to re-check.
+
+- **Documentation corrections.** The installation link named the 1.0.0 zip;
+  `DECISIONS.md` still claimed one provider call per queued request, which the
+  README and the pipeline document had already corrected; the README's list of
+  knowingly unmet requirements was incomplete; and a code comment pointed at the
+  README for a grounding warning that lives in `INSTRUCTIONS.md`. The README now
+  carries that warning itself.
+
+### Added
+
+- A `sweeps` column on the runs table, migrated by the existing schema version
+  check. A run opened by 1.1.x and still in flight keeps its count, which is read
+  from the payload as a floor.
+
 ## [1.1.3] - 2026-08-19
 
 One fix, against the guard 1.1.2 introduced.

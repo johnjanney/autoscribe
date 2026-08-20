@@ -7,7 +7,6 @@
 
 namespace AutoScribe\Pipeline;
 
-use AutoScribe\Cost\Pricing_Table;
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Scheduling\Scheduler;
 use WP_Error;
@@ -38,6 +37,14 @@ final class Queued_Run_Handler {
 	 * @var string
 	 */
 	public const ATTEMPT_META = '_autoscribe_attempt';
+
+	/**
+	 * Transient holding down the rate of unclosed-run alerts.
+	 *
+	 * @since 1.2.0
+	 * @var string
+	 */
+	public const WRITE_FAILURE_NOTICE = 'autoscribe_write_failure_notice';
 
 	/**
 	 * Generation orchestrator.
@@ -114,8 +121,11 @@ final class Queued_Run_Handler {
 		$armed = $this->scheduler->schedule_step( $run->id() );
 
 		if ( is_wp_error( $armed ) ) {
-			$run->fail( $armed->get_error_message(), null, $run->grounded_calls() );
-			$this->conclude( $prompt, $attempt, $armed );
+			$this->conclude(
+				$prompt,
+				$attempt,
+				Close_Result::annotate( $armed, $run->fail( $armed->get_error_message(), null, $run->grounded_calls() ) )
+			);
 		}
 	}
 
@@ -150,11 +160,24 @@ final class Queued_Run_Handler {
 			 * keyed by run rather than by prompt, so the check lives here instead
 			 * — and this way it also catches a prompt disabled between two steps.
 			 */
-			$run->fail(
+			$closed = $run->fail(
 				__( 'The prompt was disabled or removed while this run was in progress.', 'autoscribe' ),
 				null,
 				$run->grounded_calls()
 			);
+
+			if ( Close_Result::Write_Failed === $closed ) {
+				/*
+				 * The run is still open. Cancelling its actions now would leave it
+				 * with nothing to advance it and nothing to close it either, and
+				 * the sweeper is the thing that would otherwise settle it. Leave
+				 * everything as it is and let the sweep do both.
+				 */
+				$this->report_unclosed( $run );
+
+				return;
+			}
+
 			$this->scheduler->cancel_step_actions( $run_id );
 			$this->abandon( $prompt_id );
 
@@ -164,8 +187,11 @@ final class Queued_Run_Handler {
 		$changed = $this->config_changed( $prompt, $run );
 
 		if ( null !== $changed ) {
-			$run->fail( $changed->get_error_message(), null, $run->grounded_calls() );
-			$this->conclude( $prompt, $run->attempt(), $changed );
+			$this->conclude(
+				$prompt,
+				$run->attempt(),
+				Close_Result::annotate( $changed, $run->fail( $changed->get_error_message(), null, $run->grounded_calls() ) )
+			);
 
 			return;
 		}
@@ -182,8 +208,7 @@ final class Queued_Run_Handler {
 		}
 
 		if ( is_wp_error( $step ) ) {
-			$this->generator->close( $run, $step, $run->grounded_calls() );
-			$this->conclude( $prompt, $run->attempt(), $step );
+			$this->conclude( $prompt, $run->attempt(), $this->closed( $run, $step ) );
 
 			return;
 		}
@@ -192,8 +217,7 @@ final class Queued_Run_Handler {
 			$armed = $this->scheduler->schedule_step( $run_id );
 
 			if ( is_wp_error( $armed ) ) {
-				$this->generator->close( $run, $armed, $run->grounded_calls() );
-				$this->conclude( $prompt, $run->attempt(), $armed );
+				$this->conclude( $prompt, $run->attempt(), $this->closed( $run, $armed ) );
 			}
 
 			return;
@@ -259,18 +283,12 @@ final class Queued_Run_Handler {
 		$article = $this->generator->article( $run );
 
 		if ( is_wp_error( $article ) ) {
-			$this->generator->close( $run, $article, $run->grounded_calls() );
-			$this->conclude( $prompt, $run->attempt(), $article );
+			$this->conclude( $prompt, $run->attempt(), $this->closed( $run, $article ) );
 
 			return;
 		}
 
-		$result = $this->generator->finalise( $prompt, $run, $article, null, new Pricing_Table(), $run->grounded_calls() );
-
-		if ( is_wp_error( $result ) && Generator::CLOSE_RACE_LOST === $result->get_error_code() ) {
-			// Somebody else finished this run and has already reported it.
-			return;
-		}
+		$result = $this->generator->finalise( $prompt, $run, $article, null, null, $run->grounded_calls() );
 
 		$this->conclude( $prompt, $run->attempt(), is_wp_error( $result ) ? $result : null );
 	}
@@ -347,6 +365,30 @@ final class Queued_Run_Handler {
 	 * @return void
 	 */
 	private function conclude( Prompt $prompt, int $attempt, ?WP_Error $error ): void {
+		$closed = Close_Result::from_error( $error );
+
+		if ( Close_Result::Already_Closed === $closed ) {
+			/*
+			 * Somebody else closed this run and, by the same rule, concluded it.
+			 * Retrying, mailing, or arming the next occurrence here would be the
+			 * second of each.
+			 */
+			return;
+		}
+
+		if ( Close_Result::Write_Failed === $closed ) {
+			/*
+			 * The transition did not happen, so there is nothing to report yet and
+			 * nothing to arm: the run is still open, and the stall sweep is what
+			 * ends it. Concluding anyway is how a run gets announced twice — once
+			 * here on a transition that failed, and again when the sweep performs
+			 * the one that works.
+			 */
+			$this->report_write_failure( $prompt->id(), $error );
+
+			return;
+		}
+
 		$prompt_id = $prompt->id();
 
 		if ( null !== $error && $this->policy->should_retry( $error, $attempt ) ) {
@@ -389,6 +431,69 @@ final class Queued_Run_Handler {
 		delete_post_meta( $prompt_id, self::ATTEMPT_META );
 
 		$this->rearm( $prompt );
+	}
+
+	/**
+	 * Closes a failed run, unless the thing that failed closed it already.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @param Run      $run   Run to close.
+	 * @param WP_Error $error Why it failed.
+	 * @return WP_Error The same error, carrying what the close attempt did.
+	 */
+	private function closed( Run $run, WP_Error $error ): WP_Error {
+		$result = Close_Result::from_error( $error );
+
+		if ( null !== $result ) {
+			// The step that produced this error already made the attempt.
+			return $error;
+		}
+
+		return Close_Result::annotate( $error, $this->generator->close( $run, $error, $run->grounded_calls() ) );
+	}
+
+	/**
+	 * Reports a run that could not be closed, at most once an hour.
+	 *
+	 * A refused terminal write is an operational fault rather than a generation
+	 * failure: the database would not take a write the plugin cannot proceed
+	 * without. Nothing else reports it — the run is left open deliberately, so
+	 * there is no failure notice and no run log entry saying anything is wrong.
+	 *
+	 * Rate-limited because the sweep will meet the same fault every five minutes
+	 * for as long as it lasts, and an alert that arrives 288 times a day is an
+	 * alert nobody reads.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @param int           $prompt_id Prompt whose run could not be closed.
+	 * @param WP_Error|null $error     The failure being reported, when there is one.
+	 * @return void
+	 */
+	private function report_write_failure( int $prompt_id, ?WP_Error $error ): void {
+		if ( false !== get_transient( self::WRITE_FAILURE_NOTICE ) ) {
+			return;
+		}
+
+		set_transient( self::WRITE_FAILURE_NOTICE, time(), HOUR_IN_SECONDS );
+
+		Generator::send_state_notice(
+			$prompt_id,
+			null === $error ? __( 'no error', 'autoscribe' ) : $error->get_error_message()
+		);
+	}
+
+	/**
+	 * Reports a run left open by a refused terminal write.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @param Run $run Run that is still open.
+	 * @return void
+	 */
+	private function report_unclosed( Run $run ): void {
+		$this->report_write_failure( $run->prompt_id(), null );
 	}
 
 	/**

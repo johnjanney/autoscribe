@@ -8,6 +8,7 @@
 namespace AutoScribe\Content;
 
 use AutoScribe\Prompts\Prompt;
+use WP_Error;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -39,16 +40,27 @@ final class Taxonomy_Applier {
 	/**
 	 * Applies categories and tags.
 	 *
+	 * The result is reported rather than discarded. `wp_set_post_terms()` can
+	 * refuse — an invalid term, a filter, a database fault — and a post published
+	 * with none of the categories its prompt names is not the post the prompt
+	 * asked for. The run treats that as terminal and leaves the draft, because the
+	 * alternative is publishing something quietly wrong and telling nobody.
+	 *
 	 * @since 0.5.0
 	 *
 	 * @param int      $post_id        Post to annotate.
 	 * @param Prompt   $prompt         Prompt being run.
 	 * @param string[] $suggested_tags Tags proposed by the model.
-	 * @return void
+	 * @return true|WP_Error
 	 */
-	public function apply( int $post_id, Prompt $prompt, array $suggested_tags ): void {
-		$this->apply_categories( $post_id, $prompt );
-		$this->apply_tags( $post_id, $prompt, $suggested_tags );
+	public function apply( int $post_id, Prompt $prompt, array $suggested_tags ): bool|WP_Error {
+		$categories = $this->apply_categories( $post_id, $prompt );
+
+		if ( is_wp_error( $categories ) ) {
+			return $categories;
+		}
+
+		return $this->apply_tags( $post_id, $prompt, $suggested_tags );
 	}
 
 	/**
@@ -58,14 +70,19 @@ final class Taxonomy_Applier {
 	 *
 	 * @param int    $post_id Post to annotate.
 	 * @param Prompt $prompt  Prompt being run.
-	 * @return void
+	 * @return true|WP_Error
 	 */
-	private function apply_categories( int $post_id, Prompt $prompt ): void {
+	private function apply_categories( int $post_id, Prompt $prompt ): bool|WP_Error {
 		if ( 'post' !== $prompt->post_type() || array() === $prompt->category_ids() ) {
-			return;
+			return true;
 		}
 
-		wp_set_post_terms( $post_id, $prompt->category_ids(), 'category', false );
+		return $this->set_terms(
+			$post_id,
+			$prompt->category_ids(),
+			'category',
+			__( 'The categories this prompt is configured with could not be applied to the generated post.', 'autoscribe' )
+		);
 	}
 
 	/**
@@ -76,26 +93,58 @@ final class Taxonomy_Applier {
 	 * @param int      $post_id        Post to annotate.
 	 * @param Prompt   $prompt         Prompt being run.
 	 * @param string[] $suggested_tags Tags proposed by the model.
-	 * @return void
+	 * @return true|WP_Error
 	 */
-	private function apply_tags( int $post_id, Prompt $prompt, array $suggested_tags ): void {
+	private function apply_tags( int $post_id, Prompt $prompt, array $suggested_tags ): bool|WP_Error {
 		$mode = $prompt->tag_mode();
 
 		if ( 'none' === $mode ) {
-			return;
+			return true;
 		}
 
-		if ( 'fixed' === $mode ) {
-			$names = array_map( 'sanitize_text_field', $prompt->fixed_tags() );
+		$tags = 'fixed' === $mode
+			? array_values( array_filter( array_map( 'sanitize_text_field', $prompt->fixed_tags() ) ) )
+			: $this->resolve_ai_tags( $suggested_tags );
 
-			if ( array() !== $names ) {
-				wp_set_post_terms( $post_id, $names, 'post_tag', false );
-			}
-
-			return;
+		if ( array() === $tags ) {
+			return true;
 		}
 
-		wp_set_post_terms( $post_id, $this->resolve_ai_tags( $suggested_tags ), 'post_tag', false );
+		return $this->set_terms(
+			$post_id,
+			$tags,
+			'post_tag',
+			__( 'The tags for the generated post could not be applied.', 'autoscribe' )
+		);
+	}
+
+	/**
+	 * Assigns terms and turns a refusal into an error worth reporting.
+	 *
+	 * `wp_set_post_terms()` answers three ways — an array of term relationships,
+	 * false, or a WP_Error — and only the first means the terms are on the post.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @param int            $post_id  Post to annotate.
+	 * @param int[]|string[] $terms    Term IDs or names.
+	 * @param string         $taxonomy Taxonomy to assign in.
+	 * @param string         $message  What to say when it will not take them.
+	 * @return true|WP_Error
+	 */
+	private function set_terms( int $post_id, array $terms, string $taxonomy, string $message ): bool|WP_Error {
+		$result = wp_set_post_terms( $post_id, $terms, $taxonomy, false );
+
+		if ( is_array( $result ) ) {
+			return true;
+		}
+
+		return new WP_Error(
+			'autoscribe_terms_not_applied',
+			is_wp_error( $result )
+				? $message . ' ' . $result->get_error_message()
+				: $message
+		);
 	}
 
 	/**

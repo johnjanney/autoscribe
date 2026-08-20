@@ -10,6 +10,7 @@ namespace AutoScribe\Pipeline;
 use AutoScribe\Content\Article;
 use AutoScribe\Content\Taxonomy_Applier;
 use AutoScribe\Prompts\Prompt;
+use AutoScribe\SEO\Meta_Writer;
 use AutoScribe\SEO\SEO_Adapter_Factory;
 use AutoScribe\Security\Content_Sanitizer;
 use WP_Error;
@@ -197,30 +198,39 @@ final class Step_Assemble_Post {
 			return $post_id;
 		}
 
-		$post_id = (int) $post_id;
-
-		update_post_meta( $post_id, self::RUN_ID_META, $run->id() );
-		update_post_meta(
-			$post_id,
-			self::TOPIC_KEY_META,
-			$this->sanitizer->sanitize_topic_key( $article->topic_key() )
-		);
+		$post_id   = (int) $post_id;
+		$topic_key = $this->sanitizer->sanitize_topic_key( $article->topic_key() );
 
 		/*
-		 * SEO metadata is written while the post is still a draft, before the
-		 * pipeline transitions it to its final status. That ordering is what
-		 * makes the Yoast adapter work: Yoast rebuilds its indexable on save,
-		 * and the indexable is what it reads when rendering, so the metadata has
-		 * to be in place before that save rather than after it.
+		 * Section 10 requires the run link on every generated post, and section
+		 * 7.2 reads the topic key back when deciding whether a later run is
+		 * proposing something already covered. Neither is decoration: without the
+		 * link the post cannot be traced to what produced it, which is the whole
+		 * of the audit trail, and without the key the deduplication check silently
+		 * loses one article's worth of memory.
+		 *
+		 * So both are read back rather than assumed. update_post_meta() cannot be
+		 * asked whether it worked — it answers false for a refused write and for a
+		 * value that already matched — so the post is asked instead.
 		 */
-		$this->seo->detect()->apply(
+		$recorded = Meta_Writer::write(
 			$post_id,
-			$this->sanitizer->sanitize_seo_title( $article->seo_title() ),
-			$this->sanitizer->sanitize_meta_description( $article->meta_description() ),
-			sanitize_text_field( $article->focus_keyword() )
+			array(
+				self::RUN_ID_META    => (string) $run->id(),
+				self::TOPIC_KEY_META => $topic_key,
+			)
 		);
 
-		$this->taxonomy->apply( $post_id, $prompt, $article->suggested_tags() );
+		if ( ! $recorded ) {
+			return new WP_Error(
+				'autoscribe_state_not_recorded',
+				sprintf(
+					/* translators: %d: post ID. */
+					__( 'The generated post (%d) could not be linked back to this run, so it was left as a draft rather than published with no record of where it came from.', 'autoscribe' ),
+					$post_id
+				)
+			);
+		}
 
 		/*
 		 * Later steps read the post back off the run rather than receiving it as
@@ -240,10 +250,55 @@ final class Step_Assemble_Post {
 				)
 			);
 		}
-		$run->record_article(
-			$this->sanitizer->sanitize_title( $article->title() ),
-			$this->sanitizer->sanitize_topic_key( $article->topic_key() )
-		);
+
+		/*
+		 * SEO metadata is written while the post is still a draft, before the
+		 * pipeline transitions it to its final status. That ordering is what
+		 * makes the Yoast adapter work: Yoast rebuilds its indexable on save,
+		 * and the indexable is what it reads when rendering, so the metadata has
+		 * to be in place before that save rather than after it.
+		 */
+		$seo = $this->seo->detect();
+
+		if ( ! $seo->apply(
+			$post_id,
+			$this->sanitizer->sanitize_seo_title( $article->seo_title() ),
+			$this->sanitizer->sanitize_meta_description( $article->meta_description() ),
+			sanitize_text_field( $article->focus_keyword() )
+		) ) {
+			return new WP_Error(
+				'autoscribe_seo_not_applied',
+				sprintf(
+					/* translators: %s: SEO plugin name. */
+					__( 'The SEO metadata for this post could not be written for %s, so the post was left as a draft rather than published without it.', 'autoscribe' ),
+					$seo->label()
+				)
+			);
+		}
+
+		$terms = $this->taxonomy->apply( $post_id, $prompt, $article->suggested_tags() );
+
+		if ( is_wp_error( $terms ) ) {
+			return $terms;
+		}
+
+		/*
+		 * The run log's own copy of the title and key. It is what the Run Log
+		 * screen shows and what a person reads when working out which run wrote
+		 * which post, so a refused write here leaves an unreadable log entry for a
+		 * post that exists — the same class of problem as the meta above, and
+		 * treated the same way.
+		 */
+		if ( ! $run->record_article( $this->sanitizer->sanitize_title( $article->title() ), $topic_key ) ) {
+			return new WP_Error(
+				'autoscribe_state_not_recorded',
+				sprintf(
+					/* translators: %d: post ID. */
+					__( 'The title and topic of the generated post (%d) could not be written to the run log, so the run was stopped rather than finishing with a log entry that does not say what it produced.', 'autoscribe' ),
+					$post_id
+				)
+			);
+		}
 
 		return $post_id;
 	}

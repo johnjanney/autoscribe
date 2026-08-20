@@ -10,7 +10,6 @@ namespace AutoScribe\Pipeline;
 use AutoScribe\Content\Article;
 use AutoScribe\Content\Article_Validator;
 use AutoScribe\Prompts\Prompt;
-use AutoScribe\Providers\Model_Resolver;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Providers\Request\Generation_Request;
 use AutoScribe\Security\Key_Store;
@@ -100,7 +99,8 @@ final class Step_Generate_Body {
 			return $api_key;
 		}
 
-		$model = Model_Resolver::resolve(
+		$model = $run->model_for(
+			'text',
 			$prompt->text_model(),
 			$prompt->text_provider(),
 			$provider->suggested_models()

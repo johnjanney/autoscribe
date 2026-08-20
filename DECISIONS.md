@@ -357,7 +357,17 @@ test picked it up unchanged.
 
 §5 asks for this and 1.0.x did not do it: the whole pipeline ran inside one
 action, so a host with a short `max_execution_time` could kill an article
-part-way. Each request now carries at most one provider call.
+part-way.
+
+*One step per request is not one provider call per request.* The topic step asks
+again when its first proposal collides, and the article step makes one repair
+call when a response does not validate, so one request can make two calls at up
+to 120 seconds each. This entry claimed the stronger bound until 1.2.0, and the
+README and `docs/PIPELINE-SPLIT.md` had already been corrected — a contradiction
+between three documents describing the same mechanism, which is exactly how a
+performance bound nobody can rely on survives. Splitting reduces what a killed
+request costs from an article to a step; it does not make a step short enough to
+guarantee survival on a 30-second host.
 
 Two consequences worth naming, because neither is obvious from the requirement:
 

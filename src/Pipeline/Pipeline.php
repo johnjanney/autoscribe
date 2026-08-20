@@ -198,8 +198,20 @@ final class Pipeline {
 
 		$result = $this->perform( $step, $prompt, $run );
 
+		/*
+		 * A claim can be taken away mid-step. The stall sweeper releases one when
+		 * a run has nothing queued or running to advance it, which is a judgement
+		 * about a worker it cannot see rather than a fact about one — a worker
+		 * slow enough to be judged gone can still be inside a provider call.
+		 *
+		 * Everything such a worker does from that moment belongs to somebody else:
+		 * its payload writes are refused by the same condition, and the error that
+		 * refusal produces would otherwise close a run that a live worker is part
+		 * way through. Standing down is the only correct answer, whatever the
+		 * error says.
+		 */
 		if ( is_wp_error( $result ) ) {
-			return $result;
+			return $run->holds_claim() ? $result : self::CLAIM_LOST;
 		}
 
 		/*
@@ -212,6 +224,11 @@ final class Pipeline {
 		 * reservation held open throughout.
 		 */
 		if ( ! $run->record_step( $step ) ) {
+			if ( ! $run->holds_claim() ) {
+				// Swept and replaced. The replacement owns the position now.
+				return self::CLAIM_LOST;
+			}
+
 			return new WP_Error(
 				'autoscribe_step_not_recorded',
 				sprintf(

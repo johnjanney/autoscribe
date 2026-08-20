@@ -32,8 +32,8 @@ defined( 'ABSPATH' ) || exit;
  * This narrows the surface. It does not close it. No delimiter makes a language
  * model incapable of following what is inside one, and the plugin cannot delimit
  * server-side search results at all, because the provider reads them after the
- * request leaves. That residual risk is why the README recommends review mode
- * wherever grounding is on.
+ * request leaves. That residual risk is why the README and INSTRUCTIONS.md both
+ * recommend review mode wherever grounding is on.
  *
  * @since 1.0.2
  */

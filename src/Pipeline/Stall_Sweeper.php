@@ -364,7 +364,9 @@ final class Stall_Sweeper {
 			return false;
 		}
 
-		if ( $run->sweeps() >= self::MAX_RESTARTS ) {
+		$sweeps = $run->sweeps();
+
+		if ( $sweeps >= self::MAX_RESTARTS ) {
 			return $this->give_up(
 				$run,
 				$prompt,
@@ -397,12 +399,18 @@ final class Stall_Sweeper {
 		}
 
 		/*
-		 * Count the restart before arming it. A restart that is recorded and then
-		 * fails to arm is swept again and counted again, which converges on
-		 * giving up; one that is armed and then fails to record would be restarted
-		 * for ever.
+		 * Count the restart before arming it, and take the count as this sweep's
+		 * claim on the run. A restart that is recorded and then fails to arm is
+		 * swept again and counted again, which converges on giving up; one that is
+		 * armed and then fails to record would be restarted for ever.
+		 *
+		 * The claim half matters where the release above does not reach. A run
+		 * whose worker died between finishing a step and arming the next one has
+		 * no claim to release, so two overlapping sweeps would both get this far
+		 * and both arm a restart. The count is a compare-and-swap, so only one
+		 * does.
 		 */
-		if ( ! $run->record_sweep() ) {
+		if ( ! $run->record_sweep( $sweeps ) ) {
 			return false;
 		}
 
@@ -454,8 +462,19 @@ final class Stall_Sweeper {
 		 * and its worker can already be claiming the step — closing the run then
 		 * would cancel a paid call in flight. If the position has moved, that
 		 * worker wins and this sweep leaves the run alone.
+		 *
+		 * A run interrupted while it held a claim may have paid for work nothing
+		 * recorded: the provider answered, and the request died before — or while
+		 * — the usage write landed. Settling such a run from its counters alone
+		 * writes a figure that is known to be incomplete, and the monthly cap then
+		 * has real spending missing from it for the rest of the month. The
+		 * reservation is kept as a floor for that case only. An estimate that is
+		 * too high costs the site a little of its own cap; an unrecorded charge
+		 * costs it the cap.
 		 */
-		if ( ! $run->fail( $reason->get_error_message(), null, $run->grounded_calls(), $observed ) ) {
+		$interrupted = str_starts_with( $observed, Run::CLAIM_PREFIX );
+
+		if ( ! $run->fail( $reason->get_error_message(), null, $run->grounded_calls(), $observed, $interrupted )->ended() ) {
 			return false;
 		}
 

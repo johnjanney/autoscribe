@@ -570,8 +570,65 @@ final class Prompt_Meta_Box {
 		}
 
 		$this->enforce_grounding_capability( $post_id );
+		$this->enforce_fallback_image( $post_id );
 
 		update_post_meta( $post_id, Prompt_Fields::PREFIX . 'schedule_params', $params );
+	}
+
+	/**
+	 * Refuses to store fallback image mode without a fallback image.
+	 *
+	 * Fallback mode is a promise that every post gets a picture. The promise is
+	 * only keepable if the ID names an image attachment that still exists, and
+	 * nothing prevented saving the mode with the default of zero — so the mode
+	 * read like a guarantee in the editor and behaved like "publish without one"
+	 * at run time.
+	 *
+	 * The mode is stored as required instead, which is what an unattachable
+	 * fallback amounts to: generate the image, and if that cannot be done, leave
+	 * the post as a draft for a person rather than publishing it bare. Same
+	 * reasoning as the grounding check above — a configuration that cannot do what
+	 * it says is not saved, whether it arrives from the editor, the REST API,
+	 * WP-CLI, or an import.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @param int $post_id Prompt being saved.
+	 * @return void
+	 */
+	private function enforce_fallback_image( int $post_id ): void {
+		if ( 'fallback' !== (string) get_post_meta( $post_id, Prompt_Fields::PREFIX . 'image_mode', true ) ) {
+			return;
+		}
+
+		if ( self::is_usable_fallback( (int) get_post_meta( $post_id, Prompt_Fields::PREFIX . 'fallback_image_id', true ) ) ) {
+			return;
+		}
+
+		update_post_meta( $post_id, Prompt_Fields::PREFIX . 'image_mode', 'required' );
+
+		set_transient(
+			'autoscribe_notice_' . get_current_user_id(),
+			array(
+				'type'    => 'error',
+				'message' => __( 'The featured image mode was changed from "fallback" to "required", because the fallback image ID does not name an image in this site\'s media library. Set a valid attachment ID and choose fallback again.', 'autoscribe' ),
+			),
+			MINUTE_IN_SECONDS
+		);
+	}
+
+	/**
+	 * Whether an attachment ID names an image this site can attach.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @param int $attachment_id Attachment ID from the prompt.
+	 * @return bool
+	 */
+	public static function is_usable_fallback( int $attachment_id ): bool {
+		return $attachment_id > 0
+			&& 'attachment' === get_post_type( $attachment_id )
+			&& wp_attachment_is_image( $attachment_id );
 	}
 
 	/**

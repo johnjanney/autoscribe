@@ -37,7 +37,7 @@ final class Activation {
 	 * @since 0.1.0
 	 * @var string
 	 */
-	public const DB_VERSION = '2';
+	public const DB_VERSION = '3';
 
 	/**
 	 * Capability gating the settings screens.
@@ -175,6 +175,12 @@ final class Activation {
 	 * Timestamps are stored in UTC. Section 7.4 sums spend by calendar month in
 	 * the site timezone, which needs a known storage timezone to convert from.
 	 *
+	 * A third addition since 1.2.0: sweeps, the number of times the stall sweeper
+	 * has restarted a run. It is a column rather than a key in the payload
+	 * document because the sweeper and the run's own steps write concurrently, and
+	 * a shared JSON document cannot be updated by two writers without one of them
+	 * losing what the other stored.
+	 *
 	 * @since 0.1.0
 	 *
 	 * @return void
@@ -213,6 +219,7 @@ final class Activation {
 			image_count smallint(5) unsigned NOT NULL DEFAULT 0,
 			cost_cents int(10) unsigned NOT NULL DEFAULT 0,
 			attempt tinyint(3) unsigned NOT NULL DEFAULT 1,
+			sweeps smallint(5) unsigned NOT NULL DEFAULT 0,
 			error text DEFAULT NULL,
 			payload longtext DEFAULT NULL,
 			started_at datetime NOT NULL,

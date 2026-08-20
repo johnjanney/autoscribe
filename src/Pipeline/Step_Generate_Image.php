@@ -11,7 +11,6 @@ use AutoScribe\Content\Article;
 use AutoScribe\Media\Image_Sideloader;
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Providers\Image\Null_Image;
-use AutoScribe\Providers\Model_Resolver;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Providers\Response\Image_Result;
 use AutoScribe\Security\Content_Sanitizer;
@@ -101,7 +100,7 @@ final class Step_Generate_Image {
 			return $api_key;
 		}
 
-		$model = Model_Resolver::resolve( $prompt->image_model(), $slug, $provider->suggested_models() );
+		$model = $run->model_for( 'image', $prompt->image_model(), $slug, $provider->suggested_models() );
 
 		if ( '' === $model ) {
 			return new WP_Error(
@@ -195,11 +194,52 @@ final class Step_Generate_Image {
 			return $image;
 		}
 
-		if ( 'fallback' === $mode && $this->set_thumbnail( $post_id, $prompt->fallback_image_id() ) ) {
-			return $this->remember( $run, $prompt->fallback_image_id() );
+		if ( 'fallback' === $mode ) {
+			return $this->attach_fallback( $prompt, $run, $post_id, $image );
 		}
 
 		return $this->remember( $run, 0 );
+	}
+
+	/**
+	 * Attaches the prompt's stock image, or fails the run for want of one.
+	 *
+	 * Section 6 defines fallback mode as "attach fallback_image_id, continue and
+	 * publish". Falling through to no image when the fallback cannot be attached
+	 * turns it into optional mode without saying so, and it does it in exactly the
+	 * case the mode was chosen for: an ID that is zero, an attachment somebody has
+	 * since deleted, or a thumbnail write WordPress refuses. A prompt configured
+	 * never to publish without a picture would then publish without one.
+	 *
+	 * So the two modes stay distinct. Optional means "publish anyway"; fallback
+	 * means "there is always a picture", and a fallback that cannot be attached
+	 * fails the run and leaves the draft for a person — the same ending required
+	 * mode has, because at that point they are the same situation.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @param Prompt   $prompt   Prompt being run.
+	 * @param Run      $run      Run recording progress.
+	 * @param int      $post_id  Post to attach to.
+	 * @param WP_Error $original Why generation did not produce an image.
+	 * @return int|WP_Error
+	 */
+	private function attach_fallback( Prompt $prompt, Run $run, int $post_id, WP_Error $original ): int|WP_Error {
+		$fallback = $prompt->fallback_image_id();
+
+		if ( $this->set_thumbnail( $post_id, $fallback ) ) {
+			return $this->remember( $run, $fallback );
+		}
+
+		return new WP_Error(
+			'autoscribe_fallback_image_missing',
+			sprintf(
+				/* translators: 1: attachment ID configured as the fallback, 2: why generation failed. */
+				__( 'The featured image could not be generated and the configured fallback image (attachment %1$d) could not be attached either, so the post was left as a draft rather than published without one. Generation failed because: %2$s', 'autoscribe' ),
+				$fallback,
+				$original->get_error_message()
+			)
+		);
 	}
 
 	/**

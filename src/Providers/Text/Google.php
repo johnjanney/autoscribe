@@ -75,6 +75,20 @@ final class Google implements Text_Provider_Interface {
 	 * preview-only at the time of writing, and section 2.2 warns against
 	 * defaulting to a string that can disappear without notice.
 	 *
+	 * The first entry is what a prompt with no model and no site default resolves
+	 * to, so it is checked against Google's own catalog rather than remembered.
+	 * Retrieved 19 August 2026 from
+	 * https://ai.google.dev/gemini-api/docs/models and
+	 * https://ai.google.dev/gemini-api/docs/latest-model, which list
+	 * gemini-3.7-flash as the current stable Flash model and name it as the
+	 * migration target ("Change your target model string to gemini-3.7-flash").
+	 * The two behind it are the previous stable releases, kept so that a
+	 * retirement leaves a working value one click away in the editor.
+	 *
+	 * Re-check both pages on the day this list is next edited, and record the date
+	 * here. A catalog is not something to remember; the whole reason section 2.2
+	 * makes model IDs configuration is that this list goes stale.
+	 *
 	 * @since 0.2.0
 	 *
 	 * @return string[]

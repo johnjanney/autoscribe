@@ -13,7 +13,7 @@ everything, and inserts the post as a draft or publishes it.
 
 | | |
 |---|---|
-| **Version** | 1.1.3 |
+| **Version** | 1.2.0 |
 | **Requires WordPress** | 6.4 |
 | **Requires PHP** | 8.1 |
 | **License** | GPL-2.0-or-later |
@@ -72,9 +72,10 @@ and reputationally. Treat that as a deliberate decision rather than a default.
 
 ## Installing
 
-Download `autoscribe-1.0.0.zip` from the
+Download the plugin zip from the
 [latest release](https://github.com/johnjanney/autoscribe/releases) and install
-it through **Plugins → Add New → Upload Plugin**.
+it through **Plugins → Add New → Upload Plugin**. The file is named for the
+version you are downloading — this link stays correct when the version does not.
 
 A `git clone` into `wp-content/plugins` will **not** work on its own — the
 plugin has Composer dependencies that are not committed. Run `composer install
@@ -191,15 +192,19 @@ way to tell it apart from the rest of the site.
 
 ## Status and known limitations
 
-Version 1.1.3. Three external audits have been run against this plugin, and all
-three found real defects; the findings, the fixes, and the three findings
-rejected with evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`.
-300 tests run
+Version 1.2.0. Four external audits have been run against this plugin, and all
+four found real defects; the findings, the fixes, and the findings rejected with
+evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 327 tests run
 against PHP 8.1, 8.2, and 8.3 on every push.
 
-Two brief requirements are knowingly not met: the live next-run readout and the
-screenshot. Both are listed below with everything else worth knowing before you
-enable unattended publishing.
+Six things this plugin does not do the way the brief describes, all of them
+deliberate and all of them below: **Run now** queues rather than streaming its
+result; the next-run readout reflects the saved schedule rather than updating
+live; the duplicate-topic similarity threshold defaults to 78 percent where the
+brief names 82; the Settings screen's save path has no automated coverage;
+Action Scheduler's own dispatch is not exercised by any test; and there is no
+screenshot in this README. Everything else worth knowing before you enable
+unattended publishing is listed with them.
 
 The first item is the one that matters most:
 
@@ -251,6 +256,21 @@ The first item is the one that matters most:
   during development; nothing guards against the reverse.
 - Spend figures are estimates computed from reported token usage against a
   pricing table you maintain. They are not billing data.
+- **A run whose ending the database will not accept is left open on purpose.**
+  Reporting a run as finished when the write that finishes it was refused is how
+  one article becomes two emails and two schedules, so the queue says nothing and
+  arms nothing; the stall sweep settles the row within about fifteen minutes and
+  reports it then. You get one email an hour while the fault lasts, under the
+  subject "AutoScribe could not record that a run had finished". It means the
+  runs table, not the prompt.
+- **Web search grounding is a prompt-injection surface, and human review is the
+  control for it.** A grounded call has the provider fetch pages and put their
+  text into the model's context; the plugin never sees that text before the model
+  reads it. Retrieved content is fenced and the model is told to treat everything
+  inside as data rather than instructions, which reduces the risk and does not
+  eliminate it. Keep review mode on for grounded prompts. The longer version, with
+  what is stored and where to look afterwards, is in
+  [INSTRUCTIONS.md](INSTRUCTIONS.md).
 - There is no screenshot in this README yet, which section 12 of the brief asks
   for.
 

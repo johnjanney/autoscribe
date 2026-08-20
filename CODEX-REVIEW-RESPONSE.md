@@ -1437,3 +1437,274 @@ shares, not repeated per query from memory.
 The regression test releases a first-step claim and then asks the sweeper to give
 up, and fails against a strict `step = ''` match as well as against the `IS NULL`
 match it replaced.
+
+---
+---
+
+# Response to the fourth Codex review
+
+**Responding to:** the verification-review section of
+[CODEX-REVIEW.md](CODEX-REVIEW.md), dated 19 August 2026 against `88aefb3`
+(tag `v1.1.3`)
+**Response date:** 19 August 2026
+**Release under response:** 1.1.3 → 1.2.0
+
+---
+
+## Summary
+
+Eight findings. **Seven confirmed, one rejected on evidence retrieved today.**
+All seven are fixed.
+
+| Finding | Verdict | Status |
+|---|---|---|
+| VR-01 Failed terminal writes still trigger downstream actions | Confirmed | Fixed |
+| VR-02 Concurrent sweepers can overwrite run payload state | Confirmed | Fixed |
+| VR-03 Fallback mode publishes when the fallback cannot attach | Confirmed | Fixed |
+| VR-04 First Google suggestion absent from the catalog | **Rejected** — both cited pages list it today | Docs strengthened |
+| VR-05 Run snapshot excludes resolved models and pricing | Confirmed | Fixed |
+| VR-06 Assembly ignores audit, taxonomy, and SEO writes | Confirmed | Fixed |
+| VR-07 Finalisation has no claim | Confirmed | Fixed |
+| VR-08 Documentation contradictions | Confirmed | Fixed |
+
+**Verification:** PHPCS passes with zero errors and zero warnings across 120
+files. PHPUnit passes 327 tests and 1,228 assertions, up from 300 and 1,118. No
+test contacts a live provider; the bootstrap tripwire still fails any request
+that reaches the network.
+
+---
+
+## The pattern, for the third round running
+
+The previous response said the right question was "which writes can fail without
+anyone noticing", and that it should be asked of every write rather than of the
+ones just touched. VR-01, VR-05, and VR-06 are that question asked again and
+answered better, and the honest summary of the last round is that I fixed the
+writes and stopped at the *results*.
+
+Making `fail()`, `skip()`, and `succeed()` return a Boolean was half a fix.
+`false` meant two opposite things — somebody else closed this run, and the
+database refused the write — and every caller that inspected it collapsed them
+back into one. A lost race must be silent; a refused write must be loud and must
+leave the run alone. Answering both with the same value guaranteed that whichever
+reading a caller chose, it was wrong half the time.
+
+`Close_Result` names the three outcomes, and every ending in the queue driver
+carries its answer to `conclude()`, which is the single place that decides
+whether anything is retried, mailed, or armed.
+
+---
+
+## VR-01 — Confirmed. Fixed.
+
+The sequence the reviewer describes is real and the fix is the three-state close.
+
+**What changes.** `Run::fail()`, `skip()`, and `succeed()` return `Close_Result`:
+`Closed`, `Already_Closed`, or `Write_Failed`. A caller that closes a run attaches
+the answer to the error it is returning, and `Queued_Run_Handler::conclude()`
+reads it first:
+
+- `Closed` — proceed exactly as before.
+- `Already_Closed` — stand down. Whoever won has already reported it.
+- `Write_Failed` — report an operational fault, arm nothing, retry nothing, and
+  leave the run open for the stall sweep to settle.
+
+That last branch is the one the release note is about: the run is deliberately
+left recoverable, so nothing else would say anything at all. It sends one alert
+per hour at most, under its own subject rather than the run-failure one, because
+the thing to act on is the database and not the prompt.
+
+**The accounting half.** A run that stops with a charge nobody recorded must not
+be settled from its counters, because they are known to be short. Two cases keep
+the reservation as a floor instead: a failure whose code is
+`autoscribe_usage_not_recorded`, and a stalled run the sweeper found holding a
+claim — which means a worker was inside a paid step when it died. A run that
+stalled *between* steps has nothing outstanding and still releases its
+reservation in full, because holding it would refill the cap with money nobody
+spent, which is the failure the sweeper exists to prevent.
+
+Settlement also re-reads the counters rather than trusting what the object loaded
+earlier, and keeps its own in-memory figures as a floor under them. Both can be
+right and neither can be trusted alone: the row carries what other actions
+recorded, and the object carries calls a provider has already answered whose
+write the row may have refused.
+
+**Tests.** `Terminal_StateTest` drives the queued endings with the writes
+refused: the usage write and the terminal write failing together, a refused close
+not arming the next occurrence, and the alert being sent once however often the
+fault repeats. `Concurrent_StateTest` covers both settlement rules.
+
+## VR-02 — Confirmed. Fixed.
+
+Two changes, because the finding names two mechanisms.
+
+**The counter leaves the payload document.** `sweeps` is a column now. Keeping a
+concurrency counter inside the JSON document that every step reads whole and
+writes whole was the defect; no amount of care at the call site fixes a counter
+that shares storage with the state it is supposed to be protecting. The
+migration runs through the existing schema-version check, and `sweeps()` still
+reads the payload value as a floor so a run opened by 1.1.x and still in flight
+across the upgrade does not get a fresh set of restarts.
+
+**The count is the sweeper's claim.** `record_sweep()` takes the count the caller
+judged the run on and increments conditionally, so of two sweeps holding the same
+view exactly one proceeds. This covers the gap the claim release does not: a
+worker that died between finishing a step and arming the next one leaves no claim
+to release, so the release could not exclude anybody there.
+
+**Payload and position writes are conditional on the claim.** A worker slow
+enough to be judged gone is not necessarily gone. `merge_payload()` and
+`record_step()` now require that the step column still holds this worker's claim
+token, so a swept-and-replaced worker cannot write over its replacement or free
+its replacement's claim. `Pipeline::advance()` reads a lost claim as
+`CLAIM_LOST` rather than as an error, so such a worker stands down instead of
+closing a run that now belongs to somebody else.
+
+One subtlety worth recording: a conditional payload write that changes nothing
+reports zero affected rows, which is indistinguishable from a lost claim without
+a second look. Only that ambiguous case pays for the extra read, because reading
+it as failure would stop runs for re-recording state they had already recorded.
+
+**On the reviewer's note that these tests run in one process.** They do, and that
+is still a real limitation, recorded in the README. What the tests do exercise is
+the ordering the guards depend on — a stale view, a conditional write, and which
+writer wins — because every guard here is a single SQL statement whose atomicity
+is the database's to provide.
+
+## VR-03 — Confirmed. Fixed.
+
+Fallback mode is a promise that there is always a picture, and it was falling
+through to no picture in exactly the case it was chosen for.
+
+At run time, a fallback that cannot be attached — ID zero, a deleted attachment,
+or a thumbnail write WordPress refuses — now returns
+`autoscribe_fallback_image_missing`, which fails the run and leaves the draft for
+a person. That is the same ending required mode has, because at that point they
+are the same situation.
+
+At save time, the prompt editor refuses to store fallback mode unless the ID
+names an image in the media library, and stores `required` instead with a notice
+saying so. The reasoning is `enforce_grounding_capability()`'s: a disabled
+control is a courtesy, and the REST API, WP-CLI, and an import all reach the save
+path without seeing it. `required` rather than `optional` because it is the
+strictest honest reading of what the site owner asked for — never publish without
+an image — and because silently widening a publication policy is the class of
+change this plugin should never make on its own.
+
+## VR-04 — Rejected on evidence. Documentation strengthened.
+
+The finding says Google's catalog does not list `gemini-3.7-flash` and marks it
+**Not found in documents**. I retrieved both pages the finding cites, today,
+19 August 2026:
+
+- <https://ai.google.dev/gemini-api/docs/models> lists `gemini-3.7-flash` and
+  describes it as "Our latest and most capable Flash model, built for complex
+  coding, agentic workflows, and reliable multi-step execution."
+- <https://ai.google.dev/gemini-api/docs/latest-model> says "Change your target
+  model string to `gemini-3.7-flash`" and records it as generally available and
+  ready for production use.
+
+`gemini-3.6-flash` is listed too, and remains the second suggestion so a site
+that wants to pin it can. Demoting the default to a model Google's own migration
+guide tells clients to move *off* would make the plugin worse on the evidence
+available to either of us.
+
+**What the finding is right about underneath the fact.** A hard-coded first
+suggestion is the plugin's real default however loudly section 2.2 says model IDs
+are configuration, and a catalog is not something to remember. Two things
+changed:
+
+- The adapter's docblock records the retrieval date and both URLs, and says to
+  re-check them on the day the list is next edited.
+- `CONTRIBUTING.md` adds a release step: open each provider's catalog, confirm the
+  first suggestion is still generally available, and update the recorded date
+  whether or not the list changed.
+
+`GoogleTest` pins the first suggestion so that changing it is a deliberate act
+next to that recorded date. It is deliberately offline: a test that calls a
+provider fails when a network does, needs a funded key in CI, and puts the
+suite's correctness in somebody else's hands.
+
+## VR-05 — Confirmed. Fixed.
+
+The fingerprint catches an edit to the prompt or to a site default and cannot
+catch what changes underneath both. A blank model field resolves through the
+adapter's suggestion list, which is code, so an upgrade can change the model a
+run in flight is using without changing anything the fingerprint compares — one
+article proposed by one model and written by another. Editing the pricing table
+is worse, because it is a supported act with an immediate effect on what an open
+reservation releases.
+
+Opening a run now records the resolved text model, the resolved image model, both
+provider slugs, and the rate rows for those models plus the wildcard. Every paid
+step reads the models off the run, the budget check prices the estimate from the
+recorded table, and settlement uses the same table. An edit applies to the next
+run, which is what an editor is asking for anyway.
+
+The snapshot always carries the wildcard rate, because that is what an unlisted
+model is priced at, and a recorded table without one would price a model at
+nothing and defeat the cap. A run with no snapshot — opened by 1.1.x, still in
+flight — falls back to resolving as before, for the same reason a missing
+fingerprint is not treated as an edit.
+
+## VR-06 — Confirmed. Fixed.
+
+Every write in assembly is now inspected, and the policy is uniform: if the post
+cannot carry what the run was asked to give it, the post stays a draft and the
+run fails.
+
+- The run link and topic key are read back, not inferred from
+  `update_post_meta()`, which answers false both for a refused write and for a
+  value that already matched. `Meta_Writer` does that in one place for assembly
+  and all four SEO adapters.
+- `SEO_Adapter_Interface::apply()` returns `bool`.
+- `Taxonomy_Applier::apply()` returns `true|WP_Error`.
+- `Run::record_article()` returns `bool`.
+
+The run row is bound to the post immediately after the meta write and before the
+SEO and taxonomy writes, so a failure in those still leaves the draft adoptable
+by the next attempt rather than orphaned.
+
+**Why terminal rather than a warning, for all of them.** A warning needs somewhere
+to go, and the only places available are the run row's error column — which is
+the failure path — and an email nobody asked for. A draft plus a failure notice
+is recoverable and legible; a published post silently missing its categories or
+its SEO metadata is neither. The reviewer asked which failures are terminal:
+these all are, and the README records it.
+
+One note on what could not be tested the obvious way: WordPress ignores the
+result of its own term-relationship insert, so a refused relationship cannot be
+made to fail. The test drives the failure WordPress does report — a term it
+cannot create — which is the same path through our code.
+
+## VR-07 — Confirmed. Fixed.
+
+Finalisation claims the run's position before it does anything, exactly as the
+five steps do. Two actions could otherwise both transition the post and both
+write a settled cost before one lost the close race, so nothing was charged twice
+but every plugin listening for a publish ran twice, and the loser's cost write
+could land last. A second finaliser now finds the position claimed and returns
+the close-race code, which the queue driver already knows to swallow.
+
+## VR-08 — Confirmed. Fixed.
+
+- The installation section no longer names a versioned zip. It points at the
+  latest release, which is the thing that stays true.
+- `DECISIONS.md` D-09b no longer claims at most one provider call per queued
+  request. It records the real bound, why the claim was wrong, and that the
+  README and the pipeline document had already been corrected — because three
+  documents describing one mechanism is how a bound nobody can rely on survives.
+- The README's "two requirements" is now the full list of six deviations.
+- The grounding residual-risk warning is in the README, where
+  `Untrusted_Block`'s comment says it is, with a link to the longer version in
+  `INSTRUCTIONS.md`. The comment now names both.
+
+---
+
+## What is still not covered
+
+Unchanged from the last round, and still recorded in the README rather than
+implied: no test drives Action Scheduler's own dispatch; the concurrency tests
+run interleavings in one process rather than across two connections; CI runs
+against MySQL only; and no test calls a live provider. The last is deliberate and
+will stay that way.

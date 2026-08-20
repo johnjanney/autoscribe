@@ -173,4 +173,36 @@ final class GoogleTest extends Provider_Test_Case {
 		$this->assertTrue( $provider->supports_strict_json() );
 		$this->assertFalse( $provider->supports_strict_json_with_search() );
 	}
+	/**
+	 * The suggestion a blank configuration falls through to is the documented one.
+	 *
+	 * A prompt with no model and no site default resolves to the first suggestion,
+	 * so that string is the plugin's real default however much section 2.2 says
+	 * model IDs are configuration. Naming it in a test means changing it is a
+	 * deliberate act with the adapter's recorded catalog date beside it, rather
+	 * than a reordering nobody notices.
+	 *
+	 * The check is offline by design: it asserts what this build claims, not what
+	 * Google currently serves. Confirming the claim against the catalog is a
+	 * release step, because a test that calls a provider is a test that fails when
+	 * a network does.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @return void
+	 */
+	public function test_the_default_suggestion_is_the_documented_stable_model(): void {
+		$suggestions = ( new Google() )->suggested_models();
+
+		$this->assertSame(
+			'gemini-3.7-flash',
+			$suggestions[0],
+			'Verified against ai.google.dev/gemini-api/docs/models on 19 August 2026.'
+		);
+		$this->assertContains(
+			'gemini-3.6-flash',
+			$suggestions,
+			'The previous stable release stays reachable for a site that pins it.'
+		);
+	}
 }

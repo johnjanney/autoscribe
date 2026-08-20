@@ -68,6 +68,79 @@ final class Pricing_Table {
 	public const PER_GROUNDED_REQUEST = 'per_grounded_request';
 
 	/**
+	 * Rates this table was fixed to, or null when it reads the live option.
+	 *
+	 * @since 1.2.0
+	 * @var array<string, array<string, float>>|null
+	 */
+	private ?array $fixed = null;
+
+	/**
+	 * Builds the table, optionally fixed to a recorded set of rates.
+	 *
+	 * A run records the rates it was checked against when it opens, and settles
+	 * against those. The alternative — reading the option again at settlement —
+	 * means an edit to the price list between two queued actions changes what an
+	 * open reservation releases, so money appears or disappears from the month's
+	 * total without anything having been generated.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @param array<string, array<string, float>>|null $rates Recorded rates, or null for the live table.
+	 */
+	public function __construct( ?array $rates = null ) {
+		if ( null === $rates ) {
+			return;
+		}
+
+		$fixed = array();
+
+		foreach ( $rates as $model => $rate ) {
+			if ( is_array( $rate ) ) {
+				$fixed[ (string) $model ] = self::rate(
+					(float) ( $rate[ self::INPUT_PER_MILLION ] ?? 0.0 ),
+					(float) ( $rate[ self::OUTPUT_PER_MILLION ] ?? 0.0 ),
+					(float) ( $rate[ self::PER_IMAGE ] ?? 0.0 ),
+					(float) ( $rate[ self::PER_GROUNDED_REQUEST ] ?? 0.0 )
+				);
+			}
+		}
+
+		// Every lookup falls back to the wildcard, so a snapshot without one
+		// would price an unlisted model at nothing and defeat the cap.
+		if ( ! isset( $fixed['*'] ) ) {
+			$fixed['*'] = self::defaults()['*'];
+		}
+
+		$this->fixed = $fixed;
+	}
+
+	/**
+	 * Returns the rate rows a run needs to settle, for recording on the run.
+	 *
+	 * The wildcard travels with them because it is what an unlisted model is
+	 * priced at, and a run whose model is not in the table settles through it.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @param string[] $models Models this run may use.
+	 * @return array<string, array<string, float>>
+	 */
+	public function snapshot( array $models ): array {
+		$snapshot = array( '*' => $this->rates_for( '*' ) );
+
+		foreach ( $models as $model ) {
+			$model = (string) $model;
+
+			if ( '' !== $model ) {
+				$snapshot[ $model ] = $this->rates_for( $model );
+			}
+		}
+
+		return $snapshot;
+	}
+
+	/**
 	 * Returns the seeded default rates.
 	 *
 	 * Keyed by model identifier. Absent models fall back to the wildcard entry
@@ -117,6 +190,10 @@ final class Pricing_Table {
 	 * @return array<string, array<string, float>>
 	 */
 	public function all(): array {
+		if ( null !== $this->fixed ) {
+			return $this->fixed;
+		}
+
 		$stored = get_option( self::OPTION, array() );
 
 		if ( ! is_array( $stored ) ) {

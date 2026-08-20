@@ -1,5 +1,500 @@
 # AutoScribe code quality and security audit
 
+## Verification review — version 1.1.3
+
+**Review date:** 19 August 2026
+
+**Reviewed revision:** `88aefb38c7d342d55e10f41b9b7ac4fa131adbee` on
+`main`, tag `v1.1.3`
+
+**Response reviewed:** the “Response to the third Codex review” and the
+1.1.2/1.1.3 follow-up in
+[`CODEX-REVIEW-RESPONSE.md`](CODEX-REVIEW-RESPONSE.md#L1109)
+
+**Release records reviewed:** versions 1.1.1 through 1.1.3 in
+[`CHANGELOG.md`](CHANGELOG.md#L90)
+
+**Current result:** **Conditional fail. Do not enable unattended automatic
+publication until VR-01 through VR-05 are fixed.**
+
+**Current quality score:** **7.4/10**
+
+### Executive result
+
+The response correctly fixed important parts of CR-01 through CR-06 and CR-08
+through CR-10. The database claim now prevents two workers from buying the same
+step in the ordinary duplicate-delivery case. The code checks the required-image
+result. It also checks attachment metadata, protects force review across an open
+run, batches the queue lookup, and uses an atomic monthly-warning claim.
+
+The response did not fully fix all confirmed findings. Failure paths still ignore
+some terminal-write results. A failed usage write followed by a failed terminal
+write can still lose a paid charge. Two sweepers can also write the complete JSON
+payload without a compare-and-swap. That write can remove state that a worker
+stored after the sweeper read the payload. The fallback image mode can still
+publish with no fallback image.
+
+The rejection of CR-07 is not reproducible. During this review, Google's current
+model catalog lists `gemini-3.6-flash` as the latest stable Flash model. It does
+not list `gemini-3.7-flash`. **Not found in documents.** The plugin still selects
+`gemini-3.7-flash` first when the prompt and site default are blank
+([Google adapter](src/Providers/Text/Google.php#L71),
+[Google model catalog](https://ai.google.dev/gemini-api/docs/models),
+[latest-model guide](https://ai.google.dev/gemini-api/docs/latest-model)).
+
+I found no verified unauthenticated code execution, SQL injection, stored XSS,
+capability bypass, CSRF defect, or provider-URL SSRF in the reviewed code. The
+main risks are financial-accounting integrity, concurrent state loss, publication
+without a configured fallback image, and provider-contract drift.
+
+### Verification results
+
+| Check | Result | Evidence |
+|---|---:|---|
+| Git revision and worktree | Pass | `main`, `origin/main`, and `v1.1.3` resolve to `88aefb3`. The worktree was clean before this review file changed. |
+| Composer manifest | Pass | `composer validate --no-check-publish` reports a valid manifest ([manifest](composer.json)). |
+| Dependency advisories | Pass | `composer audit --locked` reports no known advisory for the locked dependencies ([lock file](composer.lock)). |
+| WordPress coding standards | Pass | PHPCS checked 111 PHP files with no error or warning ([rules](phpcs.xml.dist)). |
+| PHPUnit | Pass | 300 tests and 1,118 assertions passed in the WordPress test container ([test configuration](phpunit.xml.dist), [bootstrap](tests/bootstrap.php)). |
+| Release archive | Pass | `unzip -t build/autoscribe-1.1.3.zip` passed. The non-vendor production files match the reviewed tree ([build script](bin/build.sh)). |
+| Google structured-output shape | Pass by document inspection | The adapter's top-level `response_format` object matches Google's current Interactions API contract ([adapter](src/Providers/Text/Google.php#L158), [Interactions API](https://ai.google.dev/api/interactions-api-v1), [structured-output guide](https://ai.google.dev/gemini-api/docs/structured-output)). |
+| Live provider calls | Not run | No funded key was supplied. No prompt or site content was sent to a provider. |
+| Real Action Scheduler dispatch | Not covered | The tests call scheduling and handler code, but no test lets the bundled scheduler dispatch the complete chain ([documented gap](README.md#L247), [pipeline test plan](docs/PIPELINE-SPLIT.md#L221)). |
+| True concurrent workers | Not covered | The claim tests execute interleavings in one PHP process. They do not run two database connections at the same time ([claim test](tests/Pipeline/Write_FailureTest.php#L129), [sweeper tests](tests/Pipeline/Stall_SweeperTest.php)). |
+
+### Response verdict by prior finding
+
+| Prior finding | Verification verdict | Current status |
+|---|---|---|
+| CR-01 — paid usage can be lost | **Partly fixed** | An isolated usage-write failure stops and settles the run. A second failure of the terminal write still loses the in-memory usage. See VR-01. |
+| CR-02 — two provider calls per request | **Clarified, not fixed** | The release documents the two-call behavior. `DECISIONS.md` still states the old one-call claim. See VR-08. |
+| CR-03 — mutable global settings | **Partly fixed** | Site default models and force review are covered. Resolved fallback models and pricing are not stored in the run snapshot. See VR-05. |
+| CR-04 — image success without a thumbnail | **Partly fixed** | Required mode and metadata verification are fixed. Fallback mode still degrades to no image if its fallback cannot attach. See VR-03. |
+| CR-05 — unchecked terminal writes | **Partly fixed** | The successful finalization path checks `succeed()`. Several failure and skip paths ignore the returned value and still conclude the run. See VR-01. |
+| CR-06 — no atomic step claim | **Fixed for ordinary duplicate step delivery** | `claim_step()` is a database compare-and-swap. Claim tokens protect release, and the terminal sweep close is tied to the observed position. The new sweeper payload write has a separate concurrency defect. See VR-02. |
+| CR-07 — Google default model | **Response rejected on current evidence** | Google's current first-party catalog does not list `gemini-3.7-flash`. See VR-04. |
+| CR-08 — one queue query per candidate | **Fixed** | The scheduler performs one action-table query per page and has a compatibility fallback ([scheduler](src/Scheduling/Scheduler.php#L243)). |
+| CR-09 — duplicate monthly warning | **Fixed** | The month-specific `add_option()` insert is the claim ([budget guard](src/Cost/Budget_Guard.php#L267)). |
+| CR-10 — documentation contradictions | **Partly fixed** | The README version table and main pipeline text are corrected. Other direct contradictions remain. See VR-08. |
+
+The 1.1.2 and 1.1.3 follow-up fixes are correct for the defects that they name.
+`close_at()` now compares the observed step in the same terminal update, and its
+`COALESCE( step, '' )` comparison accepts both SQL `NULL` and an empty initial
+position ([conditional close](src/Pipeline/Run.php#L706)). The regression test
+releases a first-step claim and then closes the run at its restart limit
+([regression test](tests/Pipeline/Write_FailureTest.php#L616)).
+
+## Version 1.1.3 findings
+
+### VR-01 — High — Failed terminal transitions still trigger downstream actions and can lose paid usage
+
+**Category:** Financial integrity, state-machine correctness, database failure
+handling
+
+**Verified facts**
+
+- `Run::record_text_usage()` and `Run::record_image()` now return a result and
+  keep the new usage in the current object. This correctly handles an isolated
+  usage-write failure when the later terminal write succeeds
+  ([text usage](src/Pipeline/Run.php#L324),
+  [image usage](src/Pipeline/Run.php#L379)).
+- `Run::fail()`, `Run::skip()`, and `Run::succeed()` now return whether they
+  closed the row. This is also correct ([skip](src/Pipeline/Run.php#L1387),
+  [success](src/Pipeline/Run.php#L1468),
+  [failure](src/Pipeline/Run.php#L1546)).
+- The queue handler ignores the failure result when a prompt disappears, when
+  the configuration changes, and when a step fails. It can then cancel,
+  retry, notify, or re-arm as if the run closed
+  ([disabled prompt](src/Pipeline/Queued_Run_Handler.php#L146),
+  [changed configuration](src/Pipeline/Queued_Run_Handler.php#L164),
+  [step error](src/Pipeline/Queued_Run_Handler.php#L184)).
+- `Generator::close_failed()` also discards the `fail()` result
+  ([generator](src/Pipeline/Generator.php#L434)).
+- The budget step ignores the return from its budget skip and reservation-failure
+  close ([budget step](src/Pipeline/Step_Budget_Check.php#L88)). The duplicate
+  topic step also ignores its skip result
+  ([topic step](src/Pipeline/Step_Propose_Topic.php#L176)).
+- The new tests make one selected write fail. The usage test lets the later
+  terminal write succeed, and the terminal test covers only the synchronous
+  success close. There is no test that rejects both the usage write and the
+  terminal write, or one that rejects a queued failure close
+  ([usage test](tests/Pipeline/Write_FailureTest.php#L70),
+  [success-close test](tests/Pipeline/Write_FailureTest.php#L97)).
+
+**Confirmed failure sequence**
+
+1. A provider returns a successful response and charges the account.
+2. The usage update fails. The step returns `autoscribe_usage_not_recorded`.
+3. The handler calls `fail()`. A continuing database fault makes this write fail
+   too.
+4. The handler does not inspect that result. By default, it sends the final
+   failure notice and arms the next occurrence. A site filter can also classify
+   the code as transient and cause a retry.
+5. The run remains open. The in-memory usage disappears at the end of the PHP
+   request.
+6. A later sweep reads only the older persisted counters. If it closes the run,
+   it replaces the reservation with a cost that omits the charged call.
+
+**Impact**
+
+The month total and cap can understate provider charges. The queue can also
+announce and retry a run that did not make its terminal transition. This directly
+contradicts the response statement that nothing is announced until the transition
+succeeds ([response](CODEX-REVIEW-RESPONSE.md#L1233)).
+
+**Required fix**
+
+- Return a three-state close result: `closed`, `already_closed`, or
+  `write_failed`. Do not collapse a database error and a lost race into the same
+  Boolean.
+- Make `Generator::close()` return that result. Call `conclude()` only after
+  `closed`. Stand down after `already_closed`. Leave the run recoverable and
+  report an operational error after `write_failed`.
+- When a stalled claim can contain unrecorded paid work, do not settle it below
+  its reservation unless the accounting state is known complete. A conservative
+  reservation is safer than an unverified zero.
+- Add fault-injection tests for each queued ending. Add one test where the usage
+  update and the terminal update both fail.
+
+### VR-02 — High — Concurrent sweepers can overwrite run payload state
+
+**Category:** Concurrency, paid-work idempotency, provenance integrity
+
+**Verified facts**
+
+- `Run::merge_payload()` reads the complete JSON document, merges one key in PHP,
+  and writes the complete document back. It has no version check and no step or
+  claim condition ([payload merge](src/Pipeline/Run.php#L442)).
+- `record_sweep()` stores the restart count through that method
+  ([sweep count](src/Pipeline/Run.php#L1173)).
+- Two sweepers can pass the no-action check for the same run. The code has no
+  recovery claim before it calls `record_sweep()`
+  ([recovery path](src/Pipeline/Stall_Sweeper.php#L321)).
+- One sweeper can schedule a worker while the second sweeper still holds an old
+  payload snapshot. The step claim prevents duplicate provider work, but it does
+  not prevent the second sweeper from writing its old JSON document
+  ([step claim](src/Pipeline/Run.php#L754),
+  [schedule after payload write](src/Pipeline/Stall_Sweeper.php#L399)).
+
+**Confirmed interleaving**
+
+1. Sweepers A and B read payload `P` for the same idle run.
+2. A records the sweep and schedules a step.
+3. The worker claims the step and writes `topic`, `article`, `sources`, or
+   `image` into payload `P2`.
+4. B writes its old payload `P` plus its `sweeps` value.
+5. The worker's new state is removed even though its write succeeded.
+
+**Impact**
+
+The next action can repeat a paid call, lose source provenance, lose the stored
+configuration fingerprint, or fail because required intermediate state is gone.
+The same read-modify-write race can also undercount restarts.
+
+**Required fix**
+
+- Do not keep the concurrency counter in the shared JSON document. Add a
+  `sweeps` column and increment it atomically, or use a single guarded JSON update
+  that changes only that key.
+- Claim recovery with one conditional database update before any sweeper changes
+  payload or schedules a worker.
+- Make step payload writes conditional on the claim token that the worker owns.
+- Add a two-connection database test for a sweeper/worker interleaving and for
+  two concurrent sweepers.
+
+### VR-03 — Medium — Fallback image mode still publishes when the fallback cannot attach
+
+**Category:** Functional correctness, publication policy
+
+**Verified facts**
+
+- The project brief defines fallback mode as “Attach `fallback_image_id`. Continue
+  and publish” ([brief](docs/PROJECT-BRIEF.md#L368)).
+- The code correctly verifies the generated thumbnail and tries the configured
+  fallback after a generation or attachment failure
+  ([image step](src/Pipeline/Step_Generate_Image.php#L149)).
+- If `fallback_image_id` is zero, missing, deleted, or refused by WordPress,
+  `set_thumbnail()` returns false. The code then records attachment ID zero and
+  continues ([fallback branch](src/Pipeline/Step_Generate_Image.php#L194),
+  [verification](src/Pipeline/Step_Generate_Image.php#L249)).
+- The prompt save path permits fallback mode with ID zero. It sanitizes the
+  integer but performs no cross-field validation
+  ([field declaration](src/Prompts/Prompt_Fields.php#L242),
+  [save loop](src/Admin/Prompt_Meta_Box.php#L499)).
+- The only refused-thumbnail test uses `required` mode. It does not test a refused
+  fallback thumbnail ([test](tests/Pipeline/Write_FailureTest.php#L270)).
+
+**Impact**
+
+A prompt that explicitly requires a fallback can publish with no featured image.
+The response fixed the required-mode half of CR-04, but not the fallback half.
+
+**Required fix**
+
+- Reject or disable fallback mode unless the ID names a readable image
+  attachment.
+- If the fallback cannot attach at run time, return a distinct error and leave
+  the post as a draft. Do not treat fallback mode as optional mode.
+- Add tests for ID zero, a deleted attachment, and a refused `_thumbnail_id`
+  write.
+
+### VR-04 — Medium — The first Google model suggestion is not in the current catalog
+
+**Category:** Provider contract, default configuration, release accuracy
+
+**Verified facts**
+
+- The adapter selects `gemini-3.7-flash` first
+  ([Google adapter](src/Providers/Text/Google.php#L71)).
+- With blank prompt and site model values, `Model_Resolver` returns the first
+  adapter suggestion. It does not try the second suggestion after a provider
+  rejection ([resolver test](tests/Providers/Model_ResolverTest.php#L73)).
+- Google's current catalog lists `gemini-3.6-flash` as stable and does not list
+  `gemini-3.7-flash`. **Not found in documents.** Google's current migration
+  guide also tells clients to migrate to `gemini-3.6-flash`
+  ([model catalog](https://ai.google.dev/gemini-api/docs/models),
+  [latest-model guide](https://ai.google.dev/gemini-api/docs/latest-model)).
+- The response says that the same catalog lists 3.7 as “New Stable”
+  ([response](CODEX-REVIEW-RESPONSE.md#L1322)). That claim does not match the page
+  retrieved for this review.
+- No funded live model-list request was run in either review.
+
+**Inference**
+
+Google can change its catalog quickly. The response may describe a transient
+page state. The current release still needs a current, reproducible default. A
+hard-coded first suggestion that is absent from the current catalog is not safe
+as the automatic fallback.
+
+**Required fix**
+
+- Put `gemini-3.6-flash` first now, or require the administrator to select a model
+  before Google generation.
+- Add a release-time model-catalog smoke check that uses a funded test account.
+  Do not run it in the ordinary offline unit suite.
+- Record the retrieval date and the exact first-party URL when a model suggestion
+  changes.
+
+### VR-05 — Medium — The run configuration snapshot still excludes resolved fallbacks and pricing
+
+**Category:** Cost consistency, configuration integrity
+
+**Verified facts**
+
+- The fingerprint now includes prompt fields and the two site default model
+  values. This fixes the specific site-default change from CR-03
+  ([fingerprint](src/Prompts/Prompt.php#L388)).
+- A blank prompt model and blank site default still resolve through the adapter's
+  mutable suggestion list at every paid step
+  ([topic resolution](src/Pipeline/Step_Propose_Topic.php#L101),
+  [body resolution](src/Pipeline/Step_Generate_Body.php#L103),
+  [image resolution](src/Pipeline/Step_Generate_Image.php#L98)).
+- The fingerprint does not store the resolved model IDs. A plugin upgrade can
+  change an adapter suggestion without changing the fingerprint.
+- The fingerprint also excludes the pricing table. The budget check uses the
+  table at the first step, and finalization constructs a new table later
+  ([estimate](src/Cost/Budget_Guard.php#L312),
+  [finalization](src/Pipeline/Queued_Run_Handler.php#L258)).
+- The original required fix asked for resolved models and relevant pricing
+  rates in the run snapshot ([original CR-03](CODEX-REVIEW.md#L684)). The response
+  discusses only site defaults and force review
+  ([response](CODEX-REVIEW-RESPONSE.md#L1202)).
+
+**Impact**
+
+An upgrade or pricing edit can make later steps use a model or rate set that the
+run did not use at its budget check. This can mix models in one article and can
+change settlement under an open reservation.
+
+**Required fix**
+
+- At run open, store the resolved text model, resolved image model, provider
+  slugs, and the rate rows used for the estimate.
+- Use those stored model IDs for all paid steps.
+- Settle with the same stored rate snapshot. Apply new rates to the next run.
+- Add tests that change adapter suggestions and the pricing option between
+  queued actions.
+
+### VR-06 — Medium — Post assembly still ignores required audit and taxonomy writes
+
+**Category:** Auditability, content integrity, write-failure handling
+
+**Verified facts**
+
+- The brief requires `_autoscribe_run_id` on every generated post because it
+  links the post to its run ([brief](docs/PROJECT-BRIEF.md#L587)).
+- Assembly writes `_autoscribe_run_id` and `_autoscribe_topic_key` but does not
+  inspect or verify either result
+  ([assembly](src/Pipeline/Step_Assemble_Post.php#L200)).
+- `Run::record_article()` also returns `void` and discards its database update
+  result ([run log](src/Pipeline/Run.php#L305)). Assembly does not check it
+  ([caller](src/Pipeline/Step_Assemble_Post.php#L243)).
+- Category and tag assignment discards `wp_set_post_terms()` errors
+  ([taxonomy](src/Content/Taxonomy_Applier.php#L39)). SEO adapters also return
+  `void` after unverified meta writes
+  ([SEO contract](src/SEO/SEO_Adapter_Interface.php#L67)).
+
+**Impact**
+
+The plugin can publish a post with no run link, no exact duplicate key, missing
+taxonomy, or missing SEO metadata while the run reports success. The missing run
+link breaks the audit trail that the feature exists to provide.
+
+**Required fix**
+
+- Read back the run ID and topic key after each meta write. Treat a missing run
+  ID as terminal and leave the post in draft.
+- Make `record_article()`, taxonomy application, and SEO application return a
+  result. Define which failures are terminal and which are warnings.
+- Add focused write-refusal tests for post meta, terms, and each SEO adapter.
+
+### VR-07 — Low — Finalization has no claim
+
+**Category:** Concurrency, duplicate WordPress side effects
+
+**Verified facts**
+
+- Every pipeline step has a position claim, but the finalization tail runs after
+  `Pipeline::next_step()` returns null. It takes no claim
+  ([pipeline](src/Pipeline/Pipeline.php#L181),
+  [queue finish](src/Pipeline/Queued_Run_Handler.php#L249)).
+- Two final actions can both call `wp_update_post()` and `settle_cost()` before
+  one wins the final `succeed()` transition
+  ([finalize](src/Pipeline/Generator.php#L184)).
+- The final status transition prevents duplicate review mail and duplicate
+  scheduling. It does not prevent duplicate `wp_update_post()` hooks or duplicate
+  cost writes before that transition.
+
+**Impact**
+
+No second provider charge occurs. However, plugins that react to post updates or
+publication can run twice, and the losing finalizer can overwrite the cost before
+it loses the close race.
+
+**Recommended fix**
+
+- Add a finalization claim or include finalization as a claimed pipeline step.
+- Add a duplicate-finalizer test that counts post-transition hooks, settlement
+  writes, notices, and re-arms.
+
+### VR-08 — Low — Release documentation still contains direct contradictions
+
+**Category:** Documentation accuracy, security disclosure
+
+**Verified facts**
+
+- The README version table says 1.1.3, but the installation section still tells
+  users to download `autoscribe-1.0.0.zip`
+  ([version](README.md#L14), [installation](README.md#L73)).
+- `DECISIONS.md` still says each queued request has at most one provider call
+  ([D-09b](DECISIONS.md#L355)). The README and pipeline document correctly say a
+  step can make two calls ([README](README.md#L226),
+  [pipeline document](docs/PIPELINE-SPLIT.md#L240)).
+- The README says only two brief requirements are knowingly unmet. The same
+  section also records that Run now does not stream and that the similarity
+  default differs from the brief ([README](README.md#L192)).
+- `Untrusted_Block` says the README recommends review mode for grounding
+  ([code comment](src/Security/Untrusted_Block.php#L31)). The actual warning and
+  recommendation are in `INSTRUCTIONS.md`, not the README
+  ([instructions](INSTRUCTIONS.md#L212)).
+
+**Impact**
+
+Users can download an old release, maintainers can rely on a false performance
+bound, and the main repository page does not contain the grounding-specific
+prompt-injection warning that the code says it contains.
+
+**Recommended fix**
+
+- Change the installation filename to 1.1.3 or remove the version from the link.
+- Correct D-09b.
+- Replace “two requirements” with a complete deviation list.
+- Put the grounding residual-risk warning in the README and link to the longer
+  instructions.
+
+## Security, quality, performance, and purpose assessment
+
+### Security
+
+The security baseline is good. Admin handlers use nonces and the custom
+capability ([admin actions](src/Admin/Actions.php#L396)). Model HTML passes through
+a narrow allowlist after executable blocks and dangerous attributes are removed
+([sanitizer](src/Security/Content_Sanitizer.php#L60)). Provider JSON and image
+downloads have response limits, and the image URL uses `wp_safe_remote_get()`
+([HTTP policy](src/Providers/Http.php#L44),
+[image download](src/Media/Image_Sideloader.php#L193)). The CI actions use fixed
+commit hashes ([CI](.github/workflows/ci.yml#L39)).
+
+The remaining security-related risks are business-logic risks. VR-01 can
+understate paid usage. VR-02 can remove provenance and idempotency state.
+Grounded provider search remains a prompt-injection surface because the plugin
+does not see retrieved page text before the model reads it. Human review is the
+effective residual control ([instructions](INSTRUCTIONS.md#L212)).
+
+### Code quality
+
+The code is readable and has unusually clear reasons for difficult decisions.
+The database claim, monotonic review rule, compatibility fallback for Action
+Scheduler stores, and read-back verification for WordPress's ambiguous Boolean
+APIs are sound ideas.
+
+The main weakness is inconsistent state-transition discipline. Some writes have
+strong compare-and-swap rules, while nearby writes still return `void` or have
+their result discarded. The 1.1.1 response correctly identifies this pattern,
+but the audit did not apply it to every terminal path, payload writer, post meta
+write, taxonomy write, and SEO write.
+
+### Performance
+
+CR-08 is fixed. A sweep uses one queue-table query per page instead of one query
+per candidate ([scheduler](src/Scheduling/Scheduler.php#L243)). The scan and
+recovery batch are bounded ([sweeper](src/Pipeline/Stall_Sweeper.php#L86)).
+
+The main performance limit is documented: a topic or body step can make two
+120-second calls in one request ([README](README.md#L226)). VR-02 can add repeat
+calls after state loss. The Action Scheduler fallback still performs one lookup
+per run on a legacy or substituted store; this is a deliberate compatibility
+trade-off, not a new defect.
+
+### Purpose and requirement fit
+
+AutoScribe substantially implements its stated purpose. It schedules prompts,
+generates and validates content, handles review or publication, adds images,
+records runs, applies budgets, and provides provider and admin controls. The
+normal path is strong and the automated unit/integration suite is broad.
+
+The release is not ready for unattended automatic publication because the
+remaining defects are on exceptional paths where money, state, and publication
+policy meet. Review mode reduces content risk, but it does not correct missing
+usage, overwritten run state, or a missing configured fallback image.
+
+## Remediation order
+
+1. Fix VR-01. Make every terminal transition result authoritative before retry,
+   notification, or re-arm.
+2. Fix VR-02. Remove the sweep counter from whole-document payload updates and
+   add a recovery claim.
+3. Fix VR-03 and VR-04. Enforce fallback-image policy and replace the unsupported
+   Google default.
+4. Fix VR-05. Store resolved models and rate rows at run open.
+5. Fix VR-06 and VR-07. Verify post metadata and claim finalization.
+6. Fix VR-08 and add the missing concurrent, terminal-failure, fallback-image,
+   live provider, archive-activation, MariaDB, and real Action Scheduler tests.
+
+## Version 1.1.3 conclusion
+
+The response made material improvements, and versions 1.1.2 and 1.1.3 corrected
+two real defects in the new concurrency guard. However, the statement that all
+nine confirmed findings are fixed is not accurate for the current tree. CR-01,
+CR-03, CR-04, CR-05, and CR-10 remain partly open. CR-07 must also be reopened
+against the current first-party Google catalog.
+
+Use version 1.1.3 only with human review and a provider-side spending limit until
+VR-01 through VR-05 are fixed and verified with concurrent and failure-injection
+tests.
+
+---
+
 **Audit date:** 17 August 2026  
 **Reviewed revision:** `97e2e3e` on `main`  
 **Release under review:** 1.0.0  

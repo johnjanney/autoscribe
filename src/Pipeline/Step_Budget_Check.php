@@ -86,13 +86,14 @@ final class Step_Budget_Check {
 	 * @return true|WP_Error True when the run may proceed.
 	 */
 	private function check_and_reserve( Prompt $prompt, Run $run, bool $locked ): bool|WP_Error {
-		$estimate = $this->guard->estimate_cents( $prompt );
+		$estimate = $this->guard->estimate_cents( $prompt, $run );
 		$verdict  = $this->guard->check( $prompt, $estimate );
 
 		if ( is_wp_error( $verdict ) ) {
-			$run->skip( Run::STATUS_SKIPPED_BUDGET, $verdict->get_error_message() );
-
-			return $verdict;
+			return Close_Result::annotate(
+				$verdict,
+				$run->skip( Run::STATUS_SKIPPED_BUDGET, $verdict->get_error_message() )
+			);
 		}
 
 		// Reserve before any paid call so concurrent runs can see this one.
@@ -108,9 +109,7 @@ final class Step_Budget_Check {
 				__( 'The estimated cost of this run could not be written to the run log, so the monthly cap could not account for it. The run was stopped before any provider call.', 'autoscribe' )
 			);
 
-			$run->fail( $error->get_error_message() );
-
-			return $error;
+			return Close_Result::annotate( $error, $run->fail( $error->get_error_message() ) );
 		}
 
 		if ( $locked ) {
@@ -128,9 +127,11 @@ final class Step_Budget_Check {
 
 		if ( is_wp_error( $confirmed ) ) {
 			$run->reserve_cost( 0 );
-			$run->skip( Run::STATUS_SKIPPED_BUDGET, $confirmed->get_error_message() );
 
-			return $confirmed;
+			return Close_Result::annotate(
+				$confirmed,
+				$run->skip( Run::STATUS_SKIPPED_BUDGET, $confirmed->get_error_message() )
+			);
 		}
 
 		return true;

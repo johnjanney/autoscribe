@@ -82,13 +82,18 @@ final class SEOPress_Adapter implements SEO_Adapter_Interface {
 	 * @param string $seo_title        SEO title.
 	 * @param string $meta_description Meta description.
 	 * @param string $focus_keyword    Focus keyword.
-	 * @return void
+	 * @return bool
 	 */
-	public function apply( int $post_id, string $seo_title, string $meta_description, string $focus_keyword ): void {
+	public function apply( int $post_id, string $seo_title, string $meta_description, string $focus_keyword ): bool {
 		$keys = $this->meta_keys();
 
-		update_post_meta( $post_id, $keys['title'], $seo_title );
-		update_post_meta( $post_id, $keys['description'], $meta_description );
-		update_post_meta( $post_id, $keys['focus_keyword'], $focus_keyword );
+		return Meta_Writer::write(
+			$post_id,
+			array(
+				$keys['title']         => $seo_title,
+				$keys['description']   => $meta_description,
+				$keys['focus_keyword'] => $focus_keyword,
+			)
+		);
 	}
 }

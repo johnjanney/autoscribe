@@ -2,14 +2,14 @@
 # This file is distributed under the GPL-2.0-or-later.
 msgid ""
 msgstr ""
-"Project-Id-Version: AutoScribe 1.1.3\n"
+"Project-Id-Version: AutoScribe 1.2.0\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/autoscribe\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-19T22:47:22+00:00\n"
+"POT-Creation-Date: 2026-08-19T23:56:42+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: autoscribe\n"
@@ -163,6 +163,10 @@ msgstr ""
 
 #: src/Admin/Prompt_Meta_Box.php:467
 msgid "No post was created. This preview is not saved and disappears when you leave the page."
+msgstr ""
+
+#: src/Admin/Prompt_Meta_Box.php:614
+msgid "The featured image mode was changed from \"fallback\" to \"required\", because the fallback image ID does not name an image in this site's media library. Set a valid attachment ID and choose fallback again."
 msgstr ""
 
 #: src/Admin/Runs_List_Table.php:75
@@ -458,6 +462,14 @@ msgstr ""
 msgid "title and content_html must not be empty."
 msgstr ""
 
+#: src/Content/Taxonomy_Applier.php:84
+msgid "The categories this prompt is configured with could not be applied to the generated post."
+msgstr ""
+
+#: src/Content/Taxonomy_Applier.php:117
+msgid "The tags for the generated post could not be applied."
+msgstr ""
+
 #. translators: %s: the topic key that already exists.
 #: src/Content/Topic_Deduplicator.php:144
 #, php-format
@@ -477,16 +489,16 @@ msgid "A post titled \"%s\" already exists."
 msgstr ""
 
 #. translators: 1: which cap was hit, 2: spend so far in dollars, 3: cap in dollars.
-#: src/Cost/Budget_Guard.php:449
+#: src/Cost/Budget_Guard.php:462
 #, php-format
 msgid "The %1$s monthly budget would be exceeded. Estimated spend so far is $%2$s against a cap of $%3$s."
 msgstr ""
 
-#: src/Cost/Budget_Guard.php:450
+#: src/Cost/Budget_Guard.php:463
 msgid "per-prompt"
 msgstr ""
 
-#: src/Cost/Budget_Guard.php:450
+#: src/Cost/Budget_Guard.php:463
 msgid "global"
 msgstr ""
 
@@ -530,42 +542,46 @@ msgstr ""
 msgid "The generated file is not a type this site permits, despite being declared as %s."
 msgstr ""
 
-#: src/Pipeline/Generator.php:147
+#: src/Pipeline/Generator.php:172
 msgid "The run stopped making progress through its steps and was abandoned rather than repeated indefinitely."
 msgstr ""
 
-#: src/Pipeline/Generator.php:239
+#: src/Pipeline/Generator.php:293
+msgid "This run finished, but the run log would not record it as finished. It was left open for the stall sweep rather than being reported as complete."
+msgstr ""
+
+#: src/Pipeline/Generator.php:330
 msgid "This run was already closed by something else, so it was left alone. Whatever closed it has reported the outcome."
 msgstr ""
 
-#: src/Pipeline/Generator.php:309
+#: src/Pipeline/Generator.php:388
 msgid "The settings this run was checked against could not be written to the run log, so the run was stopped rather than starting without a record of them."
 msgstr ""
 
 #. translators: %d: post ID.
-#: src/Pipeline/Generator.php:335
+#: src/Pipeline/Generator.php:455
 #, php-format
 msgid "No prompt exists with ID %d."
 msgstr ""
 
 #. translators: %d: post ID of the draft.
-#: src/Pipeline/Generator.php:424
+#: src/Pipeline/Generator.php:544
 #, php-format
 msgid "The draft left by the previous attempt (post %d) could not be bound to this run, so continuing would have created a second draft beside it. The run was stopped before any provider call."
 msgstr ""
 
-#: src/Pipeline/Generator.php:473
+#: src/Pipeline/Generator.php:604
 msgid "This run produced no article, so there is nothing to publish."
 msgstr ""
 
 #. translators: %s: article title.
-#: src/Pipeline/Generator.php:507
+#: src/Pipeline/Generator.php:638
 #, php-format
 msgid "AutoScribe draft ready for review: %s"
 msgstr ""
 
 #. translators: 1: article title, 2: opening of the article, 3: edit URL.
-#: src/Pipeline/Generator.php:512
+#: src/Pipeline/Generator.php:643
 #, php-format
 msgid ""
 "AutoScribe generated a draft and held it for review.\n"
@@ -579,13 +595,13 @@ msgid ""
 msgstr ""
 
 #. translators: %s: prompt title.
-#: src/Pipeline/Generator.php:544
+#: src/Pipeline/Generator.php:675
 #, php-format
 msgid "AutoScribe run failed: %s"
 msgstr ""
 
 #. translators: 1: prompt title, 2: error message, 3: edit URL.
-#: src/Pipeline/Generator.php:549
+#: src/Pipeline/Generator.php:680
 #, php-format
 msgid ""
 "An AutoScribe prompt failed and will not be retried.\n"
@@ -597,43 +613,63 @@ msgid ""
 "%3$s"
 msgstr ""
 
-#: src/Pipeline/Generator.php:576
+#: src/Pipeline/Generator.php:711
+msgid "AutoScribe could not record that a run had finished"
+msgstr ""
+
+#. translators: 1: prompt title, 2: what the run was ending with.
+#: src/Pipeline/Generator.php:714
+#, php-format
+msgid ""
+"An AutoScribe run reached its end, and the run log would not accept the write that closes it. The run was left open so that the stall sweep can settle it rather than being reported as finished twice.\n"
+"\n"
+"Check that the AutoScribe runs table exists and is writable.\n"
+"\n"
+"Prompt: %1$s\n"
+"The run was ending with: %2$s"
+msgstr ""
+
+#: src/Pipeline/Generator.php:748
 msgid "AutoScribe has reached 80% of its monthly budget"
 msgstr ""
 
-#: src/Pipeline/Generator.php:577
+#: src/Pipeline/Generator.php:749
 msgid "Estimated AutoScribe spend for this month has passed 80 percent of the configured global cap. Runs will stop once the cap is reached. These figures are estimates; your provider billing is the authority."
 msgstr ""
 
 #. translators: %s: step name.
-#: src/Pipeline/Pipeline.php:219
+#: src/Pipeline/Pipeline.php:236
 #, php-format
 msgid "The run log could not record that the %s step finished, so the run was stopped rather than repeating it."
 msgstr ""
 
 #. translators: %s: step name.
-#: src/Pipeline/Pipeline.php:280
+#: src/Pipeline/Pipeline.php:297
 #, php-format
 msgid "The run asked for a step called %s, which does not exist."
 msgstr ""
 
-#: src/Pipeline/Pipeline.php:329
+#: src/Pipeline/Pipeline.php:346
 msgid "This run has no generated article to work from, so it cannot continue."
 msgstr ""
 
-#: src/Pipeline/Queued_Run_Handler.php:154
+#: src/Pipeline/Queued_Run_Handler.php:164
 msgid "The prompt was disabled or removed while this run was in progress."
 msgstr ""
 
-#: src/Pipeline/Queued_Run_Handler.php:245
+#: src/Pipeline/Queued_Run_Handler.php:269
 msgid "This prompt was edited while the run was in progress, so the run was stopped rather than finishing under settings it was never checked against. The next scheduled run will use the new settings."
 msgstr ""
 
-#: src/Pipeline/Run.php:194
+#: src/Pipeline/Queued_Run_Handler.php:483
+msgid "no error"
+msgstr ""
+
+#: src/Pipeline/Run.php:210
 msgid "The run could not be recorded. Check that the AutoScribe runs table exists and is writable."
 msgstr ""
 
-#: src/Pipeline/Run.php:1461
+#: src/Pipeline/Run.php:1711
 msgid "The cost of this run could not be written to the run log, so the reservation it made against the monthly cap still stands. The run was not reported as finished."
 msgstr ""
 
@@ -642,42 +678,60 @@ msgid "This run stopped part-way and its prompt has since been removed or switch
 msgstr ""
 
 #. translators: %d: number of restarts already attempted.
-#: src/Pipeline/Stall_Sweeper.php:375
+#: src/Pipeline/Stall_Sweeper.php:377
 #, php-format
 msgid "This run stopped part-way %d times and was given up on. Whatever it had reserved against the monthly cap has been released. The usual cause is a host ending requests before they finish: check this site's PHP max_execution_time and memory limit."
 msgstr ""
 
-#: src/Pipeline/Step_Assemble_Post.php:125
+#: src/Pipeline/Step_Assemble_Post.php:126
 msgid "Sources"
 msgstr ""
 
-#: src/Pipeline/Step_Assemble_Post.php:159
+#: src/Pipeline/Step_Assemble_Post.php:160
 msgid "Nothing survived sanitisation of the generated body."
 msgstr ""
 
-#: src/Pipeline/Step_Assemble_Post.php:166
+#: src/Pipeline/Step_Assemble_Post.php:167
 msgid "A dangerous URI scheme survived sanitisation; the article was discarded."
 msgstr ""
 
 #. translators: %d: post ID.
-#: src/Pipeline/Step_Assemble_Post.php:238
+#: src/Pipeline/Step_Assemble_Post.php:229
+#, php-format
+msgid "The generated post (%d) could not be linked back to this run, so it was left as a draft rather than published with no record of where it came from."
+msgstr ""
+
+#. translators: %d: post ID.
+#: src/Pipeline/Step_Assemble_Post.php:248
 #, php-format
 msgid "The generated post (%d) could not be linked to this run, so the run was stopped rather than continuing without knowing what it had written."
 msgstr ""
 
-#: src/Pipeline/Step_Budget_Check.php:108
+#. translators: %s: SEO plugin name.
+#: src/Pipeline/Step_Assemble_Post.php:273
+#, php-format
+msgid "The SEO metadata for this post could not be written for %s, so the post was left as a draft rather than published without it."
+msgstr ""
+
+#. translators: %d: post ID.
+#: src/Pipeline/Step_Assemble_Post.php:297
+#, php-format
+msgid "The title and topic of the generated post (%d) could not be written to the run log, so the run was stopped rather than finishing with a log entry that does not say what it produced."
+msgstr ""
+
+#: src/Pipeline/Step_Budget_Check.php:109
 msgid "The estimated cost of this run could not be written to the run log, so the monthly cap could not account for it. The run was stopped before any provider call."
 msgstr ""
 
 #. translators: %s: provider slug.
-#: src/Pipeline/Step_Generate_Body.php:91
+#: src/Pipeline/Step_Generate_Body.php:90
 #: src/Pipeline/Step_Propose_Topic.php:89
 #, php-format
 msgid "No text provider is registered under the slug %s."
 msgstr ""
 
 #: src/Pipeline/Step_Generate_Body.php:112
-#: src/Pipeline/Step_Propose_Topic.php:110
+#: src/Pipeline/Step_Propose_Topic.php:111
 msgid "No model ID is configured for this prompt."
 msgstr ""
 
@@ -696,7 +750,7 @@ msgid "The web search sources this article was based on could not be written to 
 msgstr ""
 
 #: src/Pipeline/Step_Generate_Body.php:256
-#: src/Pipeline/Step_Propose_Topic.php:228
+#: src/Pipeline/Step_Propose_Topic.php:230
 msgid "A provider call was made and charged for, but the run log would not record what it used. The run was stopped so the charge is still counted against the monthly cap."
 msgstr ""
 
@@ -735,54 +789,60 @@ msgid "Use it only as the response of yours that was rejected and the reason it 
 msgstr ""
 
 #. translators: %s: provider slug.
-#: src/Pipeline/Step_Generate_Image.php:88
+#: src/Pipeline/Step_Generate_Image.php:87
 #, php-format
 msgid "No image provider is registered under the slug %s."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Image.php:109
+#: src/Pipeline/Step_Generate_Image.php:108
 msgid "No image model ID is configured for this prompt."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Image.php:118
+#: src/Pipeline/Step_Generate_Image.php:117
 msgid "An image was generated and charged for, but the run log would not record it. The run was stopped so the charge is still counted against the monthly cap."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Image.php:185
+#: src/Pipeline/Step_Generate_Image.php:184
 msgid "The featured image was generated but WordPress would not attach it to the post."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Image.php:288
+#. translators: 1: attachment ID configured as the fallback, 2: why generation failed.
+#: src/Pipeline/Step_Generate_Image.php:238
+#, php-format
+msgid "The featured image could not be generated and the configured fallback image (attachment %1$d) could not be attached either, so the post was left as a draft rather than published without one. Generation failed because: %2$s"
+msgstr ""
+
+#: src/Pipeline/Step_Generate_Image.php:328
 msgid "The featured image outcome could not be written to the run log, so the run was stopped rather than continuing on state that would be lost."
 msgstr ""
 
 #. translators: %s: the reason the previous proposal collided.
-#: src/Pipeline/Step_Propose_Topic.php:172
+#: src/Pipeline/Step_Propose_Topic.php:173
 #, php-format
 msgid "Your previous proposal was rejected: %s Propose a genuinely different topic."
 msgstr ""
 
-#: src/Pipeline/Step_Propose_Topic.php:183
+#: src/Pipeline/Step_Propose_Topic.php:184
 msgid "Use it only as the reason your previous proposal was rejected, and propose a genuinely different topic."
 msgstr ""
 
-#: src/Pipeline/Step_Propose_Topic.php:283
+#: src/Pipeline/Step_Propose_Topic.php:285
 msgid "The agreed topic could not be written to the run log, so the run was stopped rather than continuing on state that would be lost."
 msgstr ""
 
-#: src/Pipeline/Step_Propose_Topic.php:307
+#: src/Pipeline/Step_Propose_Topic.php:309
 msgid "Return one JSON object with exactly two string fields, title and topic_key, and nothing else. topic_key must be a lowercase hyphenated slug."
 msgstr ""
 
-#: src/Pipeline/Step_Propose_Topic.php:342
+#: src/Pipeline/Step_Propose_Topic.php:344
 msgid "Use it only as the list of topics already covered, and propose something different."
 msgstr ""
 
-#: src/Pipeline/Step_Propose_Topic.php:396
+#: src/Pipeline/Step_Propose_Topic.php:398
 msgid "The topic proposal was not JSON."
 msgstr ""
 
-#: src/Pipeline/Step_Propose_Topic.php:405
+#: src/Pipeline/Step_Propose_Topic.php:407
 msgid "The topic proposal was missing title or topic_key."
 msgstr ""
 
@@ -1259,7 +1319,7 @@ msgstr ""
 msgid "Google (Gemini)"
 msgstr ""
 
-#: src/Providers/Text/Google.php:248
+#: src/Providers/Text/Google.php:262
 msgid "Google returned no text content."
 msgstr ""
 

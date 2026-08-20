@@ -111,6 +111,18 @@
 		-->
 		<exclude-pattern>*/tests/Pipeline/Stall_SweeperTest.php</exclude-pattern>
 		<exclude-pattern>*/tests/Pipeline/Write_FailureTest.php</exclude-pattern>
+		<!--
+		The concurrency tests backdate a run for the same reason, and one of them
+		asserts on the settled cost column directly.
+		-->
+		<exclude-pattern>*/tests/Pipeline/Concurrent_StateTest.php</exclude-pattern>
+		<!--
+		The migration test drops the column the migration adds and then asks the
+		database whether it came back. Both are schema statements about the
+		plugin's own table, which is the assertion rather than an implementation
+		detail of it.
+		-->
+		<exclude-pattern>*/tests/Pipeline/Schema_UpgradeTest.php</exclude-pattern>
 	</rule>
 
 	<!--

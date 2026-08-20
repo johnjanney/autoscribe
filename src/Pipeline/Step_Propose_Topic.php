@@ -98,7 +98,8 @@ final class Step_Propose_Topic {
 			return $api_key;
 		}
 
-		$model = Model_Resolver::resolve(
+		$model = $run->model_for(
+			'text',
 			$prompt->text_model(),
 			$prompt->text_provider(),
 			$provider->suggested_models()
@@ -185,9 +186,10 @@ final class Step_Propose_Topic {
 			);
 		}
 
-		$run->skip( Run::STATUS_SKIPPED_DUPLICATE, $rebuttal );
-
-		return new WP_Error( 'autoscribe_duplicate_topic', $rebuttal );
+		return Close_Result::annotate(
+			new WP_Error( 'autoscribe_duplicate_topic', $rebuttal ),
+			$run->skip( Run::STATUS_SKIPPED_DUPLICATE, $rebuttal )
+		);
 	}
 
 	/**

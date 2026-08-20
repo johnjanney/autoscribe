@@ -13,6 +13,7 @@ use AutoScribe\Content\Article_Validator;
 use AutoScribe\Cost\Budget_Guard;
 use AutoScribe\Cost\Pricing_Table;
 use AutoScribe\Prompts\Prompt;
+use AutoScribe\Providers\Model_Resolver;
 use AutoScribe\Providers\Provider_Registry;
 use WP_Error;
 
@@ -43,12 +44,28 @@ final class Generator {
 	public const CLOSE_RACE_LOST = 'autoscribe_run_already_closed';
 
 	/**
+	 * Error code for a paid call whose usage the run log would not accept.
+	 *
+	 * @since 1.2.0
+	 * @var string
+	 */
+	public const USAGE_NOT_RECORDED = 'autoscribe_usage_not_recorded';
+
+	/**
 	 * The ordered generation sequence.
 	 *
 	 * @since 1.1.0
 	 * @var Pipeline
 	 */
 	private Pipeline $pipeline;
+
+	/**
+	 * Provider registry, kept so a run can resolve its models when it opens.
+	 *
+	 * @since 1.2.0
+	 * @var Provider_Registry
+	 */
+	private Provider_Registry $registry;
 
 	/**
 	 * Budget guard, kept so the section 7.4 warning email can still be sent.
@@ -74,6 +91,7 @@ final class Generator {
 	 * @param Provider_Registry $registry Provider registry.
 	 */
 	public function __construct( Provider_Registry $registry ) {
+		$this->registry  = $registry;
 		$this->pipeline  = new Pipeline( $registry );
 		$this->guard     = new Budget_Guard();
 		$this->validator = new Article_Validator();
@@ -101,8 +119,6 @@ final class Generator {
 		if ( is_wp_error( $run ) ) {
 			return $run;
 		}
-
-		$pricing = new Pricing_Table();
 
 		/*
 		 * The sequence itself lives in Pipeline, and this loop is one of its two
@@ -134,8 +150,17 @@ final class Generator {
 				break;
 			}
 
+			if ( Pipeline::CLAIM_LOST === $step ) {
+				/*
+				 * This driver opens its own run, so nothing should be competing for
+				 * it — but if something is, the run belongs to that worker and this
+				 * one leaves it alone rather than closing it or spinning.
+				 */
+				return $this->close_race_lost();
+			}
+
 			if ( is_wp_error( $step ) ) {
-				$this->close_failed( $run, $step, $pricing, $run->grounded_calls() );
+				$this->close_failed( $run, $step, null, $run->grounded_calls() );
 
 				return $step;
 			}
@@ -147,7 +172,7 @@ final class Generator {
 				__( 'The run stopped making progress through its steps and was abandoned rather than repeated indefinitely.', 'autoscribe' )
 			);
 
-			$this->close_failed( $run, $stalled, $pricing, $run->grounded_calls() );
+			$this->close_failed( $run, $stalled, null, $run->grounded_calls() );
 
 			return $stalled;
 		}
@@ -155,12 +180,12 @@ final class Generator {
 		$article = $this->pipeline_article( $run );
 
 		if ( is_wp_error( $article ) ) {
-			$this->close_failed( $run, $article, $pricing, $run->grounded_calls() );
+			$this->close_failed( $run, $article, null, $run->grounded_calls() );
 
 			return $article;
 		}
 
-		return $this->finalise( $prompt, $run, $article, $status_override, $pricing, $run->grounded_calls() );
+		return $this->finalise( $prompt, $run, $article, $status_override, null, $run->grounded_calls() );
 	}
 
 	/**
@@ -173,15 +198,29 @@ final class Generator {
 	 *
 	 * @since 1.1.0
 	 *
-	 * @param Prompt        $prompt          Prompt being run.
-	 * @param Run           $run             Run recording progress.
-	 * @param Article       $article         The generated article.
-	 * @param string|null   $status_override Final post status, or null for the prompt's mode.
-	 * @param Pricing_Table $pricing         Rate table for settling the cost.
-	 * @param int           $grounded        Number of grounded requests made.
+	 * Like the steps, it is claimed before it does anything. It is not a step, but
+	 * it is the only part of a run that is not, and being unclaimed made it the
+	 * one place two workers could still meet: both could publish the post and both
+	 * could write a settled cost, and only then would one of them lose the close
+	 * race and stand down. Nothing was charged twice, but every plugin listening
+	 * for a post transition ran twice, and the loser's cost write could land after
+	 * the winner's.
+	 *
+	 * @since 1.1.0
+	 *
+	 * @param Prompt             $prompt          Prompt being run.
+	 * @param Run                $run             Run recording progress.
+	 * @param Article            $article         The generated article.
+	 * @param string|null        $status_override Final post status, or null for the prompt's mode.
+	 * @param Pricing_Table|null $pricing         Rate table, or null to use the run's own.
+	 * @param int                $grounded        Number of grounded requests made.
 	 * @return array<string, int|string>|WP_Error
 	 */
-	public function finalise( Prompt $prompt, Run $run, Article $article, ?string $status_override, Pricing_Table $pricing, int $grounded ): array|WP_Error {
+	public function finalise( Prompt $prompt, Run $run, Article $article, ?string $status_override, ?Pricing_Table $pricing, int $grounded ): array|WP_Error {
+		if ( ! $run->claim_step( $run->step() ) ) {
+			return $this->close_race_lost();
+		}
+
 		$post_id       = (int) $run->post_id();
 		$attachment_id = (int) ( $run->payload()['image']['attachment_id'] ?? 0 );
 
@@ -203,9 +242,10 @@ final class Generator {
 			);
 
 			if ( is_wp_error( $updated ) ) {
-				$run->fail( $updated->get_error_message(), $pricing, $grounded );
-
-				return $updated;
+				return Close_Result::annotate(
+					$updated,
+					$run->fail( $updated->get_error_message(), $pricing, $grounded )
+				);
 			}
 		}
 
@@ -214,7 +254,13 @@ final class Generator {
 		$cost = $run->settle_cost( $pricing, $grounded );
 
 		if ( is_wp_error( $cost ) ) {
-			return $cost;
+			/*
+			 * The run is still open and still holding its reservation. Whatever
+			 * comes next must not treat it as ended: the sweeper will find it and
+			 * settle it, and announcing it here as well would report one article
+			 * twice.
+			 */
+			return Close_Result::annotate( $cost, Close_Result::Write_Failed );
 		}
 
 		/*
@@ -225,7 +271,9 @@ final class Generator {
 		 * the next occurrence off the back of a transition that did not happen is
 		 * how one finished article becomes two emails and two schedules.
 		 */
-		if ( ! $run->succeed() ) {
+		$closed = $run->succeed();
+
+		if ( ! $closed->ended() ) {
 			/*
 			 * Its own code, because losing this race is not a failure and must not
 			 * be reported as one. Whoever won it has already sent the review mail
@@ -233,11 +281,22 @@ final class Generator {
 			 * error would have the handler send a failure notice and re-arm on top
 			 * — the duplicate announcement this check exists to prevent, arriving
 			 * by the other door.
+			 *
+			 * A refused write is not that, and is reported as itself: the run is
+			 * still open, nobody has announced anything, and something has to say
+			 * so.
 			 */
-			return new WP_Error(
-				self::CLOSE_RACE_LOST,
-				__( 'This run was already closed by something else, so it was left alone. Whatever closed it has reported the outcome.', 'autoscribe' )
-			);
+			if ( Close_Result::Write_Failed === $closed ) {
+				return Close_Result::annotate(
+					new WP_Error(
+						'autoscribe_state_not_recorded',
+						__( 'This run finished, but the run log would not record it as finished. It was left open for the stall sweep rather than being reported as complete.', 'autoscribe' )
+					),
+					$closed
+				);
+			}
+
+			return $this->close_race_lost();
 		}
 
 		if ( 'draft' === $status ) {
@@ -254,6 +313,23 @@ final class Generator {
 			'attachment_id' => (int) $attachment_id,
 			'status'        => $status,
 			'cost_cents'    => $cost,
+		);
+	}
+
+	/**
+	 * Returns the error meaning another worker owns this run's outcome.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @return WP_Error
+	 */
+	private function close_race_lost(): WP_Error {
+		return Close_Result::annotate(
+			new WP_Error(
+				self::CLOSE_RACE_LOST,
+				__( 'This run was already closed by something else, so it was left alone. Whatever closed it has reported the outcome.', 'autoscribe' )
+			),
+			Close_Result::Already_Closed
 		);
 	}
 
@@ -291,9 +367,12 @@ final class Generator {
 		 * were never budget-checked, and a run that began under review finishing
 		 * by publishing. The queue driver compares this before each step.
 		 */
-		$opened = array(
-			'config'       => $prompt->config_fingerprint(),
-			'force_review' => Settings::force_review() ? 1 : 0,
+		$opened = array_merge(
+			array(
+				'config'       => $prompt->config_fingerprint(),
+				'force_review' => Settings::force_review() ? 1 : 0,
+			),
+			$this->snapshot( $prompt )
 		);
 
 		if ( ! $run->merge_payload( $opened ) ) {
@@ -309,14 +388,55 @@ final class Generator {
 				__( 'The settings this run was checked against could not be written to the run log, so the run was stopped rather than starting without a record of them.', 'autoscribe' )
 			);
 
-			$run->fail( $error->get_error_message() );
-
-			return $error;
+			return Close_Result::annotate( $error, $run->fail( $error->get_error_message() ) );
 		}
 
 		$adopted = $this->adopt( $prompt_id, $run, $attempt );
 
 		return is_wp_error( $adopted ) ? $adopted : $run;
+	}
+
+	/**
+	 * Records the models and rates this run is to be checked and settled against.
+	 *
+	 * The fingerprint catches an edit to the prompt or to a site default. It
+	 * cannot catch what changes underneath both: a blank model field resolves
+	 * through the adapter's own suggestion list, which is code, so a plugin
+	 * upgrade can change the model a run in flight is using without changing
+	 * anything a fingerprint could compare. The pricing table is worse still,
+	 * because editing it is a supported, expected act — and an edit between the
+	 * budget check and the settlement changes what an open reservation gives back.
+	 *
+	 * Both are therefore resolved once, here, and every later step reads them off
+	 * the run rather than resolving again.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @param Prompt $prompt Prompt being run.
+	 * @return array<string, mixed>
+	 */
+	private function snapshot( Prompt $prompt ): array {
+		$text     = $this->registry->text_provider( $prompt->text_provider() );
+		$image    = $this->registry->image_provider( $prompt->image_provider() );
+		$resolved = array(
+			'text_provider'  => $prompt->text_provider(),
+			'text'           => Model_Resolver::resolve(
+				$prompt->text_model(),
+				$prompt->text_provider(),
+				null === $text ? array() : $text->suggested_models()
+			),
+			'image_provider' => $prompt->image_provider(),
+			'image'          => 'none' === $prompt->image_mode() ? '' : Model_Resolver::resolve(
+				$prompt->image_model(),
+				$prompt->image_provider(),
+				null === $image ? array() : $image->suggested_models()
+			),
+		);
+
+		return array(
+			'models' => $resolved,
+			'rates'  => ( new Pricing_Table() )->snapshot( array( $resolved['text'], $resolved['image'] ) ),
+		);
 	}
 
 	/**
@@ -359,10 +479,10 @@ final class Generator {
 	 * @param Run      $run   Run to close.
 	 * @param WP_Error $error Why it failed.
 	 * @param int      $grounded Number of grounded requests made.
-	 * @return void
+	 * @return Close_Result What the attempt did.
 	 */
-	public function close( Run $run, WP_Error $error, int $grounded ): void {
-		$this->close_failed( $run, $error, new Pricing_Table(), $grounded );
+	public function close( Run $run, WP_Error $error, int $grounded ): Close_Result {
+		return $this->close_failed( $run, $error, null, $grounded );
 	}
 
 	/**
@@ -426,9 +546,7 @@ final class Generator {
 			)
 		);
 
-		$run->fail( $error->get_error_message() );
-
-		return $error;
+		return Close_Result::annotate( $error, $run->fail( $error->get_error_message() ) );
 	}
 
 	/**
@@ -440,20 +558,33 @@ final class Generator {
 	 * keeping a list of the error codes that mean "already dealt with", because
 	 * the list is one release away from being incomplete.
 	 *
+	 * A run may hold unrecorded paid work at this point: a provider answered, the
+	 * usage write was refused, and that is precisely the failure being closed. The
+	 * reservation is therefore kept as a floor for that one case rather than being
+	 * replaced by counters known to be incomplete. An estimate that is too high
+	 * costs the site a little of its own cap; an unrecorded charge costs it the
+	 * cap itself.
+	 *
 	 * @since 1.1.0
 	 *
-	 * @param Run           $run      Run to close.
-	 * @param WP_Error      $error    Why it failed.
-	 * @param Pricing_Table $pricing  Rate table for settling the cost.
-	 * @param int           $grounded Number of grounded requests made.
-	 * @return void
+	 * @param Run                $run      Run to close.
+	 * @param WP_Error           $error    Why it failed.
+	 * @param Pricing_Table|null $pricing  Rate table, or null to use the run's own.
+	 * @param int                $grounded Number of grounded requests made.
+	 * @return Close_Result What the attempt did.
 	 */
-	private function close_failed( Run $run, WP_Error $error, Pricing_Table $pricing, int $grounded ): void {
+	private function close_failed( Run $run, WP_Error $error, ?Pricing_Table $pricing, int $grounded ): Close_Result {
 		if ( Run::STATUS_RUNNING !== $run->status() ) {
-			return;
+			return Close_Result::Already_Closed;
 		}
 
-		$run->fail( $error->get_error_message(), $pricing, $grounded );
+		return $run->fail(
+			$error->get_error_message(),
+			$pricing,
+			$grounded,
+			null,
+			self::USAGE_NOT_RECORDED === $error->get_error_code()
+		);
 	}
 
 	/**
@@ -550,6 +681,47 @@ final class Generator {
 				get_the_title( $prompt_id ),
 				$error->get_error_message(),
 				(string) get_edit_post_link( $prompt_id, 'raw' )
+			)
+		);
+	}
+
+	/**
+	 * Tells the notification address that a run could not be closed.
+	 *
+	 * Its own message rather than the failure notice above, because it is not a
+	 * failure notice: the run has not failed, nothing has been given up on, and
+	 * the thing to act on is the database rather than the prompt. Sending it under
+	 * the failure subject would have people looking at a prompt that is fine.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @param int    $prompt_id Prompt whose run could not be closed.
+	 * @param string $detail    What the run was ending with.
+	 * @return void
+	 */
+	public static function send_state_notice( int $prompt_id, string $detail ): void {
+		$address = Settings::notification_email();
+
+		if ( '' === $address ) {
+			return;
+		}
+
+		wp_mail(
+			$address,
+			__( 'AutoScribe could not record that a run had finished', 'autoscribe' ),
+			sprintf(
+				/* translators: 1: prompt title, 2: what the run was ending with. */
+				__(
+					'An AutoScribe run reached its end, and the run log would not accept the write that closes it. The run was left open so that the stall sweep can settle it rather than being reported as finished twice.
+
+Check that the AutoScribe runs table exists and is writable.
+
+Prompt: %1$s
+The run was ending with: %2$s',
+					'autoscribe'
+				),
+				get_the_title( $prompt_id ),
+				$detail
 			)
 		);
 	}

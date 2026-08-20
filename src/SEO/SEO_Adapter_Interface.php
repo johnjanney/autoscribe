@@ -67,13 +67,20 @@ interface SEO_Adapter_Interface {
 	/**
 	 * Writes the SEO metadata for a post.
 	 *
+	 * Returns whether the values are really in place, read back rather than
+	 * inferred from update_post_meta(), which answers false both for a refused
+	 * write and for a value that was already what it was being set to. The
+	 * distinction matters because a filter on update_post_metadata, a full disk,
+	 * or a corrupt meta table all produce a post that reports success while
+	 * carrying none of the metadata the run was asked to write.
+	 *
 	 * @since 0.5.0
 	 *
 	 * @param int    $post_id          Post to annotate.
 	 * @param string $seo_title        SEO title, already sanitised and truncated.
 	 * @param string $meta_description Meta description, already sanitised and truncated.
 	 * @param string $focus_keyword    Focus keyword, already sanitised.
-	 * @return void
+	 * @return bool True when every value is readable back off the post.
 	 */
-	public function apply( int $post_id, string $seo_title, string $meta_description, string $focus_keyword ): void;
+	public function apply( int $post_id, string $seo_title, string $meta_description, string $focus_keyword ): bool;
 }

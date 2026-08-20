@@ -8,6 +8,7 @@
 namespace AutoScribe\Cost;
 
 use AutoScribe\Activation;
+use AutoScribe\Pipeline\Run;
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Providers\Model_Resolver;
 use AutoScribe\Providers\Provider_Registry;
@@ -327,10 +328,18 @@ final class Budget_Guard {
 	 *
 	 * @since 0.5.0
 	 *
-	 * @param Prompt $prompt Prompt about to run.
+	 * The models and rates come from the run when it has recorded them, which it
+	 * does at the moment it opens. Resolving them again here would mean the figure
+	 * checked against the cap could be priced from one model and the run settled
+	 * from another — the two are only the same number while nothing changes
+	 * between them, and an editable price list and a mutable suggestion list are
+	 * both things that change.
+	 *
+	 * @param Prompt   $prompt Prompt about to run.
+	 * @param Run|null $run    Run this estimate is for, when there is one.
 	 * @return int
 	 */
-	public function estimate_cents( Prompt $prompt ): int {
+	public function estimate_cents( Prompt $prompt, ?Run $run = null ): int {
 		$body_output = max( 1024, $prompt->target_word_count() * 3 );
 
 		// Two proposals, the body, and one repair. The repair prompt quotes the
@@ -341,11 +350,15 @@ final class Budget_Guard {
 		$images   = 'none' === $prompt->image_mode() ? 0 : 1;
 		$grounded = $prompt->grounding_enabled() ? 1 : 0;
 
-		return $this->pricing->cost_cents(
-			$this->text_model( $prompt ),
+		$text    = $run instanceof Run ? $run->resolved_model( 'text' ) : '';
+		$image   = $run instanceof Run ? $run->resolved_model( 'image' ) : '';
+		$pricing = $run instanceof Run ? $run->pricing_table() : $this->pricing;
+
+		return $pricing->cost_cents(
+			'' !== $text ? $text : $this->text_model( $prompt ),
 			$input_tokens,
 			$output_tokens,
-			$images > 0 ? $this->image_model( $prompt ) : '',
+			$images > 0 ? ( '' !== $image ? $image : $this->image_model( $prompt ) ) : '',
 			$images,
 			$grounded
 		);

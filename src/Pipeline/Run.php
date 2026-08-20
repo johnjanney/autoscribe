@@ -9,6 +9,7 @@ namespace AutoScribe\Pipeline;
 
 use AutoScribe\Activation;
 use AutoScribe\Cost\Pricing_Table;
+use AutoScribe\Providers\Model_Resolver;
 use DateTimeImmutable;
 use DateTimeZone;
 use WP_Error;
@@ -147,6 +148,21 @@ final class Run {
 	 * @var int
 	 */
 	private int $grounded_calls = 0;
+
+	/**
+	 * The claim this object took on the run's position, while it holds one.
+	 *
+	 * Held so that the writes a claimed step makes can be conditional on the
+	 * claim still being this worker's. A claim is not permanent: the stall
+	 * sweeper releases one left behind by a worker that appeared to be gone, and
+	 * "appeared" is the operative word — a worker slow enough to be swept can
+	 * still return from its provider call afterwards and write its output over
+	 * whatever the replacement worker has since produced.
+	 *
+	 * @since 1.2.0
+	 * @var string|null
+	 */
+	private ?string $claim = null;
 
 	/**
 	 * Wraps an existing row ID.
@@ -291,7 +307,13 @@ final class Run {
 	}
 
 	/**
-	 * Records the last completed step.
+	 * Records the last completed step, releasing this worker's claim with it.
+	 *
+	 * Conditional on the claim, when one is held. Completing a step writes the
+	 * position column, and writing it unconditionally would let a worker that had
+	 * already been swept and replaced overwrite the live claim of the worker that
+	 * replaced it — freeing a step a third worker would then perform and pay for
+	 * beside the second.
 	 *
 	 * @since 0.3.0
 	 *
@@ -299,7 +321,46 @@ final class Run {
 	 * @return bool True when the write reached the database.
 	 */
 	public function record_step( string $step ): bool {
-		return $this->update( array( 'step' => $step ), array( '%s' ) );
+		if ( null === $this->claim ) {
+			return $this->update( array( 'step' => $step ), array( '%s' ) );
+		}
+
+		global $wpdb;
+
+		$updated = $wpdb->update(
+			Activation::table_name(),
+			array( 'step' => $step ),
+			array(
+				'id'   => $this->id,
+				'step' => $this->claim,
+			),
+			array( '%s' ),
+			array( '%d', '%s' )
+		);
+
+		if ( ! is_numeric( $updated ) || (int) $updated < 1 ) {
+			return false;
+		}
+
+		$this->claim = null;
+
+		return true;
+	}
+
+	/**
+	 * Whether this object still holds the claim it took.
+	 *
+	 * Lets a caller tell a refused write from a lost claim, which are different
+	 * situations with different answers: a refused write is a fault and stops the
+	 * run, while a lost claim means somebody else owns the run now and the right
+	 * thing to do is stand down quietly.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @return bool
+	 */
+	public function holds_claim(): bool {
+		return null !== $this->claim && $this->raw_step() === $this->claim;
 	}
 
 	/**
@@ -309,10 +370,10 @@ final class Run {
 	 *
 	 * @param string $title     Article title.
 	 * @param string $topic_key Deduplication key.
-	 * @return void
+	 * @return bool True when the write reached the database.
 	 */
-	public function record_article( string $title, string $topic_key ): void {
-		$this->update(
+	public function record_article( string $title, string $topic_key ): bool {
+		return $this->update(
 			array(
 				'title'     => $title,
 				'topic_key' => $topic_key,
@@ -471,16 +532,22 @@ final class Run {
 	 * just failed is the worst moment to start making assertions about the
 	 * database; dropping it means the next read goes and looks.
 	 *
+	 * The write is conditional on this worker's claim whenever it holds one. The
+	 * column is one JSON document, so every writer reads it whole and writes it
+	 * whole, and two writers with overlapping views therefore do not merge — the
+	 * later write simply erases whatever the other one stored. A worker that has
+	 * been swept and replaced can still be in flight, and without the condition
+	 * its stale document would remove the topic, article, sources, or image state
+	 * its replacement had already recorded, so the next step would repeat a paid
+	 * call or fail on state that is no longer there.
+	 *
 	 * @param array<string, mixed> $patch Keys to write.
 	 * @return bool True when the write reached the database.
 	 */
 	public function merge_payload( array $patch ): bool {
 		$payload = array_merge( $this->payload(), $patch );
 
-		$written = $this->update(
-			array( 'payload' => (string) wp_json_encode( $payload ) ),
-			array( '%s' )
-		);
+		$written = $this->write_payload( (string) wp_json_encode( $payload ) );
 
 		if ( ! $written ) {
 			$this->payload = null;
@@ -492,6 +559,46 @@ final class Run {
 		$this->payload = $payload;
 
 		return true;
+	}
+
+	/**
+	 * Writes the payload column, under this worker's claim when it holds one.
+	 *
+	 * Zero affected rows is ambiguous for this column in a way it is not for a
+	 * status transition: it means either that the claim has moved or that the
+	 * document written is byte-for-byte what was already there. The second is a
+	 * successful write with nothing to do, and treating it as a failure would
+	 * stop runs for re-recording state they had already recorded. Only the
+	 * ambiguous case pays for the extra read that tells them apart.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @param string $document Encoded payload.
+	 * @return bool True when the column now holds this document.
+	 */
+	private function write_payload( string $document ): bool {
+		if ( null === $this->claim ) {
+			return $this->update( array( 'payload' => $document ), array( '%s' ) );
+		}
+
+		global $wpdb;
+
+		$updated = $wpdb->update(
+			Activation::table_name(),
+			array( 'payload' => $document ),
+			array(
+				'id'   => $this->id,
+				'step' => $this->claim,
+			),
+			array( '%s' ),
+			array( '%d', '%s' )
+		);
+
+		if ( false === $updated ) {
+			return false;
+		}
+
+		return (int) $updated > 0 || $this->holds_claim();
 	}
 
 	/**
@@ -709,13 +816,19 @@ final class Run {
 	 * Only reached from fail(), which is the one ending a caller can tie to an
 	 * observed position, so the statement writes that ending's columns.
 	 *
+	 * A matched-nothing result covers two situations that call for the same
+	 * answer: the run has already closed, or it has moved on and belongs to a
+	 * worker that is still going. Both mean somebody else owns the outcome, so
+	 * both are reported as an already-closed run. A refused write is not either
+	 * of those and is reported separately.
+	 *
 	 * @since 1.1.2
 	 *
 	 * @param array<string, mixed> $data          Columns to write, with finished_at.
 	 * @param string               $expected_step Position the caller observed.
-	 * @return bool True when this call is the one that closed the run.
+	 * @return Close_Result What the attempt did.
 	 */
-	private function close_at( array $data, string $expected_step ): bool {
+	private function close_at( array $data, string $expected_step ): Close_Result {
 		global $wpdb;
 
 		/*
@@ -748,7 +861,11 @@ final class Run {
 			)
 		);
 
-		return is_numeric( $updated ) && (int) $updated > 0;
+		if ( false === $updated ) {
+			return Close_Result::Write_Failed;
+		}
+
+		return (int) $updated > 0 ? Close_Result::Closed : Close_Result::Already_Closed;
 	}
 
 	/**
@@ -802,7 +919,14 @@ final class Run {
 			)
 		);
 
-		return is_numeric( $claimed ) && (int) $claimed > 0;
+		if ( ! is_numeric( $claimed ) || (int) $claimed < 1 ) {
+			return false;
+		}
+
+		// Kept so this worker's later writes can require that it still holds it.
+		$this->claim = $claim;
+
+		return true;
 	}
 
 	/**
@@ -904,10 +1028,11 @@ final class Run {
 	 *
 	 * @since 1.1.0
 	 *
+	 * @param bool $force Read again even if this object has read once already.
 	 * @return void
 	 */
-	private function load_usage(): void {
-		if ( $this->usage_loaded ) {
+	private function load_usage( bool $force = false ): void {
+		if ( $this->usage_loaded && ! $force ) {
 			return;
 		}
 
@@ -929,12 +1054,20 @@ final class Run {
 			return;
 		}
 
+		/*
+		 * The larger of the two on every counter, because both can be right and
+		 * neither can be trusted alone. The row carries what other actions of this
+		 * run recorded, which this object has never seen; the object carries calls
+		 * a provider has already answered and charged for, whose write the row may
+		 * have refused. Taking the maximum never books money twice and never
+		 * settles below what is known to have been spent.
+		 */
 		$this->usage = array(
-			'text_model'    => (string) $row['text_model'],
-			'image_model'   => (string) $row['image_model'],
-			'input_tokens'  => (int) $row['input_tokens'],
-			'output_tokens' => (int) $row['output_tokens'],
-			'image_count'   => (int) $row['image_count'],
+			'text_model'    => '' !== (string) $row['text_model'] ? (string) $row['text_model'] : (string) $this->usage['text_model'],
+			'image_model'   => '' !== (string) $row['image_model'] ? (string) $row['image_model'] : (string) $this->usage['image_model'],
+			'input_tokens'  => max( (int) $row['input_tokens'], (int) $this->usage['input_tokens'] ),
+			'output_tokens' => max( (int) $row['output_tokens'], (int) $this->usage['output_tokens'] ),
+			'image_count'   => max( (int) $row['image_count'], (int) $this->usage['image_count'] ),
 		);
 	}
 
@@ -1173,23 +1306,129 @@ final class Run {
 	/**
 	 * Returns how many times a sweeper has re-dispatched this run.
 	 *
+	 * The count lives in its own column. It used to live in the payload document,
+	 * which every step also reads and rewrites whole, so counting a restart meant
+	 * a sweeper writing back a document it had read some time earlier — erasing
+	 * whatever a worker had recorded in between. A counter shared a column with
+	 * the state it was supposed to be protecting.
+	 *
+	 * The payload value is still read, and only as a floor. A run opened by 1.1.x
+	 * and still in flight across the upgrade carries its count there, and reading
+	 * only the new column would give such a run a fresh set of restarts.
+	 *
 	 * @since 1.1.0
 	 *
 	 * @return int
 	 */
 	public function sweeps(): int {
-		return max( 0, (int) ( $this->payload()['sweeps'] ?? 0 ) );
+		return max( $this->counted_sweeps(), (int) ( $this->payload()['sweeps'] ?? 0 ) );
 	}
 
 	/**
-	 * Records another sweeper re-dispatch.
+	 * Returns the sweep count as the column holds it.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @return int
+	 */
+	private function counted_sweeps(): int {
+		return max( 0, (int) $this->column( 'sweeps' ) );
+	}
+
+	/**
+	 * Claims the right to restart this run, by counting the restart.
+	 *
+	 * This is the sweeper's claim as well as its counter. Two sweeps can both
+	 * decide the same run is idle — the scan that found it can be many pages old
+	 * — and before this was a compare-and-swap both would go on to arm a restart.
+	 * The caller passes the count it read, and the write only lands while the
+	 * column has not moved past it, so exactly one of them proceeds and the other
+	 * stands down having changed nothing.
+	 *
+	 * The condition is "no further on than the caller thought" rather than
+	 * equality, so that the count of a run carrying the 1.1.x payload value can
+	 * still be raised past it. Equality would refuse every restart of such a run
+	 * for ever, and a run that cannot be restarted or counted cannot be given up
+	 * on either.
 	 *
 	 * @since 1.1.0
 	 *
-	 * @return bool True when the count reached the database.
+	 * @param int $observed The count this caller judged the run on.
+	 * @return bool True when this caller counted the restart.
 	 */
-	public function record_sweep(): bool {
-		return $this->merge_payload( array( 'sweeps' => $this->sweeps() + 1 ) );
+	public function record_sweep( int $observed ): bool {
+		global $wpdb;
+
+		$next = max( 0, $observed ) + 1;
+
+		$counted = $wpdb->query(
+			$wpdb->prepare(
+				'UPDATE %i SET sweeps = %d WHERE id = %d AND status = %s AND sweeps < %d',
+				Activation::table_name(),
+				$next,
+				$this->id,
+				self::STATUS_RUNNING,
+				$next
+			)
+		);
+
+		return is_numeric( $counted ) && (int) $counted > 0;
+	}
+
+	/**
+	 * Returns the rate table this run was opened under.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @return Pricing_Table
+	 */
+	public function pricing_table(): Pricing_Table {
+		$stored = $this->payload()['rates'] ?? null;
+
+		return is_array( $stored ) && array() !== $stored ? new Pricing_Table( $stored ) : new Pricing_Table();
+	}
+
+	/**
+	 * Returns a model ID resolved when this run opened.
+	 *
+	 * A blank model on the prompt and a blank site default resolve through the
+	 * adapter's suggestion list, which is code rather than configuration: a plugin
+	 * upgrade can change it without changing anything a fingerprint would notice.
+	 * Resolving once at the start means every paid step of one run uses the model
+	 * its budget was checked against, rather than the topic being proposed by one
+	 * model and the article written by another.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @param string $kind Either text or image.
+	 * @return string Empty when this run recorded no snapshot.
+	 */
+	public function resolved_model( string $kind ): string {
+		$models = $this->payload()['models'] ?? array();
+
+		return is_array( $models ) ? (string) ( $models[ $kind ] ?? '' ) : '';
+	}
+
+	/**
+	 * Returns the model a paid call should use, preferring this run's snapshot.
+	 *
+	 * Falls back to resolving from configuration for a run that recorded no
+	 * snapshot, which is a run opened by an earlier version and still in flight
+	 * across the upgrade. Failing those runs to enforce a snapshot they could not
+	 * have taken would be a worse answer than finishing them.
+	 *
+	 * @since 1.2.0
+	 *
+	 * @param string   $kind         Either text or image.
+	 * @param string   $prompt_model Model set on the prompt, possibly empty.
+	 * @param string   $slug         Provider slug.
+	 * @param string[] $suggestions  The adapter's suggested model IDs.
+	 * @return string
+	 */
+	public function model_for( string $kind, string $prompt_model, string $slug, array $suggestions ): string {
+		$recorded = $this->resolved_model( $kind );
+
+		return '' !== $recorded ? $recorded : Model_Resolver::resolve( $prompt_model, $slug, $suggestions );
 	}
 
 	/**
@@ -1398,10 +1637,10 @@ final class Run {
 	 *
 	 * @param string             $status  One of the skipped status constants.
 	 * @param string             $reason  Human-readable explanation.
-	 * @param Pricing_Table|null $pricing Rate table, or null to build a default.
-	 * @return bool True when this call is the one that closed the run.
+	 * @param Pricing_Table|null $pricing Rate table, or null to use this run's own.
+	 * @return Close_Result What the attempt did.
 	 */
-	public function skip( string $status, string $reason, ?Pricing_Table $pricing = null ): bool {
+	public function skip( string $status, string $reason, ?Pricing_Table $pricing = null ): Close_Result {
 		return $this->close(
 			array(
 				'status'     => $status,
@@ -1415,20 +1654,25 @@ final class Run {
 	/**
 	 * Returns the cost of the usage actually recorded against this run.
 	 *
+	 * The counters are re-read here rather than taken from whatever this object
+	 * happened to load earlier. Settlement is the last thing a run does and the
+	 * only figure the monthly cap ever sees, so it reads the row as it stands and
+	 * keeps this object's own counters as a floor under it — see load_usage().
+	 *
 	 * @since 1.0.1
 	 *
-	 * @param Pricing_Table|null $pricing        Rate table, or null to build a default.
+	 * @param Pricing_Table|null $pricing        Rate table, or null to use this run's own.
 	 * @param int                $grounded_calls Number of grounded requests made.
 	 * @return int Cost in cents.
 	 */
 	private function measured_cents( ?Pricing_Table $pricing, int $grounded_calls = 0 ): int {
-		$this->load_usage();
+		$this->load_usage( true );
 
 		if ( ! $this->has_usage() ) {
 			return 0;
 		}
 
-		$table = $pricing instanceof Pricing_Table ? $pricing : new Pricing_Table();
+		$table = $pricing instanceof Pricing_Table ? $pricing : $this->pricing_table();
 
 		return $table->cost_cents(
 			(string) $this->usage['text_model'],
@@ -1448,11 +1692,17 @@ final class Run {
 	 *
 	 * @since 0.5.0
 	 *
-	 * @param Pricing_Table $pricing         Rate table.
-	 * @param int           $grounded_calls  Number of grounded requests made.
+	 * The rates are the ones this run was opened under, not the ones in force
+	 * when it happens to finish. A run that is checked against one price list and
+	 * settled against another is not accounted for at all: an edit to the pricing
+	 * table between two queued actions would change what an open reservation
+	 * releases, and the difference lands on the month's total.
+	 *
+	 * @param Pricing_Table|null $pricing        Rate table, or null to use this run's own.
+	 * @param int                $grounded_calls Number of grounded requests made.
 	 * @return int Cost in cents.
 	 */
-	public function settle_cost( Pricing_Table $pricing, int $grounded_calls = 0 ): int|WP_Error {
+	public function settle_cost( ?Pricing_Table $pricing = null, int $grounded_calls = 0 ): int|WP_Error {
 		$cents = $this->measured_cents( $pricing, $grounded_calls );
 
 		if ( ! $this->record_cost( $cents ) ) {
@@ -1470,9 +1720,9 @@ final class Run {
 	 *
 	 * @since 0.3.0
 	 *
-	 * @return bool True when this call is the one that closed the run.
+	 * @return Close_Result What the attempt did.
 	 */
-	public function succeed(): bool {
+	public function succeed(): Close_Result {
 		return $this->close(
 			array( 'status' => self::STATUS_SUCCESS ),
 			array( '%s', '%s' )
@@ -1498,9 +1748,9 @@ final class Run {
 	 * @param string[]             $formats       Formats, including one for finished_at.
 	 * @param string|null          $expected_step Close only while the run is at
 	 *                                            this position, or null for any.
-	 * @return bool True when this call is the one that closed the run.
+	 * @return Close_Result What the attempt did.
 	 */
-	private function close( array $data, array $formats, ?string $expected_step = null ): bool {
+	private function close( array $data, array $formats, ?string $expected_step = null ): Close_Result {
 		global $wpdb;
 
 		$data['finished_at'] = current_time( 'mysql', true );
@@ -1540,7 +1790,11 @@ final class Run {
 			array( '%d', '%s' )
 		);
 
-		return is_numeric( $updated ) && (int) $updated > 0;
+		if ( false === $updated ) {
+			return Close_Result::Write_Failed;
+		}
+
+		return (int) $updated > 0 ? Close_Result::Closed : Close_Result::Already_Closed;
 	}
 
 	/**
@@ -1555,18 +1809,21 @@ final class Run {
 	 * @since 0.3.0
 	 *
 	 * @param string             $message        Human-readable failure reason.
-	 * @param Pricing_Table|null $pricing        Rate table, or null to build a default.
+	 * @param Pricing_Table|null $pricing        Rate table, or null to use this run's own.
 	 * @param int                $grounded_calls Number of grounded requests made.
 	 * @param string|null        $expected_step  Close only while the run is still
 	 *                                           at this position, or null for any.
-	 * @return bool True when this call is the one that closed the run.
+	 * @param bool               $keep_estimate  Never settle below the reservation.
+	 * @return Close_Result What the attempt did.
 	 */
-	public function fail( string $message, ?Pricing_Table $pricing = null, int $grounded_calls = 0, ?string $expected_step = null ): bool {
+	public function fail( string $message, ?Pricing_Table $pricing = null, int $grounded_calls = 0, ?string $expected_step = null, bool $keep_estimate = false ): Close_Result {
+		$measured = $this->measured_cents( $pricing, $grounded_calls );
+
 		return $this->close(
 			array(
 				'status'     => self::STATUS_FAILED,
 				'error'      => $message,
-				'cost_cents' => $this->measured_cents( $pricing, $grounded_calls ),
+				'cost_cents' => $keep_estimate ? max( $measured, (int) $this->column( 'cost_cents' ) ) : $measured,
 			),
 			array( '%s', '%s', '%d', '%s' ),
 			$expected_step

@@ -8,6 +8,7 @@
 namespace AutoScribe\Tests\Pipeline;
 
 use AutoScribe\Cost\Pricing_Table;
+use AutoScribe\Pipeline\Close_Result;
 use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Queued_Run_Handler;
 use AutoScribe\Pipeline\Retry_Policy;
@@ -18,6 +19,7 @@ use AutoScribe\Scheduling\Scheduler;
 use AutoScribe\Security\Key_Store;
 use AutoScribe\Tests\Support\Creates_Prompts;
 use AutoScribe\Tests\Support\Mocks_Provider;
+use AutoScribe\Tests\Support\Refuses_Writes;
 use WP_UnitTestCase;
 
 /**
@@ -40,6 +42,7 @@ final class Write_FailureTest extends WP_UnitTestCase {
 
 	use Creates_Prompts;
 	use Mocks_Provider;
+	use Refuses_Writes;
 
 	/**
 	 * Gives the providers keys so runs reach their paid calls.
@@ -642,7 +645,12 @@ final class Write_FailureTest extends WP_UnitTestCase {
 		$this->assertTrue( Run::load( $run_id )->release_claim( $observed ) );
 		$this->assertSame( '', Run::load( $run_id )->raw_step(), 'The released position is an empty string.' );
 
-		$run->merge_payload( array( 'sweeps' => Stall_Sweeper::MAX_RESTARTS ) );
+		/*
+		 * Through a freshly loaded object, because the one above still believes it
+		 * holds the claim this sweep has just released — and a payload write from a
+		 * worker in that position is exactly what 1.2.0 refuses.
+		 */
+		Run::load( $run_id )->merge_payload( array( 'sweeps' => Stall_Sweeper::MAX_RESTARTS ) );
 
 		global $wpdb;
 
@@ -690,9 +698,13 @@ final class Write_FailureTest extends WP_UnitTestCase {
 		$run = Run::start( $this->create_prompt() );
 
 		$this->assertNotWPError( $run );
-		$this->assertTrue( $run->fail( 'first' ) );
-		$this->assertFalse( $run->succeed(), 'A finished run must not accept a second ending.' );
-		$this->assertFalse( $run->fail( 'second' ) );
+		$this->assertSame( Close_Result::Closed, $run->fail( 'first' ) );
+		$this->assertSame(
+			Close_Result::Already_Closed,
+			$run->succeed(),
+			'A finished run must not accept a second ending.'
+		);
+		$this->assertSame( Close_Result::Already_Closed, $run->fail( 'second' ) );
 
 		$row = Run::latest_for_prompt( $run->prompt_id() );
 
@@ -716,36 +728,5 @@ final class Write_FailureTest extends WP_UnitTestCase {
 		$settled = $this->with_refused( 'SET `cost_cents`', fn() => $run->settle_cost( new Pricing_Table() ) );
 
 		$this->assertWPError( $settled );
-	}
-
-	/**
-	 * Runs a callback with matching UPDATE statements refused.
-	 *
-	 * @since 1.1.1
-	 *
-	 * @param string   $needle   Fragment identifying the write to refuse.
-	 * @param callable $callback Work to run while it is refused.
-	 * @return mixed
-	 */
-	private function with_refused( string $needle, callable $callback ) {
-		global $wpdb;
-
-		$break = static function ( $query ) use ( $needle ) {
-			$sql = (string) $query;
-
-			return str_contains( $sql, $needle ) && str_starts_with( ltrim( $sql ), 'UPDATE' )
-				? 'UPDATE autoscribe_no_such_table SET id = 1 WHERE id = 1'
-				: $query;
-		};
-
-		add_filter( 'query', $break );
-		$wpdb->suppress_errors( true );
-
-		$result = $callback();
-
-		$wpdb->suppress_errors( false );
-		remove_filter( 'query', $break );
-
-		return $result;
 	}
 }
