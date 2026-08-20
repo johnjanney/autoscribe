@@ -126,6 +126,10 @@ final class Prompt_Meta_BoxTest extends WP_UnitTestCase {
 					$values[ $key ] = '07:30';
 					break;
 
+				case 'user':
+					$values[ $key ] = (string) $this->admin_id;
+					break;
+
 				default:
 					$values[ $key ] = 'value-for-' . $key;
 					break;
@@ -499,6 +503,128 @@ final class Prompt_Meta_BoxTest extends WP_UnitTestCase {
 		$this->assertStringContainsString( 'data-autoscribe-for="daily weekly', $markup );
 		$this->assertStringContainsString( 'data-autoscribe-for="interval"', $markup );
 		$this->assertStringContainsString( 'data-autoscribe-for="cron_expression"', $markup );
+	}
+
+	/**
+	 * The author is chosen by name, from the people who can hold a post.
+	 *
+	 * It was a number box until 1.14.0, which asked an editor to know a user ID
+	 * and gave them no way to find one out. A wrong number is not rejected by
+	 * anything either — every integer is a plausible user ID — so the failure was
+	 * a post credited to somebody else, or to nobody.
+	 *
+	 * @since 1.14.0
+	 *
+	 * @return void
+	 */
+	public function test_the_author_field_offers_the_users_who_can_write(): void {
+		$writer = self::factory()->user->create(
+			array(
+				'role'         => 'author',
+				'display_name' => 'Rosa Writer',
+				'user_login'   => 'rosa',
+			)
+		);
+
+		$reader = self::factory()->user->create(
+			array(
+				'role'       => 'subscriber',
+				'user_login' => 'reader',
+			)
+		);
+
+		$markup = $this->render( $this->create_prompt( array( 'author_id' => $writer ) ) );
+
+		$this->assertStringContainsString(
+			'<select id="autoscribe-field-author_id" name="' . Prompt_Fields::INPUT_NAME . '[author_id]">',
+			$markup,
+			'The author control is a dropdown rather than a number box.'
+		);
+		$this->assertStringContainsString(
+			'<option value="' . $writer . '" selected=\'selected\'>Rosa Writer (rosa)</option>',
+			$markup,
+			'It names the author the prompt holds, and it is the one selected.'
+		);
+		$this->assertStringNotContainsString(
+			'<option value="' . $reader . '"',
+			$markup,
+			'Somebody who cannot write posts is not offered as one.'
+		);
+		$this->assertStringContainsString(
+			'<option value="0"',
+			$markup,
+			'And leaving it unset stays possible.'
+		);
+	}
+
+	/**
+	 * An author the prompt already names is offered even when the list omits it.
+	 *
+	 * The list is capped and filtered by capability, so a stored author can fall
+	 * outside it. Rendering without them would mean opening the tab and pressing
+	 * Update quietly reassigned the prompt.
+	 *
+	 * @since 1.14.0
+	 *
+	 * @return void
+	 */
+	public function test_an_author_who_can_no_longer_write_is_still_shown(): void {
+		$writer = self::factory()->user->create(
+			array(
+				'role'         => 'author',
+				'display_name' => 'Sam Former',
+				'user_login'   => 'sam',
+			)
+		);
+
+		$prompt_id = $this->create_prompt( array( 'author_id' => $writer ) );
+
+		// The role is taken away after the prompt was configured.
+		( new \WP_User( $writer ) )->set_role( 'subscriber' );
+
+		$markup = $this->render( $prompt_id );
+
+		$this->assertStringContainsString(
+			'<option value="' . $writer . '" selected=\'selected\'>Sam Former (sam)</option>',
+			$markup
+		);
+
+		// And saving the form as rendered keeps them.
+		$_POST = array(
+			Prompt_Meta_Box::NONCE_NAME => wp_create_nonce( 'autoscribe_save_prompt_' . $prompt_id ),
+			Prompt_Fields::INPUT_NAME   => array( 'author_id' => (string) $writer ),
+		);
+
+		( new Prompt_Meta_Box() )->save( $prompt_id );
+
+		$this->assertSame(
+			$writer,
+			(int) get_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'author_id', true )
+		);
+	}
+
+	/**
+	 * An author who does not exist is not stored.
+	 *
+	 * @since 1.14.0
+	 *
+	 * @return void
+	 */
+	public function test_an_author_who_does_not_exist_is_discarded(): void {
+		$prompt_id = $this->create_prompt();
+
+		$_POST = array(
+			Prompt_Meta_Box::NONCE_NAME => wp_create_nonce( 'autoscribe_save_prompt_' . $prompt_id ),
+			Prompt_Fields::INPUT_NAME   => array( 'author_id' => '999999' ),
+		);
+
+		( new Prompt_Meta_Box() )->save( $prompt_id );
+
+		$this->assertSame(
+			0,
+			(int) get_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'author_id', true ),
+			'A post credited to a user who is not there is worse than one credited to nobody.'
+		);
 	}
 
 	/**

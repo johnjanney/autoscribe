@@ -27,6 +27,19 @@ defined( 'ABSPATH' ) || exit;
 final class Prompt_Fields {
 
 	/**
+	 * Most users offered in the author control.
+	 *
+	 * A select is a poor control for thousands of options, and a site with more
+	 * post-capable users than this has an author list nobody would scroll. The
+	 * prompt's own author is always included whether or not it falls inside the
+	 * cap, so nothing is lost by it.
+	 *
+	 * @since 1.14.0
+	 * @var int
+	 */
+	private const AUTHOR_LIMIT = 200;
+
+	/**
 	 * Meta key prefix, per section 3.2.
 	 *
 	 * @since 0.7.0
@@ -325,11 +338,11 @@ final class Prompt_Fields {
 				'description' => __( 'Comma separated. Used when the tag mode is "fixed".', 'autoscribe' ),
 			),
 			'author_id'        => array(
-				'tab'     => 'publishing',
-				'label'   => __( 'Author', 'autoscribe' ),
-				'type'    => 'int',
-				'default' => 0,
-				'min'     => 0,
+				'tab'         => 'publishing',
+				'label'       => __( 'Author', 'autoscribe' ),
+				'type'        => 'user',
+				'default'     => 0,
+				'description' => __( 'Who the generated post is credited to. With nobody chosen the post is created with no author, because a scheduled run has no logged-in user to fall back to.', 'autoscribe' ),
 			),
 		);
 	}
@@ -426,6 +439,9 @@ final class Prompt_Fields {
 
 				return array_key_exists( $value, $choices ) ? $value : (string) $field['default'];
 
+			case 'user':
+				return self::sanitize_user( (int) $raw );
+
 			case 'terms':
 				return self::sanitize_terms( $raw );
 
@@ -443,6 +459,86 @@ final class Prompt_Fields {
 			default:
 				return sanitize_text_field( (string) $raw );
 		}
+	}
+
+	/**
+	 * Reduces a submitted author to a user who exists, or to nobody.
+	 *
+	 * Checked against the user table rather than against the rendered list. The
+	 * list is capped, and a prompt configured before the cap mattered — or before
+	 * somebody's role changed — must not have its author silently replaced by the
+	 * act of saving an unrelated field.
+	 *
+	 * @since 1.14.0
+	 *
+	 * @param int $user_id Submitted user ID.
+	 * @return int The user ID, or 0 for nobody.
+	 */
+	private static function sanitize_user( int $user_id ): int {
+		if ( $user_id <= 0 ) {
+			return 0;
+		}
+
+		return false === get_userdata( $user_id ) ? 0 : $user_id;
+	}
+
+	/**
+	 * Returns the users a generated post can be credited to.
+	 *
+	 * Anyone who can edit posts, which is the same test the post editor's own
+	 * author control uses, plus whoever the prompt already names — a stored author
+	 * who has since lost the capability still belongs in the control that displays
+	 * them, or opening the tab and saving would quietly reassign the prompt.
+	 *
+	 * @since 1.14.0
+	 *
+	 * @param int $current The author the prompt currently holds.
+	 * @return array<string, string> User ID to display name, keyed as strings.
+	 */
+	public static function author_choices( int $current = 0 ): array {
+		$choices = array( '0' => __( '— Nobody —', 'autoscribe' ) );
+
+		$users = get_users(
+			array(
+				'capability' => array( 'edit_posts' ),
+				'orderby'    => 'display_name',
+				'order'      => 'ASC',
+				'number'     => self::AUTHOR_LIMIT,
+				'fields'     => array( 'ID', 'display_name', 'user_login' ),
+			)
+		);
+
+		foreach ( $users as $user ) {
+			$choices[ (string) $user->ID ] = self::author_label( $user->display_name, $user->user_login );
+		}
+
+		if ( $current > 0 && ! isset( $choices[ (string) $current ] ) ) {
+			$existing = get_userdata( $current );
+
+			if ( false !== $existing ) {
+				$choices[ (string) $current ] = self::author_label( $existing->display_name, $existing->user_login );
+			}
+		}
+
+		return $choices;
+	}
+
+	/**
+	 * Labels one user for the author control.
+	 *
+	 * The login is included because display names are not unique and two people
+	 * called J. Smith is not a hypothetical on a site with contributors.
+	 *
+	 * @since 1.14.0
+	 *
+	 * @param string $display_name Display name.
+	 * @param string $login        User login.
+	 * @return string
+	 */
+	private static function author_label( string $display_name, string $login ): string {
+		$name = '' !== trim( $display_name ) ? $display_name : $login;
+
+		return $name === $login ? $name : $name . ' (' . $login . ')';
 	}
 
 	/**

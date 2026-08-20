@@ -87,6 +87,28 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-08-20
+
+### Changed
+
+- **The prompt's Author is chosen by name.** It was a number box, which asked
+  whoever configures a prompt to know a WordPress user ID and gave them nowhere
+  to look one up — and nothing could catch a wrong answer, because every integer
+  is a plausible user ID. The failure was a post credited to somebody else, or to
+  nobody.
+
+  It is now a dropdown of the people who can write posts, the same capability
+  test the post editor's own author control uses, labelled with display name and
+  login because display names are not unique. An author the prompt already names
+  is always listed even when the capability test or the list's own cap would
+  leave them out, so opening the tab and pressing Update cannot quietly reassign
+  a prompt. A submitted user who does not exist is stored as nobody rather than
+  as a number.
+
+  Existing prompts are unaffected: the value is the same user ID in the same meta
+  key, and "nobody" is still the default and still means the post is created with
+  no author.
+
 ## [1.13.4] - 2026-08-20
 
 The thirteenth external review. All five findings confirmed and fixed; the

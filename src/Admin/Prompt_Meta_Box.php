@@ -265,6 +265,10 @@ final class Prompt_Meta_Box {
 				$this->render_select( $name, $id, Prompt_Fields::choices( $field ), (string) $value );
 				break;
 
+			case 'user':
+				$this->render_select( $name, $id, Prompt_Fields::author_choices( (int) $value ), (string) (int) $value );
+				break;
+
 			case 'terms':
 				$this->render_terms( $name, $id, is_array( $value ) ? $value : array() );
 				break;
