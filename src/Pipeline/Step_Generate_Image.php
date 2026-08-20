@@ -160,6 +160,29 @@ final class Step_Generate_Image {
 
 		$image = $this->run( $prompt, $article, $run );
 
+		/*
+		 * A provider call is the longest thing this plugin does, and a claim can
+		 * be taken away during one: the stall sweeper judges a worker gone by
+		 * whether anything is queued for its run, which a slow worker inside a
+		 * 120-second request looks exactly like. Everything below this line is a
+		 * side effect on WordPress rather than a row this claim can guard —
+		 * an attachment, a thumbnail — so the claim is re-asked here, where
+		 * stopping still costs nothing but the call that was already made.
+		 *
+		 * It narrows the window rather than closing it. Nothing available here
+		 * makes a media sideload conditional on a database row, so a claim lost in
+		 * the moment between this check and the write is not caught. The usage
+		 * counters are what stop that becoming a lost charge: they add rather than
+		 * overwrite, so both workers' spending is recorded even when only one
+		 * worker's picture survives.
+		 */
+		if ( $run->lost_claim() ) {
+			return new WP_Error(
+				'autoscribe_claim_lost',
+				__( 'This run was restarted while its image was being generated, so the worker that produced it stopped rather than attaching it beside the replacement\'s.', 'autoscribe' )
+			);
+		}
+
 		if ( ! is_wp_error( $image ) ) {
 			$attachment_id = $this->sideloader->sideload(
 				$image,

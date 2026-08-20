@@ -87,6 +87,97 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-19
+
+A fifth external review, against 1.2.0. Six findings, all confirmed and all
+fixed. The reasoning for each is in `CODEX-REVIEW-RESPONSE.md`.
+
+Two of them are the same shape as the previous round's: a guard that was correct
+where it was applied and was not applied everywhere it was needed. The cost floor
+protected the run nobody minds losing and not the restart everybody wants to
+succeed; the worker claim fenced two writes while the comments described it as
+ownership of the whole step.
+
+MINOR rather than PATCH: the runs table gains a column, previews record what they
+are, `Run` and `Taxonomy_Applier` change shape, and cross-field prompt validation
+now applies to writes that never touched the editor.
+
+### Fixed
+
+- **A paid call could still disappear when the run that made it was restarted.**
+  A worker killed inside a provider call has been charged for it and has recorded
+  nothing. Version 1.2.0 kept the reservation as a floor when a sweep gave up on
+  such a run, but not when the sweep restarted it — and a successful restart
+  settles from what the replacement spent, so the first call left the monthly
+  total entirely.
+
+  Releasing an interrupted claim now raises a `cost_floor` on the run in the same
+  conditional statement, and every settlement afterwards — success, failure, or
+  skip — is held at or above it. A run that stalled *between* steps has nothing
+  outstanding and still gives its reservation back in full.
+
+- **A superseded worker could still change almost everything.** The claim fenced
+  payload and position writes. The article identity, the post link, the settled
+  cost, the terminal transition, the post itself, its terms, and its featured
+  image were all written unconditionally, so a worker that had been swept and
+  replaced could overwrite or close its replacement's run.
+
+  Every run-row write a claimed step makes is now conditional on that claim,
+  including the skip and failure transitions a step performs itself. The two
+  places that write to WordPress rather than to the run row — post assembly and
+  image attachment — re-ask for the claim immediately after their provider call
+  and before their first side effect. That narrows the window rather than closing
+  it, which is stated where it matters rather than implied.
+
+- **Token and image counters are incremented by the database rather than
+  overwritten.** They were read, added to in PHP, and written back whole, so two
+  workers on one run each wrote a total computed before the other's and one
+  call's spending vanished. Two images bought for one run were also recorded as
+  one. Usage is deliberately the one write a lost claim does not stop: a provider
+  that answered has charged for it whoever asked.
+
+- **A post could be published without the taxonomy its prompt names.**
+  `wp_set_post_terms()` returns the term IDs it meant to write without inspecting
+  the insert that writes them, and silently skips a term ID that no longer
+  exists — so a refused relationship and a deleted category both looked exactly
+  like success. The terms are now read back off the post and compared with what
+  was asked for.
+
+- **An abandoned preview was recovered as though it were an article.** A preview
+  makes paid calls and creates no post. The stall sweep did not distinguish one,
+  so it scheduled the ordinary step handler, which found no step left to take,
+  treated the run as ready to publish, and concluded the *prompt*: a failure
+  notice, a retry decision, and a re-armed schedule, for a button somebody
+  pressed once. Previews now record what kind of run they are, the sweep closes
+  them and nothing else, and the queued handler refuses to finish one.
+
+- **Preview also settles at the rates it was checked against.** It opened its run
+  row by hand and so had none of the models and rates snapshot 1.2.0 gave every
+  other run. It now opens through the same code, and reports a refused close
+  rather than discarding it.
+
+### Changed
+
+- **One sweep reads the queue's active actions once.** The statement cannot
+  filter by run — Action Scheduler stores the arguments as JSON — so calling it
+  once per page read the same rows again for every page, up to twenty times a
+  sweep on exactly the busy sites the paging exists for. It is also joined to the
+  plugin's own action group now.
+
+- **Cross-field prompt validation is shared rather than living in the editor.**
+  The rules that refuse grounding for a provider without a search tool, and
+  fallback image mode without an image, sat behind the editor's nonce check — so
+  they applied to one of the several ways prompt meta is written. The 1.2.0
+  response claimed otherwise; `Prompt_Validator` is that claim made true. It runs
+  on save and at the end of any request that writes one of the keys it reads,
+  which is late enough that a writer setting its fields one at a time is not
+  fought half way through.
+
+### Added
+
+- A `cost_floor` column on the runs table, migrated by the existing schema
+  version check.
+
 ## [1.2.0] - 2026-08-19
 
 A fourth external review, against 1.1.3. Eight findings: seven confirmed and one

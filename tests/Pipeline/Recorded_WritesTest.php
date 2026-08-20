@@ -150,6 +150,70 @@ final class Recorded_WritesTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A post whose term relationship is refused is not published.
+	 *
+	 * `wp_set_post_terms()` returns the term-taxonomy IDs it meant to write and
+	 * does not inspect the insert that writes them, so a refused relationship
+	 * produces the same array a successful one does. The only answer that tells
+	 * the two apart is to ask the post what it has afterwards.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @return void
+	 */
+	public function test_a_post_whose_terms_do_not_stick_is_left_as_a_draft(): void {
+		global $wpdb;
+
+		$category  = self::factory()->category->create( array( 'name' => 'Brewing' ) );
+		$prompt_id = $this->create_prompt( array( 'category_ids' => array( $category ) ) );
+
+		$break = static function ( $query ) use ( $wpdb ) {
+			$sql = (string) $query;
+
+			return str_starts_with( ltrim( $sql ), 'INSERT INTO `' ) && str_contains( $sql, $wpdb->term_relationships )
+				? 'INSERT INTO autoscribe_no_such_table (id) VALUES (1)'
+				: $query;
+		};
+
+		add_filter( 'query', $break );
+		$wpdb->suppress_errors( true );
+
+		$row = $this->run_prompt( $prompt_id );
+
+		$wpdb->suppress_errors( false );
+		remove_filter( 'query', $break );
+
+		$this->assertSame( Run::STATUS_FAILED, $row['status'] );
+		$this->assertStringContainsString( 'categories', (string) $row['error'] );
+		$this->assertStringContainsString( 'Missing after the write', (string) $row['error'] );
+		$this->assertDraftOrNothing( $row );
+	}
+
+	/**
+	 * A category deleted after the prompt was saved is not silently dropped.
+	 *
+	 * WordPress skips a term ID that no longer exists and reports nothing, so the
+	 * post is filed nowhere while the run reports success.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @return void
+	 */
+	public function test_a_deleted_category_is_not_silently_dropped(): void {
+		$category = self::factory()->category->create( array( 'name' => 'Brewing' ) );
+
+		$prompt_id = $this->create_prompt( array( 'category_ids' => array( $category ) ) );
+
+		wp_delete_category( $category );
+
+		$row = $this->run_prompt( $prompt_id );
+
+		$this->assertSame( Run::STATUS_FAILED, $row['status'] );
+		$this->assertStringContainsString( 'categories', (string) $row['error'] );
+		$this->assertDraftOrNothing( $row );
+	}
+
+	/**
 	 * The ordinary path still writes everything the failures above describe.
 	 *
 	 * A guard that fails closed is only useful if the thing it guards normally

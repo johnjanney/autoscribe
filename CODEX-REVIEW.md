@@ -1,5 +1,502 @@
 # AutoScribe code quality and security audit
 
+## Fresh verification review — version 1.2.0
+
+**Review date:** 19 August 2026 (America/Chicago)
+
+**Reviewed revision:** `cedb42250a31a9503ce040ff74aa11926e0d5fed` on
+`main`, tag `v1.2.0`
+
+**Change range:** `88aefb3..cedb422`
+
+**Response reviewed:** “Response to the fourth Codex review” in
+[`CODEX-REVIEW-RESPONSE.md`](CODEX-REVIEW-RESPONSE.md#L1444)
+
+**Release reviewed:** [AutoScribe 1.2.0 on GitHub](https://github.com/johnjanney/autoscribe/releases/tag/v1.2.0)
+
+**Current result:** **Conditional fail. Keep human review and a provider-side
+spending limit enabled. Do not rely on the plugin alone for unattended automatic
+publication until F120-01 through F120-04 are fixed.**
+
+**Current quality score:** **8.0/10**
+
+### Executive result
+
+Version 1.2.0 makes important and correct changes. `Close_Result` separates a
+lost close race from a refused database write. The stall count now has its own
+column and uses a conditional update. Claimed workers protect payload and
+position writes. Fallback mode now fails safely. Normal queued runs record their
+models and rates. Assembly verifies most required writes. Finalisation also has
+a claim. The direct documentation contradictions from the previous review are
+fixed ([response](CODEX-REVIEW-RESPONSE.md#L1444),
+[changelog](CHANGELOG.md#L90)).
+
+The response is not fully correct when it says that all seven confirmed findings
+are fixed. Four important gaps remain:
+
+- A paid step that is interrupted and then restarted can still settle below its
+  actual provider cost. The reservation floor is used only when the sweeper gives
+  up while it can still see a claim. It is not stored for a later successful
+  restart. See F120-01.
+- The claim token protects `payload` and `step`, but it does not protect all run
+  columns or WordPress side effects. A replaced worker can still write usage,
+  post state, taxonomy, SEO data, or an image after it loses its claim. See
+  F120-02.
+- Taxonomy code trusts an array return as proof that relationships exist.
+  WordPress core can return that array after an unchecked relationship insert.
+  See F120-03.
+- Preview runs do not use the new snapshot contract and do not have a safe stall
+  recovery path. See F120-04.
+
+The current Google evidence supports Claude's VR-04 rejection. The official
+catalog lists `gemini-3.7-flash` as a stable model, and the current migration
+guide says that it is generally available and ready for production use
+([Google model catalog](https://ai.google.dev/gemini-api/docs/models),
+[Google migration guide](https://ai.google.dev/gemini-api/docs/latest-model)).
+The earlier VR-04 conclusion is therefore retracted. The page could have changed
+between retrievals, but the current first-party evidence is clear.
+
+I found no verified unauthenticated code execution, SQL injection, stored XSS,
+capability bypass, CSRF defect, secret disclosure, or provider-URL SSRF in this
+revision. The main remaining risks are accounting integrity, incomplete worker
+fencing, recovery behavior, and silent taxonomy loss.
+
+### Verification results
+
+| Check | Result | Evidence |
+|---|---:|---|
+| Revision and worktree | Pass | `HEAD`, `main`, `origin/main`, and `v1.2.0` resolve to `cedb422`. The worktree was clean before this review file changed. |
+| Fourth response and changelog | Pass | The stated files contain the fourth response and the 1.2.0 change record ([response](CODEX-REVIEW-RESPONSE.md#L1444), [changelog](CHANGELOG.md#L90)). |
+| Composer manifest | Pass | `composer validate --no-check-publish` reports a valid manifest ([manifest](composer.json)). |
+| Dependency advisories | Pass | `composer audit --locked` reports no known advisory ([lock file](composer.lock)). GitHub reports no [open Dependabot alert](https://github.com/johnjanney/autoscribe/security/dependabot?query=is%3Aopen) for this repository. |
+| WordPress coding standards | Pass | PHPCS checked 120 PHP files with no error or warning ([rules](phpcs.xml.dist)). |
+| Local PHPUnit | Pass | 327 tests and 1,228 assertions passed in the WordPress test container ([configuration](phpunit.xml.dist), [bootstrap](tests/bootstrap.php)). |
+| Release CI | Pass | The release commit passed PHP 8.1, 8.2, and 8.3 jobs in [CI run 32315886465](https://github.com/johnjanney/autoscribe/actions/runs/32315886465). |
+| Code scanning | Pass | [CodeQL run 32315885952](https://github.com/johnjanney/autoscribe/actions/runs/32315885952) passed, and GitHub reports no [open code-scanning alert](https://github.com/johnjanney/autoscribe/security/code-scanning?query=is%3Aopen). |
+| Release state | Pass | The GitHub release is published, is not a prerelease, and points to tag `v1.2.0` at `cedb422` ([release](https://github.com/johnjanney/autoscribe/releases/tag/v1.2.0)). |
+| Release asset | Pass | The uploaded asset and local archive are both 479,395 bytes. Both report SHA-256 `27e5b232fa739d22f6a8a1be255be0b3235764de633743a48ba4f3847c9a3efe`. `unzip -t` passed, no development test tool is present, and the non-vendor production files match the reviewed tree ([build script](bin/build.sh)). |
+| Google default model | Pass by current document inspection | The two first-party pages identify `gemini-3.7-flash` as stable and generally available ([catalog](https://ai.google.dev/gemini-api/docs/models), [migration guide](https://ai.google.dev/gemini-api/docs/latest-model), [adapter](src/Providers/Text/Google.php#L71)). |
+| Live provider call | Not run | No funded key was supplied. No prompt, site content, or secret was sent to a provider. |
+| Real Action Scheduler dispatch | Not covered | The project documents this limit. **Not found in documents:** an automated test that lets Action Scheduler dispatch a complete chain ([README](README.md#L192)). |
+| Two-connection concurrency | Not covered | The new tests simulate interleavings in one process. **Not found in documents:** a test that uses two independent database connections ([concurrency test](tests/Pipeline/Concurrent_StateTest.php#L21)). |
+| Programmatic prompt-save validation | Not covered | **Not found in documents:** a test that writes prompt configuration through WP-CLI or an importer and then verifies cross-field correction. See F120-06. |
+
+`composer outdated --direct --locked` also reports that the release uses Action
+Scheduler 3.9.3 while 4.1.0 exists. There is no known security advisory for the
+locked version. This is a maintenance item, not a verified defect. A major
+dependency update needs its own compatibility test before use
+([constraint](composer.json), [locked package](composer.lock),
+[package releases](https://packagist.org/packages/woocommerce/action-scheduler)).
+
+### Fourth-response verdict by prior finding
+
+| Prior finding | Verification verdict | Version 1.2.0 status |
+|---|---|---|
+| VR-01 — failed terminal transitions and lost usage | **Partly fixed** | The three-state close and refused-close handling are correct. An interrupted charge can still be lost after a successful restart. See F120-01. |
+| VR-02 — concurrent sweeper payload overwrite | **Partly fixed** | The separate counter, sweep claim, and payload/position conditions are correct. The same claim does not fence all run writes or WordPress side effects. See F120-02. |
+| VR-03 — fallback can publish with no image | **Fixed for publication safety** | Runtime failure is safe and the editor corrects invalid input. The response overstates which programmatic save paths use that editor validation. See F120-06. |
+| VR-04 — Google suggestion absent from catalog | **Rejected correctly on current evidence** | Current first-party pages support `gemini-3.7-flash`. The dated adapter comment and release check are useful controls. |
+| VR-05 — resolved model and rate snapshot | **Partly fixed** | Normal runs opened by `Generator::open()` use the snapshot. Preview creates its run directly and uses live rates. See F120-04. |
+| VR-06 — ignored assembly writes | **Partly fixed** | Run meta, run fields, and SEO writes are now checked. Taxonomy relationships are not read back. See F120-03. |
+| VR-07 — finalisation has no claim | **Fixed for ordinary duplicate delivery** | The claim prevents two normal finalisers. F120-02 still applies if a worker loses its claim while it continues. |
+| VR-08 — documentation contradictions | **Fixed** | The installation text, one-call claim, limitation count, and grounding warning now agree with the implementation ([README](README.md#L72), [D-09b](DECISIONS.md#L355)). |
+
+## Version 1.2.0 findings
+
+### F120-01 — High — A recovered paid step can still settle below its actual cost
+
+**Category:** Financial integrity, recovery, monthly-cap enforcement
+
+**Verified facts**
+
+- The sweeper keeps the reservation as a floor only when it gives up while the
+  observed position is still a claim
+  ([give-up path](src/Pipeline/Stall_Sweeper.php#L458)).
+- When the run has restart capacity, the sweeper releases the old claim, records
+  only a numeric sweep count, and schedules a replacement
+  ([recovery path](src/Pipeline/Stall_Sweeper.php#L385),
+  [counter](src/Pipeline/Run.php#L1306)).
+- No column or payload key records that the released claim may contain an
+  unrecorded charge.
+- A later successful finalisation calculates cost from persisted usage and
+  replaces the reservation with that measured value. It does not retain a floor
+  because the run was interrupted earlier
+  ([measurement](src/Pipeline/Run.php#L1654),
+  [settlement](src/Pipeline/Run.php#L1687)).
+- The new interrupted-claim test covers only the path that has already reached
+  the restart limit and is given up. It does not cover an interrupted claim whose
+  replacement succeeds
+  ([test](tests/Pipeline/Concurrent_StateTest.php#L195)).
+
+**Confirmed failure sequence**
+
+1. The budget step records the full reservation.
+2. A worker claims a paid step and sends the provider request.
+3. The provider processes the request, but the worker ends before it records the
+   usage. The claim remains on the run.
+4. The sweeper releases that claim and schedules a replacement. It does not
+   store that the cost is now uncertain.
+5. The replacement succeeds and records only its own usage.
+6. Finalisation replaces the reservation with the replacement's measured cost.
+   The first provider request is absent from the month total.
+
+**Inference**
+
+A provider can bill a request even when the local PHP worker ends before it
+stores the response. The code and the response already use this assumption to
+justify the reservation floor. The missing part is to keep that fact after a
+restart succeeds.
+
+**Impact**
+
+The monthly total and local cap can be lower than provider billing. The cap is
+therefore not conservative on the recovery path that most users want to
+succeed.
+
+**Required fix**
+
+- Store an `usage_uncertain` or `reservation_floor` marker in the same guarded
+  operation that releases an interrupted claim.
+- Make every later settlement keep that floor, including successful settlement.
+  A more exact implementation can store a conservative allowance for the
+  interrupted step instead of the complete run estimate.
+- Add a test that interrupts a paid claim, restarts it, finishes successfully,
+  and verifies that settlement cannot fall below the stored floor.
+
+### F120-02 — High — The worker claim does not fence all state changes
+
+**Category:** Concurrency, idempotency, accounting, WordPress side effects
+
+**Verified facts**
+
+- Claim-aware conditions exist for payload writes and the completed-step write
+  ([payload condition](src/Pipeline/Run.php#L564),
+  [position condition](src/Pipeline/Run.php#L309)).
+- Other run writes use `Run::update()`, whose only condition is the run ID
+  ([generic update](src/Pipeline/Run.php#L1833)). This includes text usage, image
+  usage, the post ID, the article identity, and settled cost
+  ([text usage](src/Pipeline/Run.php#L385),
+  [image usage](src/Pipeline/Run.php#L440),
+  [post](src/Pipeline/Run.php#L710),
+  [article](src/Pipeline/Run.php#L366),
+  [cost](src/Pipeline/Run.php#L1614)).
+- Step-owned terminal writes are also not tied to the claim. For example, a
+  duplicate-topic result calls `skip()` inside the claimed step, and `skip()`
+  closes any still-running row by ID and status
+  ([duplicate close](src/Pipeline/Step_Propose_Topic.php#L189),
+  [terminal transition](src/Pipeline/Run.php#L1626)).
+- The image step can generate, sideload an attachment, and change the featured
+  image before its final payload write detects a lost claim
+  ([image step](src/Pipeline/Step_Generate_Image.php#L148)).
+- The assembly step can update post content, meta, SEO fields, and taxonomy
+  without checking the claim before each side effect
+  ([assembly](src/Pipeline/Step_Assemble_Post.php#L141)).
+- `Pipeline::advance()` checks `holds_claim()` only after the step returns. That
+  check stops later pipeline work, but it cannot undo writes the stale worker
+  already made ([post-step check](src/Pipeline/Pipeline.php#L199)).
+- Finalisation also calls an unqualified `fail()` if the post status update
+  fails. It does not first confirm that its finalisation claim still belongs to
+  this worker ([finalisation failure](src/Pipeline/Generator.php#L235)).
+- The new concurrency test verifies only `merge_payload()` and `record_step()`.
+  It does not call usage, image, post, SEO, or taxonomy writes after claim loss
+  ([test](tests/Pipeline/Concurrent_StateTest.php#L122)).
+- The bundled Action Scheduler can mark an action as failed after its running
+  timeout. Its default cleanup timeout is 300 seconds
+  ([queue cleaner](vendor/woocommerce/action-scheduler/classes/ActionScheduler_QueueCleaner.php#L197),
+  [runner cleanup](vendor/woocommerce/action-scheduler/classes/abstracts/ActionScheduler_Abstract_QueueRunner.php#L238)).
+
+**Inference**
+
+Most actions finish before the running timeout. The risk needs a slow worker, a
+timeout or queue-state change, and a sweep. If that overlap occurs, the old
+worker can continue after the replacement owns the claim. The implementation
+itself treats this overlap as possible, but only two database writes use the
+claim as a fencing token.
+
+**Impact**
+
+A stale and a replacement worker can race on token totals, image count, the
+featured image, attachment creation, post content, taxonomy, or SEO state. Two
+image calls can still be represented by `image_count = 1`. A stale whole-counter
+write can also replace a concurrent value. A stale worker can even close the run
+owned by its replacement. The final payload condition can stop later work, but
+it cannot remove the duplicate provider cost or external side effects.
+
+**Required fix**
+
+- Make every run-row mutation from a claimed step conditional on the current
+  claim token, including skip, failure, and cost transitions. Use atomic
+  increments for token and image usage instead of a read-modify-write of complete
+  counters.
+- Check the claim again after every blocking provider or download call and before
+  any WordPress side effect.
+- Where a WordPress write cannot include the claim in the same SQL statement,
+  use a durable fencing design. At minimum, record a monotonic worker generation
+  and refuse stale post or media commits.
+- Add stale-worker tests for text usage, image usage, image sideload, post
+  assembly, final settlement, and taxonomy. Add a true two-connection test.
+
+### F120-03 — Medium — Taxonomy success is not verified by reading the relationships
+
+**Category:** Content integrity, auditability, database failure handling
+
+**Verified facts**
+
+- `Taxonomy_Applier::set_terms()` treats any array returned by
+  `wp_set_post_terms()` as success. It does not read the assigned terms back
+  ([taxonomy helper](src/Content/Taxonomy_Applier.php#L121)).
+- WordPress documents an array as the normal success return
+  ([WordPress reference](https://developer.wordpress.org/reference/functions/wp_set_post_terms/)).
+- In WordPress core, `wp_set_object_terms()` calls `$wpdb->insert()` for a new
+  relationship without checking that return. It later returns the term-taxonomy
+  ID array. Therefore, a relationship insert can fail while the caller still
+  receives an array
+  ([official WordPress source](https://developer.wordpress.org/reference/functions/wp_set_object_terms/)).
+- The same WordPress function skips a non-existent integer term ID and continues.
+  It can therefore return an empty or partial array when a configured category
+  was deleted after the prompt was saved. The plugin still treats that result as
+  complete success
+  ([official WordPress source](https://developer.wordpress.org/reference/functions/wp_set_object_terms/),
+  [plugin check](src/Content/Taxonomy_Applier.php#L135)).
+- The response acknowledges that this database refusal was not tested. The test
+  instead makes term creation fail, which verifies the `WP_Error` branch but not
+  the silent relationship-insert branch
+  ([response](CODEX-REVIEW-RESPONSE.md#L1675),
+  [recorded-write tests](tests/Pipeline/Recorded_WritesTest.php)).
+
+**Impact**
+
+The plugin can publish a post without required categories or tags while the run
+reports success. This is the remaining part of VR-06.
+
+**Required fix**
+
+- After `wp_set_post_terms()`, clear or bypass the relationship cache and read the
+  assigned term IDs back.
+- Compare the actual set with the required set. Return an error if any required
+  relationship is missing.
+- Add a fault-injection test that refuses the relationship insert and proves that
+  an array return alone is not accepted. Add a second test for a configured
+  category that was deleted before the run.
+
+### F120-04 — Medium — Preview runs are outside the new snapshot and recovery contract
+
+**Category:** State-machine correctness, cost consistency, purpose
+
+**Verified facts**
+
+- Normal generation uses `Generator::open()`, which records the configuration,
+  resolved models, provider slugs, and rate snapshot
+  ([open](src/Pipeline/Generator.php#L336),
+  [snapshot](src/Pipeline/Generator.php#L399)).
+- Preview calls `Run::start()` directly. It does not record that snapshot or a
+  run kind ([preview](src/Admin/Actions.php#L265)).
+- Preview calls the budget, topic, and body steps directly rather than through
+  the claim-owning `Pipeline`. It settles with a new live `Pricing_Table`, then
+  ignores the result of `succeed()`
+  ([preview sequence](src/Admin/Actions.php#L291)).
+- Preview records the step name `preview`. `Pipeline::next_step()` treats an
+  unknown step as finished
+  ([preview position](src/Admin/Actions.php#L319),
+  [unknown position](src/Pipeline/Pipeline.php#L149)).
+- The stall sweeper does not distinguish preview rows from queued publication
+  rows. It schedules the normal step handler, which sees no next step and enters
+  normal finalisation
+  ([sweeper](src/Pipeline/Stall_Sweeper.php#L321),
+  [queue finish](src/Pipeline/Queued_Run_Handler.php#L273)).
+
+**Confirmed failure sequence**
+
+1. Preview generates an article and records `step = preview`.
+2. Cost settlement or the final success write fails. Preview returns an error or
+   returns the article while the run stays open.
+3. The sweeper later schedules the normal queued step handler.
+4. The handler treats `preview` as the end of the publication pipeline and calls
+   finalisation with no post ID.
+5. The result can be a spurious failure, success, notice, retry decision, or
+   schedule re-arm. It is not preview recovery.
+
+**Impact**
+
+A database fault during Preview can change scheduled-run state and produce an
+incorrect run outcome. A concurrent pricing edit can also make Preview check one
+rate table and settle with another.
+
+**Required fix**
+
+- Record a run kind such as `preview` and include previews in the same model and
+  rate snapshot contract.
+- Give Preview a terminal recovery rule that only settles or closes the preview.
+  Never route it into post finalisation or schedule re-arming.
+- Inspect and report the `succeed()` result.
+- Add tests for refused preview settlement, refused preview close, a later sweep,
+  and a pricing edit during preview.
+
+### F120-05 — Medium — Each sweeper page reads every active step action
+
+**Category:** Performance, queue scalability
+
+**Verified facts**
+
+- The sweeper can scan 20 pages per pass and calls
+  `runs_with_step_actions()` once for each page
+  ([page loop](src/Pipeline/Stall_Sweeper.php#L227)).
+- The direct Action Scheduler query selects every pending or running row for the
+  AutoScribe step hook. It does not restrict the query to the page's run IDs.
+  Candidate filtering happens later in PHP
+  ([queue query](src/Scheduling/Scheduler.php#L243)).
+- Therefore, if `A` step actions are active and `P` pages are scanned, one sweep
+  can fetch and decode about `P × A` action rows. The current bounds allow up to
+  20 reads of the same active action set.
+
+**Impact**
+
+CR-08's per-candidate query problem is fixed, but a large healthy queue can still
+make the five-minute recovery task repeatedly read a large action set. This can
+raise database, JSON-decoding, and memory costs on the busy sites for which the
+paged sweeper exists.
+
+**Recommended fix**
+
+- Read the active AutoScribe action set once per sweep and reuse it for all pages,
+  or store the scheduled action ID on the run and query only IDs for the current
+  page.
+- Include the Action Scheduler group in the direct query.
+- Add a load test with 2,000 candidate runs and a large active-action set. Assert
+  query count and returned-row count, not only functional results.
+
+### F120-06 — Low — The save-time fallback guard does not cover the programmatic paths named in the response
+
+**Category:** Documentation accuracy, configuration validation
+
+**Verified facts**
+
+- `Prompt_Meta_Box::save()` returns before any field or cross-field validation
+  unless the editor nonce is present and valid
+  ([save guard](src/Admin/Prompt_Meta_Box.php#L499)).
+- `enforce_fallback_image()` runs only after that nonce-protected editor loop
+  ([fallback enforcement](src/Admin/Prompt_Meta_Box.php#L572)).
+- The prompt post type is not exposed through the WordPress REST API
+  ([post type](src/Prompts/Prompt_Post_Type.php#L68)).
+- A direct WP-CLI meta command updates one meta field and does not submit this
+  editor nonce. The response's statement that REST API, WP-CLI, and imports all
+  reach the save validation is therefore not accurate
+  ([WP-CLI command reference](https://developer.wordpress.org/cli/commands/post/meta/update/),
+  [response](CODEX-REVIEW-RESPONSE.md#L1588)).
+- Runtime image handling still fails safely if programmatic data creates an
+  invalid fallback configuration
+  ([runtime fallback](src/Pipeline/Step_Generate_Image.php#L204)).
+
+**Impact**
+
+This does not reopen the publication-safety defect because runtime enforcement
+is correct. It means the stored configuration can still be invalid when a tool
+writes meta directly, and the response overstates the save-time guarantee.
+
+**Recommended fix**
+
+- Move cross-field validation into a shared prompt validator used by the editor
+  and every supported programmatic write path, or document that direct meta
+  writes are unsupported and rely on runtime validation.
+- Correct the response record so future reviews do not treat the editor hook as
+  a global meta-validation layer.
+
+## Version 1.2.0 security, quality, performance, and purpose assessment
+
+### Security
+
+The security baseline remains strong. Admin mutations use nonces and the custom
+capability. Provider output is validated and sanitized before rendering. HTTP
+responses have size limits. Provider-supplied image URLs use
+`wp_safe_remote_get()`. SQL values use prepared statements, and dynamic table or
+column names use WordPress identifier placeholders. API keys use the existing
+key-storage controls
+([admin authorization](src/Admin/Actions.php#L396),
+[content sanitizer](src/Security/Content_Sanitizer.php),
+[HTTP policy](src/Providers/Http.php),
+[image download](src/Media/Image_Sideloader.php#L220),
+[key store](src/Security/Key_Store.php)).
+
+No current dependency advisory, CodeQL alert, or Dependabot alert was found.
+This does not prove that the code has no vulnerability. It is supporting evidence
+for the manual review result. The remaining security-adjacent issue is grounded
+prompt injection. The README now gives the correct residual control: use human
+review for grounded prompts ([README](README.md#L256),
+[instructions](INSTRUCTIONS.md#L212)).
+
+### Code quality
+
+The new code is readable and explains the purpose of difficult state decisions.
+`Close_Result`, the separate sweep counter, the rate snapshot, `Meta_Writer`, and
+the finalisation claim are good abstractions. The new fault-injection traits and
+focused test classes make exceptional paths easier to verify.
+
+The main quality weakness is the boundary of the claim abstraction. It protects
+two writes, while the comments describe it as ownership of the complete step.
+This mismatch makes local code look safe even when nearby run and WordPress
+writes are not fenced. Preview also duplicates orchestration outside the main
+state machine, which is why the new snapshot and recovery guarantees do not
+apply to it.
+
+### Performance
+
+Normal-path work is bounded and appropriate for the plugin's purpose. Provider
+response and image sizes are capped. The runs table has indexes for status,
+topic, prompt/time, and month scans. Stall recovery has page and action limits.
+The separate `sweeps` column removes a large JSON rewrite and the old per-run
+queue lookup is gone
+([schema](src/Activation.php#L188),
+[sweeper bounds](src/Pipeline/Stall_Sweeper.php#L86)).
+
+F120-05 is the main current performance issue. Also, a topic or body action can
+still make two 120-second provider calls. This is documented and remains a host
+compatibility limit, not a hidden defect
+([README](README.md#L192), [D-09b](DECISIONS.md#L355)).
+
+### Purpose and requirement fit
+
+AutoScribe substantially meets its main purpose. It stores prompts, schedules
+runs, uses multiple providers, validates generated content, applies images and
+SEO data, records audit state, enforces local budget estimates, and supports
+review or automatic publication. The 1.2.0 release is materially safer than
+1.1.3.
+
+The remaining high findings affect the two controls that unattended operation
+depends on: one paid step must not be counted as less than it cost, and one
+claimed worker must be the only worker that can commit its results. Review mode
+reduces publication risk, but it does not correct undercounted usage or duplicate
+provider and media side effects. A provider-side spending limit remains the hard
+financial control.
+
+## Version 1.2.0 remediation order
+
+1. Fix F120-01. Persist uncertainty when an interrupted paid claim is released,
+   and carry its floor through a successful restart.
+2. Fix F120-02. Extend fencing to every claimed write and external side effect,
+   and use atomic usage increments.
+3. Fix F120-03 and F120-04. Read taxonomy back and give Preview its own snapshot
+   and recovery state.
+4. Fix F120-05. Read active action state once per sweep or query only the current
+   candidate IDs.
+5. Clarify or centralize programmatic prompt validation for F120-06.
+6. Add true two-connection, real Action Scheduler dispatch, MariaDB, and live
+   release-smoke coverage. Keep live provider checks outside the ordinary unit
+   suite.
+
+## Version 1.2.0 conclusion
+
+Claude's response correctly resolves VR-03, VR-04, VR-07 in the ordinary
+duplicate-delivery case, and VR-08. It also fixes large parts of VR-01, VR-02,
+VR-05, and VR-06. The release, asset, CI result, CodeQL result, model evidence,
+and test counts are verified.
+
+The statement that the fourth review round is closed is premature. F120-01 and
+F120-02 keep the financial and concurrency parts open. F120-03 and F120-04 keep
+required-write and recovery behavior open. Use version 1.2.0 with human review
+and a provider-side spending limit until those findings are fixed and verified.
+
+---
+
 ## Verification review — version 1.1.3
 
 **Review date:** 19 August 2026
@@ -296,7 +793,7 @@ as the automatic fallback.
   ([estimate](src/Cost/Budget_Guard.php#L312),
   [finalization](src/Pipeline/Queued_Run_Handler.php#L258)).
 - The original required fix asked for resolved models and relevant pricing
-  rates in the run snapshot ([original CR-03](CODEX-REVIEW.md#L684)). The response
+  rates in the run snapshot ([original CR-03](CODEX-REVIEW.md#L1181)). The response
   discusses only site defaults and force review
   ([response](CODEX-REVIEW-RESPONSE.md#L1202)).
 

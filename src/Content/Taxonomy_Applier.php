@@ -135,16 +135,83 @@ final class Taxonomy_Applier {
 	private function set_terms( int $post_id, array $terms, string $taxonomy, string $message ): bool|WP_Error {
 		$result = wp_set_post_terms( $post_id, $terms, $taxonomy, false );
 
-		if ( is_array( $result ) ) {
+		if ( is_wp_error( $result ) || false === $result ) {
+			return new WP_Error(
+				'autoscribe_terms_not_applied',
+				is_wp_error( $result ) ? $message . ' ' . $result->get_error_message() : $message
+			);
+		}
+
+		$missing = $this->missing_terms( $post_id, $terms, $taxonomy );
+
+		if ( array() === $missing ) {
 			return true;
 		}
 
 		return new WP_Error(
 			'autoscribe_terms_not_applied',
-			is_wp_error( $result )
-				? $message . ' ' . $result->get_error_message()
-				: $message
+			sprintf(
+				/* translators: 1: what could not be applied, 2: comma-separated list of terms. */
+				__( '%1$s Missing after the write: %2$s', 'autoscribe' ),
+				$message,
+				implode( ', ', array_map( 'strval', $missing ) )
+			)
 		);
+	}
+
+	/**
+	 * Returns the requested terms that are not on the post afterwards.
+	 *
+	 * An array return from `wp_set_post_terms()` is not evidence that the terms
+	 * are there. WordPress inserts each relationship with `$wpdb->insert()` and
+	 * does not inspect the result, then returns the term-taxonomy IDs it meant to
+	 * write — so a refused insert produces the same array a successful one does.
+	 * It also skips a term ID that no longer exists rather than reporting it, so a
+	 * category deleted after the prompt was saved is silently dropped.
+	 *
+	 * Both are the same failure from the post's point of view: it is published
+	 * without the taxonomy its prompt names. The only answer that distinguishes
+	 * them from success is to ask the post what it now has, with the object cache
+	 * for that relationship cleared first so the answer comes from the database
+	 * rather than from what WordPress expected to write.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @param int            $post_id  Post that was annotated.
+	 * @param int[]|string[] $requested Terms that were asked for.
+	 * @param string         $taxonomy Taxonomy they belong to.
+	 * @return array<int, int|string> The ones that are not there.
+	 */
+	private function missing_terms( int $post_id, array $requested, string $taxonomy ): array {
+		clean_object_term_cache( $post_id, $taxonomy );
+
+		$applied = wp_get_object_terms( $post_id, $taxonomy );
+
+		if ( is_wp_error( $applied ) ) {
+			return $requested;
+		}
+
+		$ids   = array();
+		$slugs = array();
+
+		foreach ( $applied as $term ) {
+			$ids[ (int) $term->term_id ]   = true;
+			$slugs[ (string) $term->slug ] = true;
+		}
+
+		$missing = array();
+
+		foreach ( $requested as $term ) {
+			$found = is_int( $term )
+				? isset( $ids[ $term ] )
+				: isset( $slugs[ sanitize_title( (string) $term ) ] );
+
+			if ( ! $found ) {
+				$missing[] = $term;
+			}
+		}
+
+		return $missing;
 	}
 
 	/**

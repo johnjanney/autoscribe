@@ -211,7 +211,7 @@ final class Pipeline {
 		 * error says.
 		 */
 		if ( is_wp_error( $result ) ) {
-			return $run->holds_claim() ? $result : self::CLAIM_LOST;
+			return $run->lost_claim() ? self::CLAIM_LOST : $result;
 		}
 
 		/*
@@ -224,7 +224,7 @@ final class Pipeline {
 		 * reservation held open throughout.
 		 */
 		if ( ! $run->record_step( $step ) ) {
-			if ( ! $run->holds_claim() ) {
+			if ( $run->lost_claim() ) {
 				// Swept and replaced. The replacement owns the position now.
 				return self::CLAIM_LOST;
 			}

@@ -7,7 +7,7 @@
 
 namespace AutoScribe\Tests\Pipeline;
 
-use AutoScribe\Admin\Prompt_Meta_Box;
+use AutoScribe\Prompts\Prompt_Validator;
 use AutoScribe\Content\Article_Validator;
 use AutoScribe\Pipeline\Run;
 use AutoScribe\Pipeline\Step_Generate_Image;
@@ -146,8 +146,8 @@ final class Fallback_ImageTest extends WP_UnitTestCase {
 	 * @return void
 	 */
 	public function test_fallback_mode_is_not_stored_without_a_usable_image(): void {
-		$this->assertFalse( Prompt_Meta_Box::is_usable_fallback( 0 ) );
-		$this->assertFalse( Prompt_Meta_Box::is_usable_fallback( 999999 ) );
+		$this->assertFalse( Prompt_Validator::is_usable_fallback( 0 ) );
+		$this->assertFalse( Prompt_Validator::is_usable_fallback( 999999 ) );
 
 		$attachment = self::factory()->attachment->create_object(
 			array(
@@ -156,12 +156,12 @@ final class Fallback_ImageTest extends WP_UnitTestCase {
 			)
 		);
 
-		$this->assertTrue( Prompt_Meta_Box::is_usable_fallback( (int) $attachment ) );
+		$this->assertTrue( Prompt_Validator::is_usable_fallback( (int) $attachment ) );
 
 		$post = self::factory()->post->create();
 
 		$this->assertFalse(
-			Prompt_Meta_Box::is_usable_fallback( (int) $post ),
+			Prompt_Validator::is_usable_fallback( (int) $post ),
 			'A post is not an image, however valid its ID.'
 		);
 	}

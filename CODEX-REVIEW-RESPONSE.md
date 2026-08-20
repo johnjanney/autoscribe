@@ -1708,3 +1708,214 @@ implied: no test drives Action Scheduler's own dispatch; the concurrency tests
 run interleavings in one process rather than across two connections; CI runs
 against MySQL only; and no test calls a live provider. The last is deliberate and
 will stay that way.
+
+---
+---
+
+# Response to the fifth Codex review
+
+**Responding to:** the fresh-verification section of
+[CODEX-REVIEW.md](CODEX-REVIEW.md), dated 19 August 2026 against `cedb422`
+(tag `v1.2.0`)
+**Response date:** 19 August 2026
+**Release under response:** 1.2.0 → 1.3.0
+
+---
+
+## Summary
+
+Six findings. **All six confirmed, all six fixed.** No claim in this review turned
+out to be wrong, and the VR-04 retraction is accepted with thanks — that is the
+second time a first-party page has settled a disagreement that neither of us
+could settle by argument.
+
+| Finding | Verdict | Status |
+|---|---|---|
+| F120-01 Recovered paid step settles below cost | Confirmed | Fixed |
+| F120-02 The claim does not fence all state changes | Confirmed | Fixed, with a stated residual |
+| F120-03 Taxonomy success not verified by reading back | Confirmed | Fixed |
+| F120-04 Preview outside the snapshot and recovery contract | Confirmed | Fixed |
+| F120-05 Each sweeper page reads every active action | Confirmed | Fixed |
+| F120-06 Save-time guard misses programmatic paths | Confirmed | Fixed, and the response corrected |
+
+**Verification:** PHPCS passes with zero errors and zero warnings across 125
+files. PHPUnit passes 350 tests and 1,441 assertions, up from 327 and 1,228. No
+test contacts a live provider.
+
+---
+
+## The pattern, again, and what is different about it this time
+
+Both high findings are the same shape as the last round's, one level down: a
+guard that is correct where it is applied and is not applied everywhere it is
+needed. The cost floor covered the run that is given up on and not the one that
+is restarted. The claim fenced two writes while its own comments described it as
+ownership of the whole step.
+
+The useful lesson is about how the fixes were scoped rather than about the
+defects. Both times I fixed the case in the finding and stopped at the edge of
+the example, and both times the review came back with the neighbouring case. So
+this round each fix was taken to the boundary of its abstraction and the
+boundary is now stated in the code: `Run::update()` fences everything, the two
+exemptions say why they are exempt, and the two WordPress writes that cannot be
+fenced say so in the comment rather than leaving it to be discovered.
+
+---
+
+## F120-01 — Confirmed. Fixed.
+
+The reservation floor existed only where the sweeper gave up. A restart that
+succeeded settled from the replacement's usage, and the interrupted call — which
+a provider had already been paid for — was gone.
+
+`release_claim()` now raises a `cost_floor` column to whatever the run has
+reserved, in the same conditional statement that releases the claim. Every
+settlement afterwards is held at or above it: `measured_cents()` applies it, so
+success, failure, and skip all inherit it, including the ending that measures no
+usage at all — a run interrupted inside its *first* paid call has nothing to
+measure and may still have been charged.
+
+**Why the reservation rather than an allowance for the interrupted step.** The
+review offered both. The reservation is the figure the run was already checked
+against the cap for, so holding it costs the site nothing it had not set aside,
+and it needs no assumption about which step was interrupted or what that step
+costs. A per-step allowance would be more exact and would need the estimate
+broken down per step to be exact at all; the conservative figure is the one that
+cannot be wrong in the dangerous direction.
+
+**Tests.** `Interrupted_ChargeTest` covers the release recording the floor, and
+the sequence the finding names: interrupt a paid claim, restart it, finish
+successfully, and assert the settlement cannot fall below what was reserved.
+
+## F120-02 — Confirmed. Fixed, with one residual stated rather than implied.
+
+Three changes.
+
+**Every run-row write from a claimed step is fenced.** `Run::update()` adds the
+claim to its WHERE clause whenever this object holds one, so the article
+identity, the post link, the reservation, and the settled cost all refuse a
+worker whose claim has moved. `close()` does the same for the terminal
+transitions a step performs itself — the duplicate-topic skip the finding names
+could previously close a run its replacement was part way through.
+
+**Usage is incremented by the database, and is deliberately not fenced.** The
+counters were a read-modify-write, so two workers each wrote a total computed
+before the other's; `image_count` was set to 1 rather than counted, so two
+pictures were billed twice and recorded once. Both are now SQL increments. They
+are the one write a lost claim does not stop, and the reasoning is the mirror of
+F120-01's: a provider that answered has charged for the answer whoever asked, and
+refusing the write because the worker was replaced would delete the only record
+of real money. Adding is safe from any worker precisely because it is not an
+overwrite.
+
+**The two WordPress writes re-check the claim.** Post assembly and image
+attachment ask again immediately after the provider call and before the first
+side effect, which is where nearly all of the window is: the call is the long
+part, and the check costs one query.
+
+**What this does not do.** It does not make a media sideload or a
+`wp_insert_post()` conditional on a database row, so a claim lost in the instant
+between the check and the write is not caught. A generation token on WordPress
+writes would close that, and it would mean carrying a fence through
+`wp_insert_post`, `wp_insert_attachment`, `set_post_thumbnail`, and
+`wp_set_post_terms` — none of which take one — by wrapping each in a
+compare-and-swap of our own. That is a larger change than this round should make
+on the evidence, and the cost of the remaining case is a duplicate article rather
+than lost money, because the usage counters record both workers' spending. It is
+in the README as a known limit rather than left for the next review to find.
+
+**Tests.** `Stale_WorkerTest` drives a worker through a sweep and a replacement,
+then has it try to write the run row, close the run, assemble a post, and attach
+an image — and asserts the live worker is not impeded.
+
+## F120-03 — Confirmed. Fixed.
+
+The finding is exactly right about WordPress, including the detail that made the
+1.2.0 test unable to prove anything: `wp_set_object_terms()` inserts the
+relationship without inspecting the result, and skips an integer term ID that no
+longer exists. An array return is not evidence.
+
+`Taxonomy_Applier` now clears the object's term cache and reads the terms back,
+comparing what is on the post against what was asked for — by ID for categories,
+by slug for tag names — and reports what is missing. Both cases in the finding
+are now tested: a refused relationship insert, and a category deleted between the
+prompt being saved and the run reaching assembly.
+
+## F120-04 — Confirmed. Fixed.
+
+Preview was the one run that opened its own row, and it had drifted out of every
+contract added since.
+
+- It opens through `Generator::open_preview()` now, so it records the same
+  configuration fingerprint, resolved models, and rate snapshot as any other run,
+  and settles from them.
+- Runs record a kind. `Stall_Sweeper` closes an abandoned preview and does
+  nothing else: no re-arm, no failure notice, no attempt counter, because none of
+  those belong to a preview. Closing it is the whole of what it needs, since the
+  only thing it leaves behind is its reservation.
+- `Queued_Run_Handler::handle_step()` refuses to advance a preview at all, which
+  is the belt to that braces: an action armed by an earlier version cannot make
+  the sequence finalise a post that was never created.
+- The `succeed()` result is inspected. A preview that cannot be closed still
+  returns its article — the user paid for it and is waiting to read it — but it
+  no longer does so silently.
+
+A row written by 1.2.x has no recorded kind, so `kind()` falls back to the step
+column, which previews have always written. Tested.
+
+## F120-05 — Confirmed. Fixed.
+
+The active action set is read once per sweep and intersected with each page in
+PHP. Staleness across pages was already handled — `recover()` re-asks about the
+individual run before doing anything — so the per-page read bought nothing.
+
+The query is also joined to the plugin's action group. That adds nothing today,
+since the hook name is the plugin's own; it means a future collision cannot make
+the sweeper believe somebody else's action is advancing one of these runs.
+
+`Stall_SweeperTest` now fills more than one page and asserts the bulk read
+happens at most once. The per-run freshness check is a different statement and is
+bounded by the recovery batch rather than by pages scanned, which is the bound
+that was already correct.
+
+## F120-06 — Confirmed. Fixed, and the earlier claim withdrawn.
+
+The 1.2.0 response said the REST API, WP-CLI, and imports all reach the editor's
+save validation. That was wrong, and the review is right about why: the save
+handler returns before any validation unless the editor's nonce is present, the
+prompt post type is not exposed over REST at all, and `wp post meta update`
+submits no nonce.
+
+Rather than document the gap, the rules moved: `Prompt_Validator` holds both
+cross-field rules, the editor calls it, and it is hooked on `save_post` and at
+the end of any request that writes one of the meta keys it reads.
+
+**Why the end of the request rather than the write itself.** Correcting on each
+meta write fights the writer. Setting image mode to fallback and then setting the
+fallback image is the natural order — it is the order the editor's own save loop
+uses — and the moment between the two is a state the rules would correct, undoing
+a configuration that was about to become valid. Deferring means the rules judge
+what the writer finished.
+
+Two residuals, stated rather than implied: a write that bypasses the meta API
+(direct SQL) is not seen by anything in PHP, and a configuration split across two
+requests cannot be told apart from a writer that stopped half way. Run-time
+enforcement is the backstop for both, and it is the control that decides what
+actually gets published.
+
+---
+
+## On the Action Scheduler 3.9.3 → 4.1.0 note
+
+Recorded, not acted on in this release. A major version of the queue this plugin
+schedules everything through is not something to take on in the same release as
+six concurrency and accounting fixes, and there is no advisory against the locked
+version. It needs its own change, with the pipeline exercised against it.
+
+## What is still not covered
+
+Unchanged, and still in the README rather than implied: no test drives Action
+Scheduler's own dispatch; the concurrency tests run interleavings in one process
+rather than across two connections; CI runs against MySQL only; no test calls a
+live provider. Added to that list this round: the residual window in F120-02,
+which is a real limit rather than a missing test.

@@ -19,6 +19,7 @@ use AutoScribe\Pipeline\Run_Retention;
 use AutoScribe\Pipeline\Stall_Sweeper;
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Prompts\Prompt_Post_Type;
+use AutoScribe\Prompts\Prompt_Validator;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Scheduling\Scheduler;
 use WP_CLI;
@@ -151,6 +152,7 @@ final class Plugin {
 		add_action( Run_Retention::HOOK, array( Run_Retention::class, 'handle' ) );
 		add_action( Stall_Sweeper::HOOK, array( $this->sweeper, 'handle' ) );
 		add_action( 'save_post_' . Prompt_Post_Type::POST_TYPE, array( $this, 'rearm_prompt' ) );
+		( new Prompt_Validator( $this->providers ) )->register();
 		add_action( 'trashed_post', array( $this, 'cancel_prompt' ) );
 		add_action( 'untrashed_post', array( $this, 'rearm_prompt' ) );
 		add_action( 'init', array( Run_Retention::class, 'schedule' ), 20 );

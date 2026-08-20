@@ -11,7 +11,8 @@ use AutoScribe\Activation;
 use AutoScribe\Content\Article;
 use AutoScribe\Content\Article_Validator;
 use AutoScribe\Content\Topic_Deduplicator;
-use AutoScribe\Cost\Pricing_Table;
+use AutoScribe\Pipeline\Close_Result;
+use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Run;
 use AutoScribe\Pipeline\Step_Budget_Check;
 use AutoScribe\Pipeline\Step_Generate_Body;
@@ -288,7 +289,7 @@ final class Actions {
 			);
 		}
 
-		$run = Run::start( $prompt_id );
+		$run = ( new Generator( $this->providers ) )->open_preview( $prompt );
 
 		if ( is_wp_error( $run ) ) {
 			return $run;
@@ -316,9 +317,10 @@ final class Actions {
 			return $article;
 		}
 
-		$run->record_step( 'preview' );
+		$run->record_step( Run::KIND_PREVIEW );
 
-		$settled = $run->settle_cost( new Pricing_Table(), $run->grounded_calls() );
+		// Null, so the preview settles at the rates it was checked against.
+		$settled = $run->settle_cost( null, $run->grounded_calls() );
 
 		if ( is_wp_error( $settled ) ) {
 			return $settled;
@@ -329,8 +331,20 @@ final class Actions {
 		 * no post and armed nothing, so an open row is a tidiness problem the
 		 * sweeper will settle, not a reason to throw away work the user paid for
 		 * and is waiting to read.
+		 *
+		 * The result is inspected all the same. Discarding it meant the one thing
+		 * that knows a preview row was left open said nothing about it, and the
+		 * row's own error column — the place somebody looking at the run log would
+		 * find out — stayed empty.
 		 */
-		$run->succeed();
+		$closed = $run->succeed();
+
+		if ( Close_Result::Write_Failed === $closed ) {
+			Generator::send_state_notice(
+				$prompt_id,
+				__( 'A preview finished and its run row could not be closed.', 'autoscribe' )
+			);
+		}
 
 		return $article;
 	}

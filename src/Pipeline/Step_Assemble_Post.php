@@ -152,6 +152,24 @@ final class Step_Assemble_Post {
 			return $existing;
 		}
 
+		/*
+		 * Everything from here is a write to WordPress rather than to the run row,
+		 * so the claim cannot travel with it in a single statement. The claim is
+		 * therefore re-asked immediately before the first of them: this step is
+		 * entered after the body call, which is long enough for a stall sweep to
+		 * have judged this worker gone and started a replacement, and two workers
+		 * assembling one run means two posts or two sets of terms.
+		 *
+		 * See Step_Generate_Image::attach() for why this narrows the window rather
+		 * than closing it.
+		 */
+		if ( $run->lost_claim() ) {
+			return new WP_Error(
+				'autoscribe_claim_lost',
+				__( 'This run was restarted while its article was being written, so the worker that produced it stopped rather than assembling a post beside the replacement\'s.', 'autoscribe' )
+			);
+		}
+
 		$body = $this->sanitizer->sanitize_body( $article->raw_content_html() );
 
 		if ( '' === trim( wp_strip_all_tags( $body ) ) ) {

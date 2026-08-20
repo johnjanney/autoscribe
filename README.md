@@ -13,7 +13,7 @@ everything, and inserts the post as a draft or publishes it.
 
 | | |
 |---|---|
-| **Version** | 1.2.0 |
+| **Version** | 1.3.0 |
 | **Requires WordPress** | 6.4 |
 | **Requires PHP** | 8.1 |
 | **License** | GPL-2.0-or-later |
@@ -192,9 +192,9 @@ way to tell it apart from the rest of the site.
 
 ## Status and known limitations
 
-Version 1.2.0. Four external audits have been run against this plugin, and all
-four found real defects; the findings, the fixes, and the findings rejected with
-evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 327 tests run
+Version 1.3.0. Five external audits have been run against this plugin, and all
+five found real defects; the findings, the fixes, and the findings rejected with
+evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 350 tests run
 against PHP 8.1, 8.2, and 8.3 on every push.
 
 Six things this plugin does not do the way the brief describes, all of them
@@ -256,6 +256,15 @@ The first item is the one that matters most:
   during development; nothing guards against the reverse.
 - Spend figures are estimates computed from reported token usage against a
   pricing table you maintain. They are not billing data.
+- **A worker that has been restarted can still finish its provider call.** The
+  stall sweep decides a worker is gone by whether anything is queued for its run,
+  which a slow worker inside a 120-second call looks exactly like. Everything
+  such a worker writes to the run row afterwards is refused, and the two places
+  that write to WordPress instead — the post and the featured image — re-check
+  before they start. What cannot be fenced is the instant between that check and
+  the write, so in a rare interleaving one run can pay for two articles' worth of
+  calls and keep one. The spending is counted either way, so the monthly cap sees
+  it; it is the duplication that is not fully prevented.
 - **A run whose ending the database will not accept is left open on purpose.**
   Reporting a run as finished when the write that finishes it was refused is how
   one article becomes two emails and two schedules, so the queue says nothing and

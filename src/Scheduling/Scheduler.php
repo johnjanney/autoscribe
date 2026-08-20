@@ -254,49 +254,103 @@ final class Scheduler {
 	 * @return array<int, true> The subset that has an action, keyed by run ID.
 	 */
 	public function runs_with_step_actions( array $run_ids ): array {
-		global $wpdb;
-
 		$run_ids = array_values( array_unique( array_map( 'intval', $run_ids ) ) );
 
 		if ( array() === $run_ids || ! $this->is_available() ) {
 			return array();
 		}
 
-		$table = $wpdb->prefix . 'actionscheduler_actions';
+		$active = $this->active_step_runs();
 
-		// The store may be the legacy post-based one, which has no such table.
-		if ( $table !== $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) ) {
+		if ( null === $active ) {
 			return $this->one_by_one( $run_ids );
 		}
 
-		$found = array();
-
-		foreach ( $run_ids as $run_id ) {
-			$found[ $run_id ] = true;
-		}
-
-		$rows = $wpdb->get_col(
-			$wpdb->prepare(
-				'SELECT args FROM %i WHERE hook = %s AND status IN ( %s, %s )',
-				$table,
-				self::HOOK_RUN_STEP,
-				\ActionScheduler_Store::STATUS_PENDING,
-				\ActionScheduler_Store::STATUS_RUNNING
-			)
-		);
-
 		$busy = array();
 
-		foreach ( (array) $rows as $args ) {
-			$decoded = json_decode( (string) $args, true );
-			$run_id  = is_array( $decoded ) ? (int) ( $decoded['run_id'] ?? 0 ) : 0;
-
-			if ( isset( $found[ $run_id ] ) ) {
+		foreach ( $run_ids as $run_id ) {
+			if ( isset( $active[ $run_id ] ) ) {
 				$busy[ $run_id ] = true;
 			}
 		}
 
 		return $busy;
+	}
+
+	/**
+	 * Returns every run with a queued or running step action, keyed by run ID.
+	 *
+	 * One query for the whole queue rather than one per page of candidates. The
+	 * statement was already unfiltered by run — the args are JSON, so the run ID
+	 * cannot be a WHERE clause — and calling it once per page therefore read the
+	 * same rows again for every page, up to twenty times a sweep on the busy
+	 * sites the paging exists for. The intersection with a page's candidates is
+	 * cheap; the read is not.
+	 *
+	 * Returns null when the answer cannot be had this way, which means the store
+	 * is the legacy post-based one or something has replaced it. The caller falls
+	 * back to asking about each run through the public API.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @return array<int, true>|null
+	 */
+	public function active_step_runs(): ?array {
+		global $wpdb;
+
+		if ( ! $this->is_available() ) {
+			return null;
+		}
+
+		$actions = $wpdb->prefix . 'actionscheduler_actions';
+		$groups  = $wpdb->prefix . 'actionscheduler_groups';
+
+		// The store may be the legacy post-based one, which has no such table.
+		if ( $actions !== $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $actions ) ) ) {
+			return null;
+		}
+
+		/*
+		 * Joined to the group as well as matched on the hook. The hook name is
+		 * this plugin's own, so the group adds nothing today; it costs one join
+		 * and means a future hook name collision cannot make the sweeper believe
+		 * somebody else's action is advancing one of these runs.
+		 */
+		$rows = $groups === $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $groups ) )
+			? $wpdb->get_col(
+				$wpdb->prepare(
+					'SELECT a.args FROM %i a INNER JOIN %i g ON a.group_id = g.group_id
+					WHERE a.hook = %s AND a.status IN ( %s, %s ) AND g.slug = %s',
+					$actions,
+					$groups,
+					self::HOOK_RUN_STEP,
+					\ActionScheduler_Store::STATUS_PENDING,
+					\ActionScheduler_Store::STATUS_RUNNING,
+					self::GROUP
+				)
+			)
+			: $wpdb->get_col(
+				$wpdb->prepare(
+					'SELECT args FROM %i WHERE hook = %s AND status IN ( %s, %s )',
+					$actions,
+					self::HOOK_RUN_STEP,
+					\ActionScheduler_Store::STATUS_PENDING,
+					\ActionScheduler_Store::STATUS_RUNNING
+				)
+			);
+
+		$active = array();
+
+		foreach ( (array) $rows as $args ) {
+			$decoded = json_decode( (string) $args, true );
+			$run_id  = is_array( $decoded ) ? (int) ( $decoded['run_id'] ?? 0 ) : 0;
+
+			if ( $run_id > 0 ) {
+				$active[ $run_id ] = true;
+			}
+		}
+
+		return $active;
 	}
 
 	/**

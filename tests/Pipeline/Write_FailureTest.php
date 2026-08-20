@@ -82,7 +82,7 @@ final class Write_FailureTest extends WP_UnitTestCase {
 
 		$prompt_id = $this->create_prompt();
 
-		$result = $this->with_refused( 'SET `text_model`', fn() => ( new Generator( new Provider_Registry() ) )->run( $prompt_id ) );
+		$result = $this->with_refused( 'input_tokens = input_tokens +', fn() => ( new Generator( new Provider_Registry() ) )->run( $prompt_id ) );
 
 		$this->assertWPError( $result );
 		$this->assertSame( 'autoscribe_usage_not_recorded', $result->get_error_code() );
@@ -121,7 +121,7 @@ final class Write_FailureTest extends WP_UnitTestCase {
 
 		add_filter( 'wp_mail', $count );
 
-		$result = $this->with_refused( "SET `status` = 'success'", fn() => ( new Generator( new Provider_Registry() ) )->run( $prompt_id ) );
+		$result = $this->with_all_refused( array( "SET `status` = 'success'", "SET status = 'success'" ), fn() => ( new Generator( new Provider_Registry() ) )->run( $prompt_id ) );
 
 		remove_filter( 'wp_mail', $count );
 
@@ -504,7 +504,7 @@ final class Write_FailureTest extends WP_UnitTestCase {
 
 		$sweeper = new Stall_Sweeper( new Scheduler(), $this->handler() );
 
-		$acted = $this->with_refused( 'SET `step`', fn() => $sweeper->handle() );
+		$acted = $this->with_refused( 'cost_floor = GREATEST', fn() => $sweeper->handle() );
 
 		$this->assertSame( 0, $acted, 'A run whose claim will not release is left for the next sweep.' );
 		$this->assertSame( 0, Run::load( $run_id )->sweeps(), 'No restart should have been spent.' );

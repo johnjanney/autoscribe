@@ -426,4 +426,51 @@ final class Stall_SweeperTest extends WP_UnitTestCase {
 			array( '%d' )
 		);
 	}
+	/**
+	 * One sweep reads the queue's active actions once, however many pages it scans.
+	 *
+	 * The statement cannot filter by run — Action Scheduler stores the arguments
+	 * as JSON — so it reads every pending or running step action there is. Doing
+	 * that once per page meant a busy site's five-minute recovery task read the
+	 * same rows again up to twenty times, on exactly the sites the paging exists
+	 * for.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @return void
+	 */
+	public function test_one_sweep_reads_the_action_table_once(): void {
+		$prompt_id = $this->create_prompt();
+
+		// Enough open runs to fill more than one page of the scan.
+		for ( $i = 0; $i < Stall_Sweeper::PAGE + 5; $i++ ) {
+			$this->age_run( $this->open_stale_run( $prompt_id ) );
+		}
+
+		$reads = 0;
+		$count = static function ( $query ) use ( &$reads ) {
+			$sql = (string) $query;
+
+			// The bulk read, which is the one that returns every active action's
+			// arguments. The per-run freshness check is a different statement and
+			// is bounded by the recovery batch rather than by the pages scanned.
+			if ( str_contains( $sql, 'args FROM' ) && str_contains( $sql, 'autoscribe_run_step' ) ) {
+				++$reads;
+			}
+
+			return $query;
+		};
+
+		add_filter( 'query', $count );
+
+		$this->sweeper()->handle();
+
+		remove_filter( 'query', $count );
+
+		$this->assertLessThanOrEqual(
+			1,
+			$reads,
+			'The active action set is read once for the sweep, not once per page.'
+		);
+	}
 }

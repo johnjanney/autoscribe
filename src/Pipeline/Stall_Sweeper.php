@@ -240,7 +240,16 @@ final class Stall_Sweeper {
 		 *
 		 * The page count bounds the work instead, so one sweep of a very busy
 		 * site is still a short request.
+		 *
+		 * The queue's active set is read once for the whole sweep rather than once
+		 * per page. The statement cannot filter by run — Action Scheduler stores
+		 * the arguments as JSON — so asking per page read the same rows again for
+		 * every page, up to twenty times, on exactly the busy sites the paging
+		 * exists for. Staleness across pages is already handled: recover()
+		 * re-asks about the individual run before it does anything.
 		 */
+		$active = $this->scheduler->active_step_runs();
+
 		for ( $page = 0; $page < self::MAX_PAGES; $page++ ) {
 			$candidates = Run::open_before( $cutoff, self::PAGE, $after );
 
@@ -251,7 +260,7 @@ final class Stall_Sweeper {
 				break;
 			}
 
-			$busy     = $this->scheduler->runs_with_step_actions( $candidates );
+			$busy     = null === $active ? $this->scheduler->runs_with_step_actions( $candidates ) : $active;
 			$observed = Run::steps_for( $candidates );
 
 			foreach ( $candidates as $run_id ) {
@@ -324,6 +333,21 @@ final class Stall_Sweeper {
 		if ( null === $run || Run::STATUS_RUNNING !== $run->status() ) {
 			// Closed between the query and here.
 			return false;
+		}
+
+		if ( $run->is_preview() ) {
+			/*
+			 * A preview is a run in every accounting sense and in no other: it
+			 * makes paid calls, holds a reservation, and creates no post. Sending
+			 * it down the ordinary recovery path put an article-shaped process
+			 * over the top of it — the queued handler finds no step left to take,
+			 * decides the run is ready to publish, and finalises a post that does
+			 * not exist, then concludes the *prompt*: a failure notice, a retry
+			 * decision, and a re-armed schedule, all for a button somebody pressed
+			 * once. Closing it here is the whole of what an abandoned preview
+			 * needs, because the only thing it left behind is its reservation.
+			 */
+			return $this->close_preview( $run, $observed );
 		}
 
 		$prompt = Prompt::load( $run->prompt_id() );
@@ -419,6 +443,38 @@ final class Stall_Sweeper {
 		if ( is_wp_error( $armed ) ) {
 			$this->give_up( $run, $prompt, $armed, $run->raw_step() );
 		}
+
+		return true;
+	}
+
+	/**
+	 * Closes an abandoned preview, and does nothing else.
+	 *
+	 * No re-arm, no failure notice, and no attempt counter: none of them belong
+	 * to a preview. Settling the row is what releases the reservation it made
+	 * against the monthly cap, which is the only lasting effect an abandoned
+	 * preview has.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @param Run    $run      Preview run to close.
+	 * @param string $observed Position this sweep saw the run at.
+	 * @return bool Whether this sweep closed it.
+	 */
+	private function close_preview( Run $run, string $observed ): bool {
+		$closed = $run->fail(
+			__( 'This preview stopped part-way and was closed. Whatever it had reserved against the monthly cap has been released. No post is created by a preview, so nothing else was affected.', 'autoscribe' ),
+			null,
+			$run->grounded_calls(),
+			$observed,
+			str_starts_with( $observed, Run::CLAIM_PREFIX )
+		);
+
+		if ( ! $closed->ended() ) {
+			return false;
+		}
+
+		$this->scheduler->cancel_step_actions( $run->id() );
 
 		return true;
 	}

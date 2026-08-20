@@ -123,6 +123,15 @@
 		detail of it.
 		-->
 		<exclude-pattern>*/tests/Pipeline/Schema_UpgradeTest.php</exclude-pattern>
+		<!--
+		The interrupted-charge tests backdate a run so the sweeper will judge it,
+		and read the settled cost column back.
+		-->
+		<exclude-pattern>*/tests/Pipeline/Interrupted_ChargeTest.php</exclude-pattern>
+		<!--
+		The preview tests backdate a preview row so the sweeper will judge it.
+		-->
+		<exclude-pattern>*/tests/Pipeline/Preview_RunTest.php</exclude-pattern>
 	</rule>
 
 	<!--

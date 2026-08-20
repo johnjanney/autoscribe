@@ -28,6 +28,22 @@ defined( 'ABSPATH' ) || exit;
 final class Run {
 
 	/**
+	 * Payload value marking an ordinary generation run.
+	 *
+	 * @since 1.3.0
+	 * @var string
+	 */
+	public const KIND_RUN = 'run';
+
+	/**
+	 * Payload value marking a preview, which produces an article and no post.
+	 *
+	 * @since 1.3.0
+	 * @var string
+	 */
+	public const KIND_PREVIEW = 'preview';
+
+	/**
 	 * Status for a run currently executing.
 	 *
 	 * @since 0.3.0
@@ -364,6 +380,23 @@ final class Run {
 	}
 
 	/**
+	 * Whether a claim this object took has since been taken away from it.
+	 *
+	 * Deliberately different from the negation of holds_claim(). An object that
+	 * never claimed anything holds no claim and has not lost one — a preview, a
+	 * step driven directly, an object that only reads. Asking "have I lost it"
+	 * rather than "do I hold it" is what lets a guard sit in a step without
+	 * assuming the step is only ever reached through the queue.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @return bool
+	 */
+	public function lost_claim(): bool {
+		return null !== $this->claim && $this->raw_step() !== $this->claim;
+	}
+
+	/**
 	 * Records the article identity once the body call has returned.
 	 *
 	 * @since 0.3.0
@@ -385,10 +418,18 @@ final class Run {
 	/**
 	 * Adds the token usage of one text call to the run's running total.
 	 *
-	 * Every paid call accumulates. This replaced an implementation that assigned
-	 * rather than added, which meant the body call overwrote the proposal call's
-	 * tokens and the settled cost silently omitted every proposal the run had
-	 * paid for. A cap fed by an under-count is not a cap.
+	 * The database does the adding, and that is the point. Accumulating in PHP and
+	 * writing the total back is a read-modify-write, so two workers on one run —
+	 * a slow one and the replacement that took its claim — each write a total
+	 * computed from a row they read before the other wrote, and one call's tokens
+	 * disappear. The counter that the monthly cap is computed from is the last
+	 * place to keep a lost update.
+	 *
+	 * Deliberately **not** fenced by the claim, unlike every other write this
+	 * object makes. A provider that answered has charged for the answer, whoever
+	 * asked and whatever has happened to their claim since; refusing the write
+	 * because the worker was replaced would delete the only record of real money.
+	 * Adding is safe from any worker precisely because it is not an overwrite.
 	 *
 	 * @since 0.3.0
 	 *
@@ -398,11 +439,16 @@ final class Run {
 	 * @return bool True when the usage reached the database.
 	 */
 	public function record_text_usage( string $model, int $input_tokens, int $output_tokens ): bool {
+		global $wpdb;
+
 		$this->load_usage();
 
+		$input  = max( 0, $input_tokens );
+		$output = max( 0, $output_tokens );
+
 		$this->usage['text_model']    = $model;
-		$this->usage['input_tokens']  = (int) $this->usage['input_tokens'] + max( 0, $input_tokens );
-		$this->usage['output_tokens'] = (int) $this->usage['output_tokens'] + max( 0, $output_tokens );
+		$this->usage['input_tokens']  = (int) $this->usage['input_tokens'] + $input;
+		$this->usage['output_tokens'] = (int) $this->usage['output_tokens'] + $output;
 
 		/*
 		 * The counters are kept in memory whether or not the write lands, and the
@@ -412,14 +458,18 @@ final class Run {
 		 * still books the money. Reporting success and carrying on would lose it:
 		 * the next queued action loads a fresh run and reads the row.
 		 */
-		return $this->update(
-			array(
-				'text_model'    => $model,
-				'input_tokens'  => (int) $this->usage['input_tokens'],
-				'output_tokens' => (int) $this->usage['output_tokens'],
-			),
-			array( '%s', '%d', '%d' )
+		$written = $wpdb->query(
+			$wpdb->prepare(
+				'UPDATE %i SET text_model = %s, input_tokens = input_tokens + %d, output_tokens = output_tokens + %d WHERE id = %d',
+				Activation::table_name(),
+				$model,
+				$input,
+				$output,
+				$this->id
+			)
 		);
+
+		return false !== $written;
 	}
 
 	/**
@@ -440,26 +490,37 @@ final class Run {
 	/**
 	 * Records that an image was generated.
 	 *
+	 * Counts rather than sets, for the reason record_text_usage() gives. Setting
+	 * it to one meant two pictures — a stale worker's and its replacement's —
+	 * were billed twice and recorded once, so the cap saw half of what the site
+	 * was charged. A run should not normally buy two, and the counter is not the
+	 * place to assume it did not.
+	 *
 	 * @since 0.3.0
 	 *
 	 * @param string $model Image model used.
 	 * @return bool True when the usage reached the database.
 	 */
 	public function record_image( string $model ): bool {
+		global $wpdb;
+
 		$this->load_usage();
 
 		$this->usage['image_model'] = $model;
-		$this->usage['image_count'] = 1;
+		$this->usage['image_count'] = (int) $this->usage['image_count'] + 1;
 
 		// See record_text_usage(): a picture the provider billed for is billed
 		// for whether or not the row accepts the counter.
-		return $this->update(
-			array(
-				'image_model' => $model,
-				'image_count' => 1,
-			),
-			array( '%s', '%d' )
+		$written = $wpdb->query(
+			$wpdb->prepare(
+				'UPDATE %i SET image_model = %s, image_count = image_count + 1 WHERE id = %d',
+				Activation::table_name(),
+				$model,
+				$this->id
+			)
 		);
+
+		return false !== $written;
 	}
 
 	/**
@@ -844,22 +905,47 @@ final class Run {
 		 *
 		 * Written out rather than passed to wpdb::update(), which cannot express a
 		 * function in its WHERE. One static statement with placeholders, per D-26.
+		 *
+		 * Two statements rather than one with defaulted columns, because the
+		 * ending that carries no cost must not write one. A single statement with
+		 * `cost_cents = %d` and a zero default did exactly that the moment this
+		 * path stopped being fail()'s alone: a successful run, whose cost the
+		 * caller had just settled, was closed with the settlement replaced by
+		 * nothing.
+		 *
+		 * There are exactly two shapes and no more: an ending that failed or was
+		 * skipped states a reason and a cost, and a successful ending states
+		 * neither. Both are static statements with bound values, per D-26.
 		 */
-		$updated = $wpdb->query(
-			$wpdb->prepare(
-				'UPDATE %i SET status = %s, error = %s, cost_cents = %d, finished_at = %s
-				WHERE id = %d AND status = %s AND COALESCE( step, %s ) = %s',
-				Activation::table_name(),
-				(string) $data['status'],
-				(string) ( $data['error'] ?? '' ),
-				(int) ( $data['cost_cents'] ?? 0 ),
-				(string) $data['finished_at'],
-				$this->id,
-				self::STATUS_RUNNING,
-				'',
-				$expected_step
+		$updated = array_key_exists( 'cost_cents', $data )
+			? $wpdb->query(
+				$wpdb->prepare(
+					'UPDATE %i SET status = %s, error = %s, cost_cents = %d, finished_at = %s
+					WHERE id = %d AND status = %s AND COALESCE( step, %s ) = %s',
+					Activation::table_name(),
+					(string) $data['status'],
+					(string) ( $data['error'] ?? '' ),
+					(int) $data['cost_cents'],
+					(string) $data['finished_at'],
+					$this->id,
+					self::STATUS_RUNNING,
+					'',
+					$expected_step
+				)
 			)
-		);
+			: $wpdb->query(
+				$wpdb->prepare(
+					'UPDATE %i SET status = %s, finished_at = %s
+					WHERE id = %d AND status = %s AND COALESCE( step, %s ) = %s',
+					Activation::table_name(),
+					(string) $data['status'],
+					(string) $data['finished_at'],
+					$this->id,
+					self::STATUS_RUNNING,
+					'',
+					$expected_step
+				)
+			);
 
 		if ( false === $updated ) {
 			return Close_Result::Write_Failed;
@@ -964,21 +1050,58 @@ final class Run {
 			return null;
 		}
 
-		$raw = $observed;
-
-		$released = $wpdb->update(
-			Activation::table_name(),
-			array( 'step' => self::completed_step( $raw ) ),
-			array(
-				'id'     => $this->id,
-				'step'   => $raw,
-				'status' => self::STATUS_RUNNING,
-			),
-			array( '%s' ),
-			array( '%d', '%s', '%s' )
+		/*
+		 * The release also raises the run's cost floor to whatever it currently
+		 * has reserved, in the same statement, and that is the whole of the fix
+		 * for a charge lost across a restart.
+		 *
+		 * A claim is only ever released because the worker holding it did not come
+		 * back. That worker may have been inside a paid call: the provider
+		 * answered, was billed for, and the request died before the counter
+		 * reached the row. Nothing afterwards can discover that — the replacement
+		 * records only its own usage, and settlement then measures a run that
+		 * really did cost more than it can show. Version 1.2.0 kept the estimate
+		 * only when a sweep gave up on such a run, which protected the case
+		 * nobody minds losing and not the one everybody wants to succeed.
+		 *
+		 * The floor is deliberately the reservation rather than a guess at the
+		 * interrupted call: the reservation is the figure this run was already
+		 * checked against the cap for, so holding it costs the site nothing it had
+		 * not already set aside, and an unrecorded charge costs it the cap.
+		 * GREATEST, and in the same conditional update, so two sweeps racing
+		 * cannot lower it and a released claim can never be recorded without it.
+		 *
+		 * Written out rather than passed to wpdb::update(), which cannot express a
+		 * function in a SET clause. One static statement with placeholders, per
+		 * D-26.
+		 */
+		$released = $wpdb->query(
+			$wpdb->prepare(
+				'UPDATE %i SET step = %s, cost_floor = GREATEST( cost_floor, cost_cents )
+				WHERE id = %d AND step = %s AND status = %s',
+				Activation::table_name(),
+				self::completed_step( $observed ),
+				$this->id,
+				$observed,
+				self::STATUS_RUNNING
+			)
 		);
 
 		return is_numeric( $released ) && (int) $released > 0;
+	}
+
+	/**
+	 * Returns the least this run may settle for.
+	 *
+	 * Zero for a run that has never been interrupted, which is every run that
+	 * completes normally. See release_claim() for what raises it.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @return int Cents.
+	 */
+	public function cost_floor(): int {
+		return max( 0, (int) $this->column( 'cost_floor' ) );
 	}
 
 	/**
@@ -1376,6 +1499,39 @@ final class Run {
 	}
 
 	/**
+	 * Returns what kind of run this row records.
+	 *
+	 * Falls back to the step column for a row opened before 1.3.0 recorded a
+	 * kind. A preview has always written "preview" there, so a run in flight
+	 * across the upgrade is still recognisable — which matters, because the whole
+	 * point of the distinction is what recovery does with the row.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @return string
+	 */
+	public function kind(): string {
+		$stored = (string) ( $this->payload()['kind'] ?? '' );
+
+		if ( '' !== $stored ) {
+			return $stored;
+		}
+
+		return self::KIND_PREVIEW === $this->step() ? self::KIND_PREVIEW : self::KIND_RUN;
+	}
+
+	/**
+	 * Whether this row records a preview rather than a generation run.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @return bool
+	 */
+	public function is_preview(): bool {
+		return self::KIND_PREVIEW === $this->kind();
+	}
+
+	/**
 	 * Returns the rate table this run was opened under.
 	 *
 	 * @since 1.2.0
@@ -1668,19 +1824,30 @@ final class Run {
 	private function measured_cents( ?Pricing_Table $pricing, int $grounded_calls = 0 ): int {
 		$this->load_usage( true );
 
+		/*
+		 * The floor is applied to every ending, including the one that measures
+		 * nothing. A run interrupted inside its first paid call has no usage to
+		 * measure and may still have been charged, which is precisely the case the
+		 * floor exists for — see release_claim().
+		 */
+		$floor = $this->cost_floor();
+
 		if ( ! $this->has_usage() ) {
-			return 0;
+			return $floor;
 		}
 
 		$table = $pricing instanceof Pricing_Table ? $pricing : $this->pricing_table();
 
-		return $table->cost_cents(
-			(string) $this->usage['text_model'],
-			(int) $this->usage['input_tokens'],
-			(int) $this->usage['output_tokens'],
-			(string) $this->usage['image_model'],
-			(int) $this->usage['image_count'],
-			$grounded_calls
+		return max(
+			$floor,
+			$table->cost_cents(
+				(string) $this->usage['text_model'],
+				(int) $this->usage['input_tokens'],
+				(int) $this->usage['output_tokens'],
+				(string) $this->usage['image_model'],
+				(int) $this->usage['image_count'],
+				$grounded_calls
+			)
 		);
 	}
 
@@ -1765,6 +1932,19 @@ final class Run {
 		 * not claimed yet simply finds the run closed and stands down without
 		 * spending anything.
 		 */
+		if ( null === $expected_step && null !== $this->claim ) {
+			/*
+			 * A step that ends the run — a budget skip, a duplicate topic, a
+			 * failure the step itself closes on — is making a terminal decision
+			 * about work it believes it is performing. If its claim has moved, the
+			 * work belongs to somebody else and so does the decision: an unfenced
+			 * close here let a superseded worker end a run its replacement was
+			 * part way through. Defaulting to the claim makes the ordinary case
+			 * safe without every call site having to remember.
+			 */
+			$expected_step = $this->claim;
+		}
+
 		if ( null !== $expected_step ) {
 			return $this->close_at( $data, $expected_step );
 		}
@@ -1842,12 +2022,26 @@ final class Run {
 	private function update( array $data, array $formats ): bool {
 		global $wpdb;
 
+		/*
+		 * Under the claim, when this object holds one. Every write a claimed step
+		 * makes is a statement about work that step performed, so a worker whose
+		 * claim has been taken away has no business making any of them: its
+		 * replacement is doing the same step, and the loser's row ID is the same
+		 * row ID. Only the usage counters are exempt, and they do not come through
+		 * here — see record_text_usage() for why money is recorded whoever spent it.
+		 */
+		$where   = null === $this->claim
+			? array( 'id' => $this->id )
+			: array(
+				'id'   => $this->id,
+				'step' => $this->claim,
+			);
 		$updated = $wpdb->update(
 			Activation::table_name(),
 			$data,
-			array( 'id' => $this->id ),
+			$where,
 			$formats,
-			array( '%d' )
+			null === $this->claim ? array( '%d' ) : array( '%d', '%s' )
 		);
 
 		/*
@@ -1856,7 +2050,15 @@ final class Run {
 		 * what was written. Only an explicit false is a failed write, and only the
 		 * reservation currently acts on it, because that is the write whose loss
 		 * costs money rather than a log entry.
+		 *
+		 * With the claim in the condition there is a third reading — the claim has
+		 * moved — so a claimed write that changed nothing asks the row whose claim
+		 * it is before believing itself. Same reasoning as write_payload().
 		 */
-		return false !== $updated;
+		if ( false === $updated ) {
+			return false;
+		}
+
+		return null === $this->claim || (int) $updated > 0 || $this->holds_claim();
 	}
 }

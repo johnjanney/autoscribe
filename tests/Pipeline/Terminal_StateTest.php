@@ -113,7 +113,7 @@ final class Terminal_StateTest extends WP_UnitTestCase {
 		$this->assertGreaterThan( 0, $reserved, 'The run must hold a reservation before the paid step.' );
 
 		$this->with_all_refused(
-			array( 'SET `text_model`', "SET `status` = 'failed'" ),
+			array( 'input_tokens = input_tokens +', "SET `status` = 'failed'", "SET status = 'failed'" ),
 			static function () use ( $handler, $run_id ) {
 				$handler->handle_step( $run_id );
 			}
@@ -174,7 +174,7 @@ final class Terminal_StateTest extends WP_UnitTestCase {
 		update_post_meta( $prompt_id, '_autoscribe_enabled', 0 );
 
 		$this->with_all_refused(
-			array( "SET `status` = 'failed'" ),
+			array( "SET `status` = 'failed'", "SET status = 'failed'" ),
 			static function () use ( $handler, $run_id ) {
 				$handler->handle_step( $run_id );
 			}
@@ -229,7 +229,7 @@ final class Terminal_StateTest extends WP_UnitTestCase {
 		$handler->handle_step( $run_id );
 
 		$this->with_all_refused(
-			array( 'SET `text_model`', "SET `status` = 'failed'" ),
+			array( 'input_tokens = input_tokens +', "SET `status` = 'failed'", "SET status = 'failed'" ),
 			static function () use ( $handler, $run_id ) {
 				$handler->handle_step( $run_id );
 				// A second pass meets the same fault and must not mail again.

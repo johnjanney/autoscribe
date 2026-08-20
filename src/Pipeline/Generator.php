@@ -369,6 +369,7 @@ final class Generator {
 		 */
 		$opened = array_merge(
 			array(
+				'kind'         => Run::KIND_RUN,
 				'config'       => $prompt->config_fingerprint(),
 				'force_review' => Settings::force_review() ? 1 : 0,
 			),
@@ -394,6 +395,54 @@ final class Generator {
 		$adopted = $this->adopt( $prompt_id, $run, $attempt );
 
 		return is_wp_error( $adopted ) ? $adopted : $run;
+	}
+
+	/**
+	 * Opens a run for a preview, which produces an article and no post.
+	 *
+	 * A preview is a real run — section 9.2 charges it against the budget and
+	 * logs it — and until 1.3.0 it was the only one that opened its row by hand.
+	 * That meant it missed everything the run contract had since acquired: the
+	 * models and rates snapshot, so a pricing edit could have it checked against
+	 * one table and settled against another, and any statement of what kind of
+	 * run it was, so a stall sweep treated an abandoned preview as an unfinished
+	 * article and put it through post finalisation. A preview has no post to
+	 * finalise.
+	 *
+	 * Opening previews here instead means one place decides what a run row
+	 * contains, and the difference between the two kinds is recorded in the row
+	 * rather than inferred from the step column afterwards.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @param Prompt $prompt Prompt being previewed.
+	 * @return Run|WP_Error
+	 */
+	public function open_preview( Prompt $prompt ): Run|WP_Error {
+		$run = Run::start( $prompt->id() );
+
+		if ( is_wp_error( $run ) ) {
+			return $run;
+		}
+
+		$opened = array_merge(
+			array(
+				'kind'   => Run::KIND_PREVIEW,
+				'config' => $prompt->config_fingerprint(),
+			),
+			$this->snapshot( $prompt )
+		);
+
+		if ( $run->merge_payload( $opened ) ) {
+			return $run;
+		}
+
+		$error = new WP_Error(
+			'autoscribe_state_not_recorded',
+			__( 'The settings this preview was checked against could not be written to the run log, so the preview was stopped rather than starting without a record of them.', 'autoscribe' )
+		);
+
+		return Close_Result::annotate( $error, $run->fail( $error->get_error_message() ) );
 	}
 
 	/**

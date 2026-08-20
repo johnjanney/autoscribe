@@ -150,6 +150,17 @@ final class Queued_Run_Handler {
 			return;
 		}
 
+		if ( $run->is_preview() ) {
+			/*
+			 * Nothing should queue a step for a preview, and this is what happens
+			 * if something does: the sequence would find no step left to take,
+			 * treat the run as ready to publish, and finalise a post that was
+			 * never created. The stall sweep closes abandoned previews; this
+			 * refuses to be the thing that finishes one.
+			 */
+			return;
+		}
+
 		$prompt_id = $run->prompt_id();
 		$prompt    = Prompt::load( $prompt_id );
 
