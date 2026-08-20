@@ -9,6 +9,7 @@ namespace AutoScribe\Cost;
 
 use AutoScribe\Activation;
 use AutoScribe\Pipeline\Run;
+use AutoScribe\Pipeline\Step_Propose_Topic;
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Providers\Model_Resolver;
 use AutoScribe\Providers\Provider_Registry;
@@ -87,12 +88,15 @@ final class Budget_Guard {
 	/**
 	 * Output token ceiling assumed for one topic proposal call.
 	 *
-	 * Matches the ceiling Step_Propose_Topic actually requests.
+	 * Read from the step rather than repeated, because it stopped matching the
+	 * moment the step's own ceiling changed: 1.13.1 raised the request to 2048 to
+	 * leave a reasoning model room to think, and this stayed at 512, so every
+	 * reservation was built on a bound the proposal call was free to exceed.
 	 *
 	 * @since 1.0.1
 	 * @var int
 	 */
-	public const PROPOSAL_OUTPUT_ALLOWANCE = 512;
+	public const PROPOSAL_OUTPUT_ALLOWANCE = Step_Propose_Topic::PROPOSAL_TOKENS;
 
 	/**
 	 * Input token allowance assumed for one topic proposal call.

@@ -83,16 +83,129 @@ final class Interrupted_ChargeTest extends WP_UnitTestCase {
 		$run_id = $run->id();
 
 		$this->assertTrue( $run->reserve_cost( 250 ) );
-		$this->assertTrue( $run->claim_step( '' ) );
+
+		// Claiming the step after the budget check: the worker is inside the
+		// first paid call of the run.
+		$this->assertTrue( $run->record_step( 'budget_check' ) );
+		$this->assertTrue( $run->claim_step( 'budget_check' ) );
 		$this->assertSame( 0, Run::load( $run_id )->cost_floor(), 'Nothing is floored until a claim is lost.' );
 
 		$observed = Run::load( $run_id )->raw_step();
 
 		$this->assertTrue( Run::load( $run_id )->release_claim( $observed ) );
+
+		$floor = Run::load( $run_id )->cost_floor();
+
 		$this->assertSame(
-			250,
+			$this->proposal_allowance( $run_id ),
+			$floor,
+			'The floor is what the interrupted call could have cost, not what the whole run could have.'
+		);
+		$this->assertGreaterThan( 0, $floor );
+		$this->assertLessThan( 250, $floor, 'Which is a good deal less than the reservation.' );
+	}
+
+	/**
+	 * A worker lost before it could spend anything floors nothing.
+	 *
+	 * The budget check makes no provider call, so a run interrupted there has
+	 * nothing hidden and nothing to hold against the month.
+	 *
+	 * @since 1.13.3
+	 *
+	 * @return void
+	 */
+	public function test_a_claim_lost_before_any_paid_call_floors_nothing(): void {
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+
+		$run_id = $run->id();
+
+		$this->assertTrue( $run->reserve_cost( 250 ) );
+		$this->assertTrue( $run->claim_step( '' ) );
+		$this->assertTrue( Run::load( $run_id )->release_claim( Run::load( $run_id )->raw_step() ) );
+		$this->assertSame( 0, Run::load( $run_id )->cost_floor() );
+	}
+
+	/**
+	 * The floor covers what the run recorded as well as what it may have hidden.
+	 *
+	 * @since 1.13.3
+	 *
+	 * @return void
+	 */
+	public function test_the_floor_sits_on_top_of_what_was_already_recorded(): void {
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+
+		$run_id = $run->id();
+
+		$this->assertTrue( $run->reserve_cost( 250 ) );
+		$this->assertTrue( $run->record_text_usage( 'claude-sonnet-5', 10000, 10000 ) );
+		$this->assertTrue( $run->record_step( 'budget_check' ) );
+		$this->assertTrue( Run::load( $run_id )->claim_step( 'budget_check' ) );
+
+		$recorded = ( new Pricing_Table() )->cost_cents( 'claude-sonnet-5', 10000, 10000 );
+
+		$this->assertGreaterThan( 0, $recorded );
+
+		$loaded = Run::load( $run_id );
+
+		$this->assertTrue( $loaded->release_claim( $loaded->raw_step() ) );
+		$this->assertSame(
+			$recorded + $this->proposal_allowance( $run_id ),
 			Run::load( $run_id )->cost_floor(),
-			'The reservation standing when the claim was released is the floor.'
+			'What is already known plus what the interruption could have hidden.'
+		);
+	}
+
+	/**
+	 * A run whose prompt has gone keeps the whole reservation.
+	 *
+	 * The step at risk can only be priced against the prompt it belongs to. With
+	 * no prompt there is no bound, and the conservative answer is the old one.
+	 *
+	 * @since 1.13.3
+	 *
+	 * @return void
+	 */
+	public function test_a_run_whose_prompt_is_gone_keeps_the_reservation(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+
+		$run_id = $run->id();
+
+		$this->assertTrue( $run->reserve_cost( 250 ) );
+		$this->assertTrue( $run->record_step( 'budget_check' ) );
+		$this->assertTrue( $run->claim_step( 'budget_check' ) );
+
+		wp_delete_post( $prompt_id, true );
+
+		$loaded = Run::load( $run_id );
+
+		$this->assertTrue( $loaded->release_claim( $loaded->raw_step() ) );
+		$this->assertSame( 250, Run::load( $run_id )->cost_floor() );
+	}
+
+	/**
+	 * Prices one topic proposal call the way the allowance does.
+	 *
+	 * @since 1.13.3
+	 *
+	 * @param int $run_id Run whose rates and model apply.
+	 * @return int Cents.
+	 */
+	private function proposal_allowance( int $run_id ): int {
+		$run = Run::load( $run_id );
+
+		return $run->pricing_table()->cost_cents(
+			$run->resolved_model( 'text' ),
+			Budget_Guard::PROPOSAL_INPUT_ALLOWANCE,
+			Budget_Guard::PROPOSAL_OUTPUT_ALLOWANCE
 		);
 	}
 
@@ -148,7 +261,11 @@ final class Interrupted_ChargeTest extends WP_UnitTestCase {
 		$sweeper = new Stall_Sweeper( new Scheduler(), $handler );
 
 		$this->assertTrue( $sweeper->recover( $run_id, Run::load( $run_id )->raw_step() ) );
-		$this->assertSame( $reserved, Run::load( $run_id )->cost_floor() );
+
+		$floor = Run::load( $run_id )->cost_floor();
+
+		$this->assertGreaterThan( 0, $floor, 'The interrupted call is held against the run.' );
+		$this->assertLessThan( $reserved, $floor, 'But only that call, not the whole reservation.' );
 
 		// The replacement finishes the run normally.
 		for ( $i = 0; $i < 8; $i++ ) {
@@ -165,9 +282,14 @@ final class Interrupted_ChargeTest extends WP_UnitTestCase {
 
 		$this->assertSame( Run::STATUS_SUCCESS, $row['status'] );
 		$this->assertGreaterThanOrEqual(
+			$floor,
+			(int) $row['cost_cents'],
+			'A run interrupted inside a paid call must not settle below what that call could have cost.'
+		);
+		$this->assertLessThan(
 			$reserved,
 			(int) $row['cost_cents'],
-			'A run interrupted inside a paid call must not settle below what it had reserved.'
+			'And a run that then finished normally is not billed for a pipeline it did not repeat.'
 		);
 	}
 
@@ -918,7 +1040,9 @@ final class Interrupted_ChargeTest extends WP_UnitTestCase {
 		// A worker holds the step; a second object is about to close the run.
 		$held = Run::load( $run->id() );
 
-		$this->assertTrue( $held->claim_step( '' ) );
+		// A paid step, so the release leaves a floor worth racing against.
+		$this->assertTrue( $held->record_step( 'budget_check' ) );
+		$this->assertTrue( $held->claim_step( 'budget_check' ) );
 
 		$closer    = Run::load( $run->id() );
 		$observed  = Run::load( $run->id() )->raw_step();
@@ -927,7 +1051,7 @@ final class Interrupted_ChargeTest extends WP_UnitTestCase {
 			$sql = (string) $query;
 
 			// The sweep releases the claim in the moment before the close lands,
-			// which is what raises the floor to the reservation.
+			// which is what raises the floor.
 			if ( ! $released && str_contains( $sql, "SET status = 'failed'" ) ) {
 				$released = true;
 
@@ -946,11 +1070,13 @@ final class Interrupted_ChargeTest extends WP_UnitTestCase {
 		$this->assertTrue( $released, 'The interleaving must have happened for this to test anything.' );
 		$this->assertTrue( $closed->ended() );
 
-		$row = Run::latest_for_prompt( $prompt_id );
+		$row   = Run::latest_for_prompt( $prompt_id );
+		$floor = (int) $row['cost_floor'];
 
-		$this->assertSame( 250, (int) $row['cost_floor'], 'The release raised the floor.' );
+		$this->assertSame( $this->proposal_allowance( $run->id() ), $floor, 'The release raised the floor.' );
+		$this->assertGreaterThan( 0, $floor );
 
-		if ( (int) $row['cost_cents'] >= 250 ) {
+		if ( (int) $row['cost_cents'] >= $floor ) {
 			// Priced at or above the floor already, which is the other safe answer.
 			$this->assertSame( 0, (int) $row['cost_stale'] );
 
@@ -965,7 +1091,7 @@ final class Interrupted_ChargeTest extends WP_UnitTestCase {
 
 		$this->assertTrue( Run::settle_all_unsettled() );
 		$this->assertGreaterThanOrEqual(
-			250,
+			$floor,
 			(int) Run::latest_for_prompt( $prompt_id )['cost_cents'],
 			'And the repair brings it up to the floor.'
 		);

@@ -10,6 +10,7 @@ namespace AutoScribe\Pipeline;
 use AutoScribe\Activation;
 use AutoScribe\Cost\Pricing_Table;
 use AutoScribe\Cost\Spend_Lock;
+use AutoScribe\Cost\Step_Allowance;
 use AutoScribe\Providers\Model_Resolver;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -1232,10 +1233,17 @@ final class Run {
 		 * only when a sweep gave up on such a run, which protected the case
 		 * nobody minds losing and not the one everybody wants to succeed.
 		 *
-		 * The floor is deliberately the reservation rather than a guess at the
-		 * interrupted call: the reservation is the figure this run was already
-		 * checked against the cap for, so holding it costs the site nothing it had
-		 * not already set aside, and an unrecorded charge costs it the cap.
+		 * The floor is what this run has recorded plus what the one interrupted
+		 * step could have hidden, and never more than the reservation. Until
+		 * 1.13.3 it was the whole reservation, which bounds the pipeline rather
+		 * than the accident: a run interrupted once and then completing normally
+		 * reported around three times what it spent and held that much of the
+		 * monthly cap, for ever. A worker can only be inside one step, and the
+		 * claim names which — see Step_Allowance. Where that step cannot be
+		 * identified, or its prompt has gone, the reservation is still the answer:
+		 * an over-estimate costs the site a little of a cap it had already set
+		 * aside, and an unrecorded charge costs it the cap.
+		 *
 		 * GREATEST, and in the same conditional update, so two sweeps racing
 		 * cannot lower it and a released claim can never be recorded without it.
 		 *
@@ -1249,18 +1257,36 @@ final class Run {
 		 * function in a SET clause. One static statement with placeholders, per
 		 * D-26.
 		 */
-		$released = $wpdb->query(
-			$wpdb->prepare(
-				'UPDATE %i SET step = %s, cost_floor = GREATEST( cost_floor, cost_cents ),
-				usage_revision = usage_revision + 1
-				WHERE id = %d AND step = %s AND status = %s',
-				Activation::table_name(),
-				self::completed_step( $observed ),
-				$this->id,
-				$observed,
-				self::STATUS_RUNNING
-			)
-		);
+		$bounded = $this->interrupted_floor( $observed );
+
+		if ( null === $bounded ) {
+			$released = $wpdb->query(
+				$wpdb->prepare(
+					'UPDATE %i SET step = %s, cost_floor = GREATEST( cost_floor, cost_cents ),
+					usage_revision = usage_revision + 1
+					WHERE id = %d AND step = %s AND status = %s',
+					Activation::table_name(),
+					self::completed_step( $observed ),
+					$this->id,
+					$observed,
+					self::STATUS_RUNNING
+				)
+			);
+		} else {
+			$released = $wpdb->query(
+				$wpdb->prepare(
+					'UPDATE %i SET step = %s, cost_floor = GREATEST( cost_floor, LEAST( cost_cents, %d ) ),
+					usage_revision = usage_revision + 1
+					WHERE id = %d AND step = %s AND status = %s',
+					Activation::table_name(),
+					self::completed_step( $observed ),
+					$bounded,
+					$this->id,
+					$observed,
+					self::STATUS_RUNNING
+				)
+			);
+		}
 
 		return is_numeric( $released ) && (int) $released > 0;
 	}
@@ -1277,6 +1303,70 @@ final class Run {
 	 */
 	public function cost_floor(): int {
 		return max( 0, (int) $this->column( 'cost_floor' ) );
+	}
+
+	/**
+	 * Returns the floor a released claim should leave behind, in cents.
+	 *
+	 * @since 1.13.3
+	 *
+	 * @param string $observed The claim seen when the run was judged idle.
+	 * @return int|null Cents, or null when the interruption cannot be bounded and
+	 *                  the reservation should stand instead.
+	 */
+	private function interrupted_floor( string $observed ): ?int {
+		$allowance = Step_Allowance::cents( $this, self::completed_step( $observed ) );
+
+		if ( null === $allowance ) {
+			return null;
+		}
+
+		$recorded = $this->recorded_cents();
+
+		if ( null === $recorded ) {
+			// The counters could not be read, so nothing here can be trusted to
+			// bound anything. The reservation stands.
+			return null;
+		}
+
+		/*
+		 * Added rather than maximised. The lost worker may have recorded its
+		 * usage and died before writing its step, in which case this counts one
+		 * call twice — which is the direction to be wrong in, and the LEAST
+		 * against the reservation keeps even that inside what was set aside.
+		 */
+		return $recorded + $allowance;
+	}
+
+	/**
+	 * Returns the cost of the usage recorded against this run right now.
+	 *
+	 * The floor is deliberately not applied: this is one of the two things the
+	 * floor is made of.
+	 *
+	 * @since 1.13.3
+	 *
+	 * @return int|null Cents, or null when the counters could not be read.
+	 */
+	private function recorded_cents(): ?int {
+		$this->load_usage( true );
+
+		if ( $this->measurement_failed ) {
+			return null;
+		}
+
+		if ( ! $this->has_usage() ) {
+			return 0;
+		}
+
+		return $this->pricing_table()->cost_cents(
+			(string) $this->usage['text_model'],
+			(int) $this->usage['input_tokens'],
+			(int) $this->usage['output_tokens'],
+			(string) $this->usage['image_model'],
+			(int) $this->usage['image_count'],
+			max( (int) ( $this->snapshot['grounded_calls'] ?? 0 ), $this->grounded_calls )
+		);
 	}
 
 	/**

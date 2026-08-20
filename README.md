@@ -13,7 +13,7 @@ everything, and inserts the post as a draft or publishes it.
 
 | | |
 |---|---|
-| **Version** | 1.13.2 |
+| **Version** | 1.13.3 |
 | **Requires WordPress** | 6.4 |
 | **Requires PHP** | 8.1 |
 | **License** | GPL-2.0-or-later |
@@ -194,16 +194,15 @@ way to tell it apart from the rest of the site.
 
 Version 1.11.0. Twelve external audits have been run against this plugin, and all
 twelve found real defects; the findings, the fixes, and the findings rejected
-with evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 411 tests
+with evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 430 tests
 run against PHP 8.1, 8.2, and 8.3 on every push.
 
-Six things this plugin does not do the way the brief describes, all of them
+Five things this plugin does not do the way the brief describes, all of them
 deliberate and all of them below: **Run now** queues rather than streaming its
 result; the next-run readout reflects the saved schedule rather than updating
 live; the duplicate-topic similarity threshold defaults to 78 percent where the
-brief names 82; the Settings screen's save path has no automated coverage;
-Action Scheduler's own dispatch is not exercised by any test; and there is no
-screenshot in this README. Everything else worth knowing before you enable
+brief names 82; the Settings screen's save path has no automated coverage; and
+there is no screenshot in this README. Everything else worth knowing before you enable
 unattended publishing is listed with them.
 
 The first item is the one that matters most:
@@ -292,6 +291,17 @@ The first item is the one that matters most:
   immediately before they start; the instant between that check and the write
   cannot be fenced, so in a rare interleaving one run can pay for two articles'
   worth of calls and keep one.
+
+  A worker that never comes back may have completed a paid call whose token
+  counts never reached the database, and nothing afterwards can discover that.
+  So releasing its claim leaves a floor under what the run may settle for: what
+  it has already recorded, plus what the one step that worker was inside could
+  have cost. Only that step — the claim it left behind names it — so a run
+  interrupted once and then finishing normally is priced for the article it
+  wrote rather than for the pipeline it did not repeat. Where the step cannot be
+  identified, or its prompt has since gone, the whole reservation is held
+  instead: over-reporting spends a little of a cap the run had already set
+  aside, and an unrecorded charge spends the cap.
 
   Every *money* write is accepted, from any worker, at any time, open or closed:
   a call that was billed happened whoever made it. Token, image, and search

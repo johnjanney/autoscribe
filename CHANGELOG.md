@@ -87,6 +87,40 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.13.3] - 2026-08-20
+
+A run that was interrupted once and then finished normally reported about three
+times what it spent — 0.24 against an identical run's 0.07 — and held that much
+of the monthly cap for the rest of the month. Seen on a live site, on a run that
+stalled before its cron was in place, was swept, restarted, and published.
+
+### Changed
+
+- **The floor a lost worker leaves behind is now the size of the accident, not
+  the size of the pipeline.** When the stall sweeper releases a claim, the worker
+  holding it may have completed a paid call whose token counts never reached the
+  database; nothing afterwards can discover that, so the run keeps a floor under
+  what it may settle for. That floor was the run's entire reservation — two
+  proposals, a body, a repair, and an image — which bounds the whole pipeline
+  rather than the one step that was interrupted.
+
+  A worker can only be inside one step, and the claim it leaves behind names
+  which. The floor is now what the run has already recorded plus what that step
+  alone could have cost, and never more than the reservation. A run interrupted
+  during the budget check, which buys nothing, now floors nothing at all.
+
+  Where the step cannot be identified, or its prompt has since been deleted, the
+  whole reservation is still held: an over-estimate costs the site a little of a
+  cap it had already set aside, and an unrecorded charge costs it the cap.
+
+### Fixed
+
+- **The reservation was built on a proposal ceiling that no longer existed.**
+  `Budget_Guard::PROPOSAL_OUTPUT_ALLOWANCE` was 512 and documented as matching
+  what the proposal step requests, which stopped being true in 1.13.1 when that
+  step's ceiling went to 2048. It now reads the step's own constant, so the
+  estimate bounds the call again instead of trailing it.
+
 ## [1.13.2] - 2026-08-20
 
 ### Added
