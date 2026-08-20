@@ -132,6 +132,13 @@
 		The preview tests backdate a preview row so the sweeper will judge it.
 		-->
 		<exclude-pattern>*/tests/Pipeline/Preview_RunTest.php</exclude-pattern>
+		<!--
+		The stale-worker test closes a run from inside the query filter, in the
+		gap between finalisation's claim and the ownership read it guards. There
+		is no API for "issue this statement at this point in another statement's
+		execution", which is the whole of what the test does.
+		-->
+		<exclude-pattern>*/tests/Pipeline/Stale_WorkerTest.php</exclude-pattern>
 	</rule>
 
 	<!--

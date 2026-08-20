@@ -8,6 +8,8 @@
 namespace AutoScribe\Tests\Pipeline;
 
 use AutoScribe\Activation;
+use AutoScribe\Cost\Budget_Guard;
+use AutoScribe\Cost\Pricing_Table;
 use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Queued_Run_Handler;
 use AutoScribe\Pipeline\Retry_Policy;
@@ -218,5 +220,158 @@ final class Interrupted_ChargeTest extends WP_UnitTestCase {
 		$row = Run::latest_for_prompt( $run->prompt_id() );
 
 		$this->assertSame( 2, (int) $row['image_count'], 'A picture billed twice is not one picture.' );
+	}
+	/**
+	 * Usage that arrives after the run closed still reaches the monthly cap.
+	 *
+	 * The counters are unfenced on purpose — a billed call is billed whoever made
+	 * it — but the figure the cap reads is `cost_cents`, which a closed run
+	 * computed before the late counters existed. Recording the spending in the run
+	 * log and not in the total that enforces the cap is only half a mechanism.
+	 *
+	 * @since 1.5.0
+	 *
+	 * @return void
+	 */
+	public function test_late_usage_raises_a_closed_run_s_settled_cost(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+
+		$run->merge_payload( array( 'rates' => ( new Pricing_Table() )->snapshot( array( 'claude-opus-5' ) ) ) );
+
+		$this->assertTrue( $run->reserve_cost( 100 ) );
+		$this->assertTrue( $run->claim_step( '' ) );
+
+		// A sweep gives up on the run while this worker is still inside its call.
+		$observed = Run::load( $run->id() )->raw_step();
+
+		$this->assertTrue( Run::load( $run->id() )->fail( 'Given up on.', null, 0, $observed )->ended() );
+
+		$closed = (int) Run::latest_for_prompt( $prompt_id )['cost_cents'];
+
+		// The worker returns, having been charged for a large call.
+		$this->assertTrue( $run->record_text_usage( 'claude-opus-5', 10000000, 10000000 ) );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame( 10000000, (int) $row['input_tokens'] );
+		$this->assertGreaterThan(
+			$closed,
+			(int) $row['cost_cents'],
+			'A closed run whose counters grew must settle for more than it did before.'
+		);
+		$this->assertSame(
+			(int) $row['cost_cents'],
+			( new Budget_Guard() )->month_to_date_cents( $prompt_id ),
+			'What the run log shows and what the cap reads have to be the same number.'
+		);
+	}
+
+	/**
+	 * An image bought after the run closed is priced into the closed run.
+	 *
+	 * @since 1.5.0
+	 *
+	 * @return void
+	 */
+	public function test_a_late_image_raises_the_settled_cost(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+
+		$run->merge_payload( array( 'rates' => ( new Pricing_Table() )->snapshot( array( 'gpt-image-2' ) ) ) );
+
+		$this->assertTrue( $run->claim_step( '' ) );
+		$this->assertTrue(
+			Run::load( $run->id() )->fail( 'Given up on.', null, 0, Run::load( $run->id() )->raw_step() )->ended()
+		);
+		$this->assertSame( 0, (int) Run::latest_for_prompt( $prompt_id )['cost_cents'] );
+
+		$this->assertTrue( $run->record_image( 'gpt-image-2' ) );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame( 1, (int) $row['image_count'] );
+		$this->assertGreaterThan( 0, (int) $row['cost_cents'], 'A picture that was billed for costs something.' );
+	}
+
+	/**
+	 * A grounded call made after the run closed is charged for too.
+	 *
+	 * The surcharge used to live in the payload document, which is fenced by the
+	 * claim and by the run being open — so a worker whose run had been closed
+	 * under it could not record the search it had just paid for at all.
+	 *
+	 * @since 1.5.0
+	 *
+	 * @return void
+	 */
+	public function test_a_late_grounded_call_is_recorded_and_priced(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+
+		$run->merge_payload( array( 'rates' => ( new Pricing_Table() )->snapshot( array( 'claude-opus-5' ) ) ) );
+
+		$this->assertTrue( $run->claim_step( '' ) );
+		// Large enough that the surcharge is visible past the rounding: the table
+		// rounds a run up to whole cents, and a search costs one.
+		$this->assertTrue( $run->record_text_usage( 'claude-opus-5', 1000000, 1000000 ) );
+		$this->assertTrue(
+			Run::load( $run->id() )->fail( 'Given up on.', null, 0, Run::load( $run->id() )->raw_step() )->ended()
+		);
+
+		$closed = (int) Run::latest_for_prompt( $prompt_id )['cost_cents'];
+
+		$this->assertTrue( $run->record_grounded_call() );
+		$this->assertSame( 1, Run::load( $run->id() )->grounded_calls() );
+		$this->assertGreaterThan(
+			$closed,
+			(int) Run::latest_for_prompt( $prompt_id )['cost_cents'],
+			'A search the provider billed for is part of what the run cost.'
+		);
+	}
+
+	/**
+	 * Two late increments both end up in the settled figure.
+	 *
+	 * Each reconciliation measures the row as it stands and raises the cost with
+	 * GREATEST, so whichever lands second carries both.
+	 *
+	 * @since 1.5.0
+	 *
+	 * @return void
+	 */
+	public function test_two_late_increments_are_both_counted(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+
+		$run->merge_payload( array( 'rates' => ( new Pricing_Table() )->snapshot( array( 'gpt-image-2' ) ) ) );
+
+		$first  = Run::load( $run->id() );
+		$second = Run::load( $run->id() );
+
+		$this->assertTrue( $run->fail( 'Given up on.' )->ended() );
+
+		$this->assertTrue( $first->record_image( 'gpt-image-2' ) );
+
+		$after_one = (int) Run::latest_for_prompt( $prompt_id )['cost_cents'];
+
+		$this->assertTrue( $second->record_image( 'gpt-image-2' ) );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame( 2, (int) $row['image_count'] );
+		$this->assertGreaterThan(
+			$after_one,
+			(int) $row['cost_cents'],
+			'Two pictures billed is two pictures counted.'
+		);
 	}
 }

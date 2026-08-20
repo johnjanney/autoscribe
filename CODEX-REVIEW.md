@@ -1,5 +1,233 @@
 # AutoScribe code quality and security audit
 
+## Fresh verification review — version 1.4.0
+
+**Review date:** 19 August 2026 (America/Chicago)
+
+**Reviewed revision:** `26bb7ee86c2626f6086d1345e1017f2f8f319a8b` on
+`main`, tag `v1.4.0`
+
+**Change range:** `01f272a..26bb7ee`
+
+**Response reviewed:** “Response to the sixth Codex review” in
+[`CODEX-REVIEW-RESPONSE.md`](CODEX-REVIEW-RESPONSE.md#L1926)
+
+**Release reviewed:** [AutoScribe 1.4.0 on GitHub](https://github.com/johnjanney/autoscribe/releases/tag/v1.4.0)
+
+**Current result:** **Conditional pass. The prior high publication-safety
+finding is fixed. Keep a provider-side spending limit enabled. Do not state that
+the monthly cap sees all late provider usage until F140-01 is fixed.**
+
+**Current quality score:** **8.8/10**
+
+### Executive result
+
+Version 1.4.0 correctly adds the full row, status, and claim predicate to
+claimed writes. It also checks that predicate before the final post-status
+change. A worker whose run is closed under it can no longer change the article,
+post link, payload, cost, or step. The separate preview threshold, deleted-meta
+hook, active-store check, and one-read sweep also work as described.
+
+The response is correct that F130-01 through F130-04 are fixed. Its hybrid-store
+decision is also correct. Action Scheduler 3.9.3 sends newly saved hybrid-store
+actions to the primary database store, while its public query migrates matching
+old actions before it returns them
+([locked source](https://github.com/woocommerce/action-scheduler/blob/3.9.3/classes/data-stores/ActionScheduler_HybridStore.php#L182-L199),
+[save path](https://github.com/woocommerce/action-scheduler/blob/3.9.3/classes/data-stores/ActionScheduler_HybridStore.php#L263-L275)).
+The per-run public-API check is therefore a valid safety control for an old
+unmigrated action.
+
+One statement in the response and README is not correct. A closed run can still
+be written. The token and image usage methods intentionally update by row ID
+without a status or claim condition. That design keeps the provider usage, but a
+late update does not raise the terminal `cost_cents` value. The monthly cap sums
+`cost_cents`, not the raw usage columns. A focused diagnostic confirmed that
+late tokens reached a failed row while its settled cost and the monthly total
+did not change. See F140-01.
+
+I also found two low-severity quality issues. The new final-publication test does
+not reach the new pre-publication ownership check, and one preview-threshold
+comment says the opposite of the implementation. See F140-02 and F140-03.
+
+I found no verified unauthenticated code execution, SQL injection, stored XSS,
+capability bypass, CSRF defect, secret disclosure, or provider-URL SSRF in this
+revision. The important remaining defect is financial accounting after a
+terminal recovery. The known check-to-WordPress-write window also remains.
+
+### Verification results
+
+| Check | Result | Evidence |
+|---|---:|---|
+| Revision and worktree | Pass | `HEAD`, `main`, `origin/main`, and `v1.4.0^{}` resolve to `26bb7ee`. The worktree was clean before this review file changed. |
+| Sixth response and changelog | Pass | The response and 1.4.0 change record are present ([response](CODEX-REVIEW-RESPONSE.md#L1926), [changelog](CHANGELOG.md#L90)). |
+| Diff integrity | Pass | `git diff --check 01f272a..26bb7ee` reports no whitespace error. The changed PHP files pass `php -l`. |
+| Composer manifest | Pass | `composer validate --strict` reports a valid manifest ([manifest](composer.json)). |
+| Dependency advisories | Pass | `composer audit --locked` reports no known advisory ([lock file](composer.lock)). Packagist also reports zero advisories for Action Scheduler ([package record](https://packagist.org/packages/woocommerce/action-scheduler)). |
+| WordPress coding standards | Pass | PHPCS checked 125 PHP files with no error or warning ([rules](phpcs.xml.dist)). |
+| Local PHPUnit | Pass | 358 tests and 1,483 assertions passed in the WordPress test container ([configuration](phpunit.xml.dist), [bootstrap](tests/bootstrap.php)). |
+| Release CI | Pass | PHP 8.1, 8.2, and 8.3 passed in [CI run 32321083142](https://github.com/johnjanney/autoscribe/actions/runs/32321083142). |
+| Code scanning | Pass | The CodeQL `Analyze (actions)` job passed in [run 32321082423](https://github.com/johnjanney/autoscribe/actions/runs/32321082423). |
+| Release state | Pass | GitHub reports a published release that is not a draft or prerelease. Tag `v1.4.0` resolves to signed commit `26bb7ee` ([release](https://github.com/johnjanney/autoscribe/releases/tag/v1.4.0)). |
+| Release asset | Pass | The uploaded and local archives are both 493,230 bytes and are byte-identical. Both have SHA-256 `8e6fa16f9ba60f277417e3def121a694dec3e4e7e69bae31bbfd4a31f4834327`. `unzip -t` passed. The packaged production source and documentation match the reviewed tree ([asset](https://github.com/johnjanney/autoscribe/releases/download/v1.4.0/autoscribe-1.4.0.zip), [build script](bin/build.sh)). |
+| Terminal state fence | Pass | A terminal close now makes the complete ownership predicate false. Claimed row, payload, position, and cost writes are refused ([predicate](src/Pipeline/Run.php#L419), [write conditions](src/Pipeline/Run.php#L2109), [tests](tests/Pipeline/Stale_WorkerTest.php#L195)). |
+| Late-usage accounting probe | **Fail** | A focused test closed a claimed run with a 100-cent reservation, then recorded 10 million input and 10 million output tokens from the stale object. The token counters changed, but `cost_cents` and `month_to_date_cents()` stayed at 100. The temporary probe was removed after verification. See F140-01. |
+| Live provider call | Not run | No funded key was supplied. No prompt, site content, or secret was sent to a provider. |
+| Real Action Scheduler dispatch | Not covered | **Not found in documents:** an automated test that lets Action Scheduler dispatch a complete chain ([documented limit](README.md#L252)). |
+| Two-connection concurrency | Not covered | The concurrency tests simulate interleavings in one process. **Not found in documents:** a test that uses two independent database connections ([stale-worker test](tests/Pipeline/Stale_WorkerTest.php#L21)). |
+| Non-MySQL database behavior | Not covered | **Not found in documents:** CI coverage for MariaDB or another database engine ([documented limit](README.md#L255)). |
+
+The locked Action Scheduler version is still 3.9.3. Version 4.1.0 is available,
+and Packagist reports no advisory for the package
+([lock file](composer.lock), [Packagist](https://packagist.org/packages/woocommerce/action-scheduler)).
+Deferring this major-version update is reasonable. It needs a separate change
+that tests dispatch, recovery, migration, and the direct queue query.
+
+### Sixth-response verdict by prior finding
+
+| Prior finding | Verification verdict | Version 1.4.0 status |
+|---|---|---|
+| F130-01 — a terminally closed worker passes the claim fence | **Fixed, with an accounting qualification** | Claimed state and WordPress publication paths now require a running row and the current claim. Usage counters remain intentionally unfenced and create F140-01 ([ownership](src/Pipeline/Run.php#L403), [final check](src/Pipeline/Generator.php#L244)). |
+| F130-02 — preview recovery cannot distinguish a live preview | **Fixed with the accepted smaller solution** | Preview recovery uses a separate 30-minute default and cannot go below the queued-run threshold ([threshold](src/Pipeline/Stall_Sweeper.php#L252), [tests](tests/Pipeline/Preview_RunTest.php#L196)). A lease would still handle a legitimate preview that exceeds every time threshold. |
+| F130-03 — deleted prompt metadata bypasses validation | **Fixed** | `deleted_post_meta` is observed and the fallback deletion case is covered ([registration](src/Prompts/Prompt_Validator.php#L104), [test](tests/Prompts/Prompt_ValidatorTest.php#L177), [WordPress hook contract](https://developer.wordpress.org/reference/hooks/deleted_meta_type_meta/)). |
+| F130-04 — bulk queue detection ignores the active store | **Fixed** | Direct SQL is limited to the database and hybrid stores. Other stores use the public API. Accepting the hybrid store is supported by the locked dependency's save path ([check](src/Scheduling/Scheduler.php#L307), [upstream source](https://github.com/woocommerce/action-scheduler/blob/3.9.3/classes/data-stores/ActionScheduler_HybridStore.php#L263-L275)). |
+
+## Version 1.4.0 findings
+
+### F140-01 — Medium — Late usage on a closed run does not raise the monthly spend total
+
+**Category:** Accounting integrity, concurrency, recovery, documentation
+
+**Verified facts**
+
+- `record_text_usage()` and `record_image()` deliberately update only by run ID.
+  They do not require `status = running` or the current claim
+  ([text usage](src/Pipeline/Run.php#L494),
+  [image usage](src/Pipeline/Run.php#L558)).
+- This exception is necessary in principle. A provider response is billed even
+  if the worker lost its claim while the call was active.
+- A terminal failure calculates `cost_cents` before it closes the row. It can
+  keep the reservation as a floor, but it does not run settlement again after
+  later usage arrives ([failure settlement](src/Pipeline/Run.php#L2086)).
+- The monthly cap sums `cost_cents`. It does not calculate cost again from
+  `input_tokens`, `output_tokens`, or `image_count`
+  ([monthly total](src/Cost/Budget_Guard.php#L167)).
+- A focused diagnostic reproduced the boundary. It first closed a claimed run
+  with a 100-cent reservation. The stale object then added 10 million input and
+  10 million output tokens. Both counters reached the failed row, but
+  `cost_cents` and the monthly total stayed at 100.
+- The current response says that a closed run “can no longer be written to at
+  all” ([response](CODEX-REVIEW-RESPONSE.md#L2052)). The README says that all
+  stale writes are refused and that the monthly cap sees the spending either
+  way ([README](README.md#L259)). Both statements conflict with the deliberate
+  usage-counter exception and the reproduced result.
+
+**Inference and impact**
+
+A full reservation often covers one planned run, so this defect does not always
+understate cost. It can understate cost when stale and replacement workers make
+duplicate calls. The clearest case is two billed images when the reservation
+includes one. Usage from the call that returns after terminal settlement reaches
+the log, but the amount used by the monthly cap can remain below that total.
+
+This is not lost money at the provider. It is lost money in AutoScribe's budget
+calculation and run display. The provider-side limit remains the hard control.
+
+**Recommended fix**
+
+- Keep the usage counters unfenced. Do not discard a billed response.
+- After an atomic usage increment on a terminal row, calculate the total again
+  from the row's latest counters and its saved pricing snapshot. Raise
+  `cost_cents` monotonically with `GREATEST(current_cost, measured_cost,
+  cost_floor)`. Do not add the call price to the reservation because that can
+  count the same cost twice.
+- Store grounded-request use in an additive database counter, or pass the
+  grounded flag into the same atomic usage recorder. The current payload write
+  is correctly fenced and can fail after closure, so a late grounded surcharge
+  also needs the terminal reconciliation path
+  ([grounded marker](src/Pipeline/Run.php#L800)).
+- Make concurrent terminal reconciliations monotonic. The last reconciliation
+  must include all committed counters.
+- Add tests for late text usage, late image usage, a grounded call, and two
+  concurrent late increments. Assert that the raw counters, terminal
+  `cost_cents`, and `month_to_date_cents()` agree.
+- Correct the response, README, and usage-recording error messages. State that
+  state writes are fenced, usage writes are retained, and late usage is added to
+  terminal cost.
+
+### F140-02 — Low — The final-publication regression test stops at the first claim
+
+**Category:** Test quality, concurrency, publication safety
+
+**Verified facts**
+
+- `Generator::finalise()` starts by taking its own claim. The new ownership
+  re-check occurs later, immediately before `wp_update_post()`
+  ([finalisation](src/Pipeline/Generator.php#L219)).
+- The new test takes the finalisation claim itself, closes the row, and then
+  calls `finalise()` ([test setup](tests/Pipeline/Stale_WorkerTest.php#L245)).
+- Because the row already contains a claim marker, the first claim inside
+  `finalise()` fails. The method returns `CLOSE_RACE_LOST` before it reads the
+  post and before it reaches the new pre-publication re-check.
+- The post stays in draft, so the assertion passes. It proves the initial claim
+  guard, not the new guard that F130-01 added.
+
+**Impact**
+
+The production re-check is present and has the correct full predicate. I did not
+find a runtime defect in it. However, the regression named in the response does
+not protect that line. A later refactor could remove or weaken the immediate
+pre-publication check while all 358 tests still pass.
+
+**Recommended fix**
+
+- Add a deterministic interleaving after `finalise()` takes its claim and before
+  it checks ownership. For example, use a narrow database-query test hook that
+  closes the row just before the ownership `SELECT`, then remove the hook.
+- Assert that finalisation took its initial claim, the second ownership check
+  rejected the closed row, `wp_update_post()` was not called, and the post stayed
+  in draft.
+- Keep the current test for the initial-claim case, but give it a name that says
+  what it covers.
+
+### F140-03 — Low — The preview-threshold comment contradicts the code
+
+**Category:** Documentation, maintainability
+
+**Verified facts**
+
+- The `PREVIEW_THRESHOLD` comment says that the queued-run threshold is not used
+  for previews, even when a site raises it
+  ([comment](src/Pipeline/Stall_Sweeper.php#L87)).
+- `preview_threshold()` returns the greater of the queued threshold and the
+  preview filter. A raised queued threshold therefore does raise the preview
+  threshold ([implementation](src/Pipeline/Stall_Sweeper.php#L252)).
+- The method comment, tests, changelog, and response describe the implementation
+  correctly. Only the constant comment is wrong.
+
+**Impact**
+
+There is no runtime failure. The contradiction can make a maintainer change the
+correct code to match the wrong explanation.
+
+**Recommended fix**
+
+Replace the contradictory paragraph with one rule: the preview threshold uses
+the larger value. Lowering the queued threshold cannot lower the 30-minute
+preview default, and raising the queued threshold raises the preview threshold.
+
+### Version 1.4.0 conclusion
+
+The 1.4.0 changes close the prior high publication-safety defect. They also fix
+preview recovery, deletion validation, and queue-store selection without a
+verified security or performance regression. The release metadata, CI, CodeQL,
+tests, style checks, and package are verified.
+
+F140-01 prevents an unconditional pass because the plugin can retain late usage
+without adding it to the amount that enforces the monthly cap. This also makes
+the response and README claims too strong. Fix the terminal accounting path and
+add the missing final-publication interleaving test. Until then, use the plugin's
+cap as a brake and use the provider's own spending limit as the hard ceiling.
+
 ## Fresh verification review — version 1.3.0
 
 **Review date:** 19 August 2026 (America/Chicago)

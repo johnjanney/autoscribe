@@ -93,11 +93,12 @@ final class Stall_Sweeper {
 	 * take: two topic proposals and a body call with its repair, each able to use
 	 * the full 120-second provider timeout, plus whatever the host adds.
 	 *
-	 * Half an hour is generous on every count. The queued-run threshold is
-	 * deliberately not used here, even when a site has raised it: that filter can
-	 * be lowered to two minutes, which is inside a normal preview, and a sweep
-	 * that closes a preview a person is still waiting for reports a failure for a
-	 * request that then succeeds.
+	 * Half an hour is generous on every count, and it is a floor rather than a
+	 * replacement: preview_threshold() takes the larger of this and the queued-run
+	 * threshold. Lowering the queued threshold — the filter allows two minutes,
+	 * which is inside a normal preview — therefore cannot pull this down and
+	 * report a failure for a request that then succeeds, while raising it for a
+	 * slow host raises this with it.
 	 *
 	 * @since 1.4.0
 	 * @var int

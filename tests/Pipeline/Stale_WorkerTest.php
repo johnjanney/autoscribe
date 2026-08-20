@@ -7,6 +7,7 @@
 
 namespace AutoScribe\Tests\Pipeline;
 
+use AutoScribe\Activation;
 use AutoScribe\Content\Article_Validator;
 use AutoScribe\Content\Taxonomy_Applier;
 use AutoScribe\Pipeline\Close_Result;
@@ -232,17 +233,17 @@ final class Stale_WorkerTest extends WP_UnitTestCase {
 	}
 
 	/**
-	 * A worker whose run was closed under it does not publish its post.
+	 * Finalisation refuses a run that was closed before it could claim it.
 	 *
-	 * The worst version of the same defect: finalisation claims the row and then
-	 * changes the post's status, so a run reported as failed could still put an
-	 * article on the site.
+	 * The outer guard: the claim itself. Named for what it covers, because the
+	 * inner guard — the ownership re-check immediately before the post's status
+	 * transition — is a different line and has its own test below.
 	 *
 	 * @since 1.4.0
 	 *
 	 * @return void
 	 */
-	public function test_a_worker_whose_run_was_closed_does_not_publish(): void {
+	public function test_finalisation_refuses_a_run_it_cannot_claim(): void {
 		$prompt_id = $this->create_prompt( array( 'post_status_mode' => 'auto' ) );
 		$run       = Run::start( $prompt_id );
 
@@ -273,6 +274,107 @@ final class Stale_WorkerTest extends WP_UnitTestCase {
 		$this->assertWPError( $result );
 		$this->assertSame( Generator::CLOSE_RACE_LOST, $result->get_error_code() );
 		$this->assertSame( 'draft', get_post_status( $post_id ), 'A failed run must not publish afterwards.' );
+		$this->assertSame( Run::STATUS_FAILED, Run::latest_for_prompt( $prompt_id )['status'] );
+	}
+
+	/**
+	 * A run closed between the finalisation claim and the publish does not publish.
+	 *
+	 * This is the line F130-01 added, and it needs an interleaving to reach: the
+	 * claim at the top of finalisation succeeds, and the run is closed in the gap
+	 * between that claim and the ownership check the transition depends on. The
+	 * close is issued from inside the query filter, immediately before the
+	 * ownership read it is meant to precede, which puts it exactly where a sweep
+	 * would land.
+	 *
+	 * It runs on this connection rather than a second one deliberately. A second
+	 * connection cannot touch a row created inside the test's own uncommitted
+	 * transaction — it waits for a lock nobody will release — so what a second
+	 * connection buys here is a fifty-second timeout rather than realism.
+	 *
+	 * Without the re-check the post would be published for a run the log had
+	 * already reported as failed.
+	 *
+	 * @since 1.5.0
+	 *
+	 * @return void
+	 */
+	public function test_a_run_closed_before_the_publish_does_not_publish(): void {
+		$prompt_id = $this->create_prompt( array( 'post_status_mode' => 'auto' ) );
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+
+		$run_id  = $run->id();
+		$post_id = self::factory()->post->create( array( 'post_status' => 'draft' ) );
+
+		$this->assertTrue( $run->record_post( $post_id ) );
+		$this->assertTrue( $run->record_step( 'generate_image' ) );
+
+		$article = ( new Article_Validator() )->from_array( $this->article_payload() );
+
+		$this->assertNotWPError( $article );
+
+		$claimed   = false;
+		$closed    = false;
+		$table     = Activation::table_name();
+		$intercept = function ( $query ) use ( &$claimed, &$closed, $run_id, $table ) {
+			$sql = (string) $query;
+
+			// The claim finalisation takes first.
+			if ( str_contains( $sql, 'UPDATE' ) && str_contains( $sql, "step = 'doing:" ) ) {
+				$claimed = true;
+
+				return $query;
+			}
+
+			// The ownership check that guards the transition. A sweep closes the
+			// run on its own connection in the moment before it runs.
+			if ( $claimed && ! $closed && str_contains( $sql, "AND status = 'running' AND step =" ) ) {
+				$closed = true;
+
+				global $wpdb;
+
+				$wpdb->query(
+					$wpdb->prepare(
+						'UPDATE %i SET status = %s, error = %s, finished_at = %s WHERE id = %d',
+						$table,
+						Run::STATUS_FAILED,
+						'Given up on by a sweep.',
+						current_time( 'mysql', true ),
+						$run_id
+					)
+				);
+			}
+
+			return $query;
+		};
+
+		add_filter( 'query', $intercept );
+
+		$result = ( new Generator( new Provider_Registry() ) )->finalise(
+			Prompt::load( $prompt_id ),
+			Run::load( $run_id ),
+			$article,
+			null,
+			null,
+			0
+		);
+
+		remove_filter( 'query', $intercept );
+
+		$this->assertTrue( $claimed, 'Finalisation must get past its own claim for this to test anything.' );
+		$this->assertTrue( $closed, 'The interleaving must have happened for this to test anything.' );
+		// The publication assertion comes first on purpose: it is the property
+		// that matters, and asserting the error code before it would report a
+		// removed guard as the wrong error rather than as a published post.
+		$this->assertSame(
+			'draft',
+			get_post_status( $post_id ),
+			'A run closed before the transition must not publish afterwards.'
+		);
+		$this->assertWPError( $result );
+		$this->assertSame( Generator::CLOSE_RACE_LOST, $result->get_error_code() );
 		$this->assertSame( Run::STATUS_FAILED, Run::latest_for_prompt( $prompt_id )['status'] );
 	}
 

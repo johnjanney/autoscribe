@@ -522,6 +522,8 @@ final class Run {
 			)
 		);
 
+		$this->reconcile_terminal_cost();
+
 		return false !== $written;
 	}
 
@@ -572,6 +574,8 @@ final class Run {
 				$this->id
 			)
 		);
+
+		$this->reconcile_terminal_cost();
 
 		return false !== $written;
 	}
@@ -776,7 +780,11 @@ final class Run {
 	 * @return int
 	 */
 	public function grounded_calls(): int {
-		return max( $this->grounded_calls, (int) ( $this->payload()['grounded_calls'] ?? 0 ) );
+		return max(
+			$this->grounded_calls,
+			(int) $this->column( 'grounded_calls' ),
+			(int) ( $this->payload()['grounded_calls'] ?? 0 )
+		);
 	}
 
 	/**
@@ -793,14 +801,32 @@ final class Run {
 	 * is a floor for the action that made the call — which is the action that
 	 * will settle the run when the write failure ends it.
 	 *
+	 * It is a column and an atomic increment since 1.5.0, for the reason the token
+	 * counters are: the payload write it used to make is fenced by the claim and
+	 * by the run being open, so a surcharge incurred by a worker whose run had
+	 * been closed under it could not be recorded at all. A search a provider has
+	 * billed for is money, and money is not state.
+	 *
 	 * @since 1.1.0
 	 *
 	 * @return bool True when the marker also reached the database.
 	 */
 	public function record_grounded_call(): bool {
+		global $wpdb;
+
 		++$this->grounded_calls;
 
-		return $this->merge_payload( array( 'grounded_calls' => $this->grounded_calls ) );
+		$written = $wpdb->query(
+			$wpdb->prepare(
+				'UPDATE %i SET grounded_calls = grounded_calls + 1 WHERE id = %d',
+				Activation::table_name(),
+				$this->id
+			)
+		);
+
+		$this->reconcile_terminal_cost();
+
+		return false !== $written;
 	}
 
 	/**
@@ -1875,6 +1901,52 @@ final class Run {
 				'cost_cents' => $this->measured_cents( $pricing ),
 			),
 			array( '%s', '%s', '%d', '%s' )
+		);
+	}
+
+	/**
+	 * Raises a closed run's settled cost to include usage that arrived late.
+	 *
+	 * The counters are unfenced on purpose: a provider that answered has charged
+	 * for the answer whoever asked and whatever has happened to the run since, so
+	 * a worker returning after its run was closed must still be able to record
+	 * what it spent. That was half a mechanism. The month-to-date total the
+	 * section 7.4 cap reads sums `cost_cents`, which a closed run computed before
+	 * the late counters existed — so the spending reached the run log and never
+	 * reached the cap. A duplicate image bought by a superseded worker is the
+	 * clearest case: two pictures billed, one counted.
+	 *
+	 * So every increment is followed by this. On an open run it matches nothing
+	 * and costs one comparison, because settlement has not happened yet and will
+	 * read the counters when it does. On a closed one it re-measures from the row
+	 * as it now stands, priced with the rates the run recorded, and raises the
+	 * settled figure.
+	 *
+	 * GREATEST rather than assignment, and in the statement rather than in PHP:
+	 * two late increments can reconcile concurrently, and the larger measurement
+	 * has to survive whichever lands second. It also means this can only ever move
+	 * the figure up, so a reconciliation racing a reservation floor cannot undo
+	 * it.
+	 *
+	 * @since 1.5.0
+	 *
+	 * @return void
+	 */
+	private function reconcile_terminal_cost(): void {
+		global $wpdb;
+
+		if ( self::STATUS_RUNNING === $this->status() ) {
+			return;
+		}
+
+		$wpdb->query(
+			$wpdb->prepare(
+				'UPDATE %i SET cost_cents = GREATEST( cost_cents, %d ) WHERE id = %d AND status <> %s',
+				Activation::table_name(),
+				$this->measured_cents( null, $this->grounded_calls() ),
+				$this->id,
+				self::STATUS_RUNNING
+			)
 		);
 	}
 

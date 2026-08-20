@@ -2052,3 +2052,117 @@ F120-02 — a claim lost between the re-check and a WordPress write — is uncha
 as well, and is narrower than it was: a run that has been *closed* can no longer
 be written to at all, so what remains is two live workers rather than one live
 worker and a finished run.
+
+---
+---
+
+# Response to the seventh Codex review
+
+**Responding to:** the fresh-verification section of
+[CODEX-REVIEW.md](CODEX-REVIEW.md), dated 19 August 2026 against `26bb7ee`
+(tag `v1.4.0`)
+**Response date:** 19 August 2026
+**Release under response:** 1.4.0 → 1.5.0
+
+---
+
+## Summary
+
+Three findings. **All three confirmed, all three fixed.** Each was checked
+against the code before being acted on; none needed clarification, and the
+late-usage reproduction was exactly right.
+
+| Finding | Verdict | Status |
+|---|---|---|
+| F140-01 Late usage on a closed run does not reach the monthly cap | Confirmed | Fixed |
+| F140-02 The final-publication test stops at the first claim | Confirmed | Fixed |
+| F140-03 The preview-threshold comment contradicts the code | Confirmed | Fixed |
+
+**Verification:** PHPCS passes with zero errors and zero warnings across 125
+files. PHPUnit passes 363 tests and 1,521 assertions, up from 358 and 1,483.
+
+---
+
+## F140-01 — Confirmed. Fixed.
+
+This is the other half of a decision made in 1.3.0 and left unfinished. Usage
+counters are unfenced on purpose — a provider that answered has charged for the
+answer whoever asked — and the review is right that the money then stopped at the
+run log. The cap sums `cost_cents`; a closed run computed that before the late
+counters existed; nothing re-measured it.
+
+**What changed, following the recommended fix.**
+
+- The counters stay unfenced. A billed response is never discarded.
+- Every increment is followed by a reconciliation. On an open run it matches
+  nothing, because settlement has not happened yet and will read the counters
+  when it does. On a closed one it re-measures the row from the rates the run
+  recorded and raises the cost with `GREATEST( cost_cents, measured )` in the
+  statement — so two late increments cannot lose each other, whichever lands
+  second carries both, and the figure can only move up. Measurement already
+  includes the reservation floor, so a reconciliation cannot undo one.
+- The grounded surcharge moved to a column and an atomic increment. It was in
+  the payload document, which is fenced by the claim and by the run being open —
+  the right rule for state and the wrong one for money, and the practical effect
+  was that a late grounded call could not be recorded at all. Same reasoning as
+  the token counters, so it is now the same mechanism.
+
+**The claims the review says were too strong.** They were, and both are
+corrected. The README and the sixth response said a closed run could not be
+written to at all; the accurate sentence is that state writes are fenced, money
+is accepted from any worker at any time, and a late charge raises the closed
+run's cost. I checked the usage-recording error messages the finding also names:
+those describe a *refused* write, where the run stops and the object's in-memory
+counters book the charge into the closing settlement, and they are accurate as
+written.
+
+**Tests.** Late text usage, a late image, a late grounded call, and two late
+increments on one closed run — each asserting the raw counters, the settled
+`cost_cents`, and `month_to_date_cents()` agree.
+
+## F140-02 — Confirmed. Fixed.
+
+The finding is right that the test proved the outer guard and not the inner one:
+the row already held a claim marker, so finalisation's own `claim_step()` failed
+and it returned before reaching the pre-publication check.
+
+There are two tests now. The old one keeps its scenario and takes a name that
+says what it covers — finalisation refusing a run it cannot claim. The new one
+closes the run in the gap the finding names, from inside the query filter,
+immediately before the ownership read that guards the transition.
+
+**It is verified by removal, not by passing.** With the pre-publication check
+deleted the test fails, and it fails on the assertion that matters: the post is
+`publish` rather than `draft`. The publication assertion is deliberately first,
+so a removed guard is reported as a published post rather than as an unexpected
+error code.
+
+**One departure from the suggested method.** The finding suggested a second
+connection. I tried that first: a second connection cannot touch a row created
+inside the test's own uncommitted transaction — it waits on a lock nobody will
+release, and the test takes fifty seconds to fail. The close is issued on the
+same connection instead, which puts the statement in exactly the right place in
+the sequence, and the reason is recorded in the test.
+
+## F140-03 — Confirmed. Fixed.
+
+The constant's comment said the queued-run threshold is not used for previews,
+and `preview_threshold()` returns the larger of the two. The comment now states
+the rule the code implements: it is a floor, so lowering the queued threshold
+cannot pull a preview's below thirty minutes and raising it for a slow host
+raises both.
+
+---
+
+## What is still not covered
+
+Unchanged, and still recorded in the README: no test drives Action Scheduler's
+own dispatch; the concurrency tests interleave in one process rather than across
+two connections; CI runs against MySQL only; no test calls a live provider. The
+Action Scheduler 4.1.0 upgrade is still deferred to its own change.
+
+The check-to-WordPress-write window from F120-02 also remains, and is where it
+was: a claim lost in the instant between the ownership check and a media or post
+write. What has changed since it was first stated is that the money side of it is
+now fully accounted for — whichever worker's article survives, both workers'
+spending reaches the cap.

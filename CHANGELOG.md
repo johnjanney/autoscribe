@@ -87,6 +87,62 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-19
+
+A seventh external review, against 1.4.0 — the first to come back a conditional
+pass. Three findings, all confirmed and all fixed.
+
+The one that matters is the other half of a decision made in 1.3.0. Usage
+counters are deliberately unfenced, because a provider that answered has charged
+for the answer whoever asked; what nothing did was carry that money through to
+the figure the monthly cap actually reads. The spending reached the run log and
+stopped there.
+
+MINOR rather than PATCH: the runs table gains a column and a closed run's settled
+cost can now move.
+
+### Fixed
+
+- **Usage recorded after a run closed did not reach the monthly cap.** The cap
+  sums `cost_cents`, which a closed run computed before the late counters
+  existed. A worker returning after its run was given up on could record its
+  tokens or its image and change nothing the cap could see — two pictures billed,
+  one counted.
+
+  Every usage increment is now followed by a reconciliation: on an open run it
+  matches nothing, and on a closed one it re-measures the row from the rates the
+  run recorded and raises `cost_cents` with `GREATEST`, so two late increments
+  cannot lose each other and the figure can only move up.
+
+- **A grounded call made after a run closed could not be recorded at all.** The
+  search surcharge lived in the payload document, which is fenced by the claim
+  and by the run being open — correct for state, wrong for money. It is a column
+  and an atomic increment now, like the token and image counters, and it is
+  priced into the same reconciliation.
+
+- **The README and the sixth response overstated the fence.** Both said a closed
+  run could not be written to at all, which was never true of the usage counters
+  and was true of nothing else once they were exempt. Both now say what the code
+  does: state writes are fenced, money is accepted from any worker at any time,
+  and a late charge raises the closed run's cost.
+
+- **The preview-threshold constant's comment contradicted the code.** It said the
+  queued-run threshold was not used for previews; `preview_threshold()` takes the
+  larger of the two. The comment now describes the rule the code implements.
+
+### Changed
+
+- **The final-publication regression test reaches the guard it is named for.**
+  It previously stopped at finalisation's own claim, so the ownership re-check
+  immediately before the post's status transition was covered by nothing. The
+  test now closes the run in the gap between the claim and that check, and fails
+  with the post published when the check is removed.
+
+### Added
+
+- A `grounded_calls` column on the runs table, migrated by the existing schema
+  version check. The 1.4.x payload value is still read as a floor.
+
 ## [1.4.0] - 2026-08-19
 
 A sixth external review, against 1.3.0. Four findings, all confirmed and all

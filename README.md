@@ -13,7 +13,7 @@ everything, and inserts the post as a draft or publishes it.
 
 | | |
 |---|---|
-| **Version** | 1.4.0 |
+| **Version** | 1.5.0 |
 | **Requires WordPress** | 6.4 |
 | **Requires PHP** | 8.1 |
 | **License** | GPL-2.0-or-later |
@@ -192,9 +192,9 @@ way to tell it apart from the rest of the site.
 
 ## Status and known limitations
 
-Version 1.4.0. Six external audits have been run against this plugin, and all
-six found real defects; the findings, the fixes, and the findings rejected with
-evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 358 tests run
+Version 1.5.0. Seven external audits have been run against this plugin, and all
+seven found real defects; the findings, the fixes, and the findings rejected with
+evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 363 tests run
 against PHP 8.1, 8.2, and 8.3 on every push.
 
 Six things this plugin does not do the way the brief describes, all of them
@@ -263,8 +263,12 @@ The first item is the one that matters most:
   that write to WordPress instead — the post and the featured image — re-check
   before they start. What cannot be fenced is the instant between that check and
   the write, so in a rare interleaving one run can pay for two articles' worth of
-  calls and keep one. A run the log reports as finished cannot be changed by such
-  a worker at all: closing a run ends every claim over it. The spending is counted either way, so the monthly cap sees
+  calls and keep one. Closing a run ends every claim over it, so a finished run's
+  article, post link, and settled state cannot be changed afterwards — with one
+  deliberate exception: what a provider charged for. Token and image counters are
+  additive and are accepted from any worker at any time, because a call that was
+  billed happened whoever made it, and a late one raises the closed run's cost so
+  the monthly cap sees it. The spending is counted either way, so the monthly cap sees
   it; it is the duplication that is not fully prevented.
 - **A run whose ending the database will not accept is left open on purpose.**
   Reporting a run as finished when the write that finishes it was refused is how

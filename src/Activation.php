@@ -37,7 +37,7 @@ final class Activation {
 	 * @since 0.1.0
 	 * @var string
 	 */
-	public const DB_VERSION = '4';
+	public const DB_VERSION = '5';
 
 	/**
 	 * Capability gating the settings screens.
@@ -181,6 +181,12 @@ final class Activation {
 	 * a shared JSON document cannot be updated by two writers without one of them
 	 * losing what the other stored.
 	 *
+	 * A fifth since 1.5.0: grounded_calls, the number of grounded requests a run
+	 * paid the search surcharge for. It moved out of the payload document for the
+	 * same reason sweeps did — a counter that costs money cannot live behind a
+	 * fence meant for state, because the write that records it has to land even
+	 * when the run it belongs to has closed.
+	 *
 	 * A fourth since 1.3.0: cost_floor, the least a run may settle for. A run
 	 * whose worker was killed inside a paid call cannot show what that call cost,
 	 * and the floor is what stops the settlement that follows from reporting less
@@ -224,6 +230,7 @@ final class Activation {
 			image_count smallint(5) unsigned NOT NULL DEFAULT 0,
 			cost_cents int(10) unsigned NOT NULL DEFAULT 0,
 			cost_floor int(10) unsigned NOT NULL DEFAULT 0,
+			grounded_calls smallint(5) unsigned NOT NULL DEFAULT 0,
 			attempt tinyint(3) unsigned NOT NULL DEFAULT 1,
 			sweeps smallint(5) unsigned NOT NULL DEFAULT 0,
 			error text DEFAULT NULL,
