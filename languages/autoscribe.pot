@@ -2,14 +2,14 @@
 # This file is distributed under the GPL-2.0-or-later.
 msgid ""
 msgstr ""
-"Project-Id-Version: AutoScribe 1.6.0\n"
+"Project-Id-Version: AutoScribe 1.7.0\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/autoscribe\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-20T02:32:10+00:00\n"
+"POT-Creation-Date: 2026-08-20T03:08:43+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: autoscribe\n"
@@ -494,17 +494,21 @@ msgstr ""
 msgid "A post titled \"%s\" already exists."
 msgstr ""
 
+#: src/Cost/Budget_Guard.php:267
+msgid "The spend of one or more finished runs could not be worked out, so the monthly total cannot be trusted and this run was stopped before spending anything. Check that the AutoScribe runs table is writable; the run log lists what is outstanding."
+msgstr ""
+
 #. translators: 1: which cap was hit, 2: spend so far in dollars, 3: cap in dollars.
-#: src/Cost/Budget_Guard.php:473
+#: src/Cost/Budget_Guard.php:488
 #, php-format
 msgid "The %1$s monthly budget would be exceeded. Estimated spend so far is $%2$s against a cap of $%3$s."
 msgstr ""
 
-#: src/Cost/Budget_Guard.php:474
+#: src/Cost/Budget_Guard.php:489
 msgid "per-prompt"
 msgstr ""
 
-#: src/Cost/Budget_Guard.php:474
+#: src/Cost/Budget_Guard.php:489
 msgid "global"
 msgstr ""
 
@@ -675,11 +679,11 @@ msgstr ""
 msgid "no error"
 msgstr ""
 
-#: src/Pipeline/Run.php:250
+#: src/Pipeline/Run.php:286
 msgid "The run could not be recorded. Check that the AutoScribe runs table exists and is writable."
 msgstr ""
 
-#: src/Pipeline/Run.php:2101
+#: src/Pipeline/Run.php:2212
 msgid "The cost of this run could not be written to the run log, so the reservation it made against the monthly cap still stands. The run was not reported as finished."
 msgstr ""
 

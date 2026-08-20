@@ -18,6 +18,13 @@ build
 dev
 docs
 tests
+
+# Any archive lying about in the working copy. build/ is excluded above, but a
+# zip that has found its way to the root is not the plugin, and packaging one
+# inside the plugin doubles the download for no reason. This happened: a stray
+# copy of the previous release was ignored by .gitignore, so it never showed up
+# in git status, and shipped inside the next build.
+*.zip
 node_modules
 
 phpcs.xml.dist

@@ -1,5 +1,310 @@
 # AutoScribe code quality and security audit
 
+## Fresh verification review — version 1.6.0
+
+**Review date:** 19 August 2026 (America/Chicago)
+
+**Reviewed revision:** `7fea0539266b255c8966add9d0b83fd81ab468a1` on
+`main`, tag `v1.6.0`
+
+**Change range:** `2e542f7..7fea053`
+
+**Response reviewed:** “Response to the eighth Codex review” in
+[`CODEX-REVIEW-RESPONSE.md`](CODEX-REVIEW-RESPONSE.md#L2173)
+
+**Release reviewed:** [AutoScribe 1.6.0 on GitHub](https://github.com/johnjanney/autoscribe/releases/tag/v1.6.0)
+
+**Current result:** **Conditional pass. The closed-row interruption that
+F150-01 described is recoverable. The accounting invariant is not complete at
+the open-to-closed transition, across a repair backlog larger than one batch, or
+for grounded calls already added by version 1.5. Keep a provider-side spending
+limit enabled.**
+
+**Current quality score:** **8.3/10**
+
+### Executive result
+
+Version 1.6.0 fixes the exact closed-row failure used by the F150-01 diagnostic.
+The counter and `cost_stale` marker now land in one statement. A later repair can
+price the row after the immediate cost update fails. The decision to let the
+recorder return the counter statement's result is reasonable under that design.
+The public `reconcile_cost()` method also returns a boolean derived from its own
+database update.
+
+The fix does not cover a counter that lands while the row is still open, after
+terminal cost was measured but before the terminal status update. The counter
+statement sees `running`, so it does not set `cost_stale`; the close then stores
+the earlier cost and changes the status. A focused interleaving reproduced a
+closed row with one million input tokens and `cost_stale = 0`. No repair selects
+that row. See F160-01.
+
+The budget check calls only one 25-row repair batch before it sums. A focused
+test made 26 closed rows owe four cents each. With a one-dollar cap and no new
+projection, the guard repaired 25 rows, returned true, and left the twenty-sixth
+row stale. See F160-02.
+
+The grounded-call migration also assumes that the version-1.5 column is still
+zero. The payload holds calls made before version 1.5, while the column can hold
+calls made after version 1.5. Those values are additive. A focused upgrade test
+with one in each place returned one after migration instead of two. See F160-03.
+
+The original README contradiction and repetition are fixed. The replacement
+text now promises an “at most five minutes” repair and says repair always occurs
+before the next run spends. Action Scheduler cannot give that hard time bound,
+and the single-batch case disproves the second statement. See F160-04.
+
+I found no verified unauthenticated code execution, SQL injection, stored XSS,
+capability bypass, CSRF defect, secret disclosure, or provider-URL SSRF in this
+revision. I found no new post-publication or media-attachment safety defect. The
+new risks are accounting and migration defects, not direct security defects.
+
+### Verification results
+
+| Check | Result | Evidence |
+|---|---:|---|
+| Revision and worktree | Pass | `HEAD`, `main`, `origin/main`, and `v1.6.0^{}` resolve to `7fea053`. The worktree was clean before this review file changed. |
+| Eighth response and changelog | Pass | The response and 1.6.0 change record are present ([response](CODEX-REVIEW-RESPONSE.md#L2173), [changelog](CHANGELOG.md#L90)). |
+| Diff integrity | Pass | `git diff --check 2e542f7..7fea053` reports no whitespace error. All PHP files in `src` and `tests` pass `php -l`. |
+| Composer manifest | Pass | `composer validate --strict` reports a valid manifest ([manifest](composer.json)). |
+| Dependency advisories | Pass | `composer audit --locked` reports no known advisory ([lock file](composer.lock)). Packagist also reports zero advisories for Action Scheduler ([package record](https://packagist.org/packages/woocommerce/action-scheduler)). |
+| WordPress coding standards | Pass | PHPCS checked all 125 PHP files and exited zero with no error or warning ([rules](phpcs.xml.dist)). |
+| Local PHPUnit | Pass | The unchanged release suite passed 368 tests and 1,549 assertions in the WordPress test container ([configuration](phpunit.xml.dist), [bootstrap](tests/bootstrap.php)). |
+| Initial release-commit PHPCS | Fail, then fixed | Commit `58ee63a` failed PHPCS on PHP 8.1, 8.2, and 8.3 in [CI run 32325455357](https://github.com/johnjanney/autoscribe/actions/runs/32325455357). Commit `7fea053` fixes those failures and records the verification error in [CONTRIBUTING.md](CONTRIBUTING.md#L29). |
+| Tagged release CI | Pass | PHP 8.1, 8.2, and 8.3 passed for `7fea053` in [CI run 32325607874](https://github.com/johnjanney/autoscribe/actions/runs/32325607874). |
+| Code scanning | Pass | CodeQL `Analyze (actions)` passed for `7fea053` in [run 32325607816](https://github.com/johnjanney/autoscribe/actions/runs/32325607816). |
+| Release state | Pass | GitHub reports a published release that is not a draft or prerelease. Tag `v1.6.0` resolves to commit `7fea053`, whose commit signature GitHub verifies ([release](https://github.com/johnjanney/autoscribe/releases/tag/v1.6.0)). |
+| Release asset | Pass | The uploaded and local archives are both 497,811 bytes and are byte-identical. Both have SHA-256 `ba9a62939ded755f17a821017caeb0b52e35f8a5c21a2b298bb22e60e856dae2`. `unzip -t` passed. Packaged production source and documentation match the reviewed tree, and only runtime dependencies are present ([asset](https://github.com/johnjanney/autoscribe/releases/download/v1.6.0/autoscribe-1.6.0.zip), [build script](bin/build.sh)). |
+| Closed-row interruption | Pass | When the immediate cost update is refused after a closed-row counter write, the supplied test finds the marker and a later repair clears it ([implementation](src/Pipeline/Run.php#L514), [test](tests/Pipeline/Interrupted_ChargeTest.php#L391)). |
+| Open-to-close interleaving probe | **Fail** | A focused query interleaving added one million tokens immediately before the terminal status statement, after `fail()` measured cost. The row closed with the tokens stored and `cost_stale = 0`. The temporary diagnostic was removed. See F160-01. |
+| Complete-preflight repair probe | **Fail** | A focused test created 26 stale four-cent image charges, a $1.01 cap, and a one-cent projected run. The budget check repaired 25, returned true, and left one stale row. The temporary diagnostic was removed. See F160-02. |
+| Existing-1.5-increment migration probe | **Fail** | A focused upgrade test set `payload.grounded_calls = 1` and the column to one before upgrading. The migrated run still reported one instead of two. The temporary diagnostic was removed. See F160-03. |
+| Live provider call | Not run | No funded key was supplied. No prompt, site content, or secret was sent to a provider. |
+| Real Action Scheduler dispatch | Not covered | **Not found in documents:** an automated test that lets Action Scheduler dispatch a complete chain ([documented limit](README.md#L252)). |
+| Two-connection concurrency | Not covered | The concurrency tests simulate interleavings in one process. **Not found in documents:** a test that uses two independent database connections ([response](CODEX-REVIEW-RESPONSE.md#L2268)). |
+| Non-MySQL database behavior | Not covered | **Not found in documents:** CI coverage for MariaDB or another database engine ([documented limit](README.md#L255)). |
+
+The locked Action Scheduler version remains 3.9.3. Version 4.1.0 is available,
+and Packagist reports no package advisory
+([lock file](composer.lock), [Packagist](https://packagist.org/packages/woocommerce/action-scheduler)).
+The separate-upgrade decision remains reasonable, but 4.1.0 also adds schedule
+deserialization protections and database-error handling. Include the deferred
+dispatch and migration tests when this dependency changes
+([official changelog](https://github.com/woocommerce/action-scheduler/blob/4.1.0/changelog.txt)).
+
+### Eighth-response verdict by prior finding
+
+| Prior finding | Verification verdict | Version 1.6.0 status |
+|---|---|---|
+| F150-01 — terminal cost reconciliation is not durable | **Partially fixed** | A counter written after closure and its marker are now atomic, and the supplied one-row repair works. A counter written just before closure can still escape both settlement and the marker. Budget preflight also drains only one batch. See F160-01 and F160-02. |
+| F150-02 — the grounded column loses an additive legacy count | **Partially fixed** | The supplied test migrates a zero column and then adds a new call, which passes. A real 1.5-to-1.6 upgrade can already have calls in both places; the migration compares or overwrites them instead of adding them. It also omits closed affected rows. See F160-03. |
+| F150-03 — the README correction contradicts and repeats itself | **Original defect fixed; new guarantee is too strong** | The state-versus-money explanation is now clear and is not repeated. Its hard repair-time and preflight guarantees are not true for every supported execution state. See F160-02 and F160-04. |
+
+## Version 1.6.0 findings
+
+### F160-01 — Medium — Usage can escape accounting during the terminal transition
+
+**Category:** Accounting integrity, concurrency, recovery
+
+**Verified facts**
+
+- Each counter statement sets `cost_stale` only when the row is already not
+  running ([text](src/Pipeline/Run.php#L514),
+  [image](src/Pipeline/Run.php#L571),
+  [grounded](src/Pipeline/Run.php#L823)).
+- `fail()` measures usage before it issues the status update
+  ([failure close](src/Pipeline/Run.php#L2238)). The normal successful path also
+  settles cost and closes status in separate operations
+  ([settlement](src/Pipeline/Run.php#L2095),
+  [success close](src/Pipeline/Run.php#L2115)).
+- The terminal status statement does not compare usage counters or a usage
+  revision. It does not set `cost_stale` when usage changed after measurement
+  ([terminal update](src/Pipeline/Run.php#L2185)).
+- A focused query-filter diagnostic inserted a text counter immediately before
+  the terminal update. At that instant the row was still running, so the counter
+  did not mark it. The original terminal update then closed the row with the old
+  cost. The final row had one million input tokens, terminal status, and
+  `cost_stale = 0`.
+- `Run::unsettled()` selects only `cost_stale = 1`, so neither repair path can
+  discover this row ([selection](src/Pipeline/Run.php#L1996)).
+- The new tests cover a counter after closure and a normal counter on an open
+  row. **Not found in documents:** a test that puts the counter between terminal
+  measurement and closure
+  ([tests](tests/Pipeline/Interrupted_ChargeTest.php#L391)).
+
+**Inference and impact**
+
+Two live workers on one run can reach this order. A worker can return from a
+provider call while another worker or sweep is closing the run. The provider
+usage is stored, but the settled cost and monthly total can remain low for ever.
+This is the same financial consequence as F150-01, at a different statement
+boundary.
+
+**Recommended fix**
+
+- Increment a `usage_revision` in every money statement, whether the row is open
+  or closed.
+- Record the revision used to compute `cost_cents`. Make every terminal status
+  transition set `cost_stale = 1` when the current usage revision is newer than
+  the priced revision. Another safe design is to make the close compare-and-swap
+  on the measured revision and retry measurement when it changed.
+- Apply the same rule to `fail()`, `skip()`, and the separate
+  `settle_cost()`/`succeed()` path. Do not depend on status at counter-write time
+  to decide whether repair will be necessary later.
+- Add focused interleaving tests for text, image, and grounded counters. Put each
+  counter after measurement and immediately before both claimed and unclaimed
+  terminal updates. Assert either that the close retries with the new cost or
+  that the final row is marked and repaired before budget preflight.
+
+### F160-02 — Medium — Budget preflight can sum while known stale cost remains
+
+**Category:** Budget enforcement, batching, error handling, concurrency
+
+**Verified facts**
+
+- `Budget_Guard::check()` calls `Run::settle_unsettled()` once, then immediately
+  sums month-to-date cost ([guard](src/Cost/Budget_Guard.php#L244)).
+- `settle_unsettled()` defaults to 25 rows and does not loop
+  ([batch](src/Pipeline/Run.php#L2019)).
+- A focused test created 26 closed rows. Each held one unpriced image at four
+  cents. With a $1.01 global cap and a one-cent new projection, the guard
+  repaired 25 four-cent rows, saw exactly one dollar, returned true, and left
+  one four-cent row stale. The correct check was $1.04 already spent plus the
+  one-cent projection, which exceeds the $1.01 cap.
+- A reconciliation compare-and-swap that affects zero rows returns true because
+  the code tests only `false !== $updated`
+  ([return](src/Pipeline/Run.php#L1981)). WordPress specifies that an update query
+  returns its affected-row count and returns false on an error
+  ([official `wpdb::query()` contract](https://developer.wordpress.org/reference/classes/wpdb/query/)).
+  A concurrent counter can therefore make the compare-and-swap miss, leave the
+  marker set, and still be reported as settled.
+- A failed reconciliation read also returns true through the `! is_array()`
+  branch ([read](src/Pipeline/Run.php#L1951)). The budget guard does not inspect
+  the repair count or check whether stale rows remain.
+
+**Inference and impact**
+
+The spend lock serializes budget checks against other budget checks. It does not
+make one incomplete repair batch complete and does not stop an unfenced usage
+counter. A backlog, database failure, or compare-and-swap race can therefore let
+a run pass a cap while the database explicitly says that cost is still stale.
+
+**Recommended fix**
+
+- Keep the stall-sweep repair bounded, but give budget preflight a correctness
+  contract: drain all relevant stale rows in bounded pages before summing, or
+  fail closed with an accounting-unavailable error if the limit, a query error,
+  or a retry limit is reached.
+- Make `reconcile_cost()` return false for a missing/error read and return true
+  only when its update affects one row or a follow-up read proves that nothing is
+  stale. Treat a zero-row compare-and-swap as a retry, not success.
+- After repair and while the spend lock is still held, verify that no relevant
+  `cost_stale = 1` row remains before the cap query. Include the global scope for
+  a global cap and the prompt scope for a prompt cap.
+- Add tests for 26 or more stale rows, a failed repair read, a failed repair
+  update, and a counter that makes the compare-and-swap miss. Assert that the
+  guard blocks or reports an accounting error; it must not authorize spending.
+
+### F160-03 — Low — The version-1.6 migration does not add existing version-1.5 calls
+
+**Category:** Schema migration, accounting, backward compatibility
+
+**Verified facts**
+
+- For an old run, the payload value is the pre-1.5 grounded-call count. The new
+  column can contain calls added while version 1.5 was active. These are counts
+  from different periods, not two copies of one value.
+- The migration skips a row when the legacy count is less than or equal to the
+  column. Otherwise it assigns the legacy value to the column
+  ([migration](src/Activation.php#L287)). It never adds the two values.
+- A focused test set the payload to one and the column to one before changing the
+  schema version from five to six. The migration skipped the row, and
+  `grounded_calls()` returned one instead of two.
+- The supplied test starts with column zero, runs the migration, and adds the
+  second call afterwards. It does not represent a call already made while 1.5
+  was installed ([test](tests/Pipeline/Schema_UpgradeTest.php#L116)).
+- The migration selects only running rows. A closed 1.5 row that received a late
+  grounded call has the same additive state and remains unchanged
+  ([status filter](src/Activation.php#L290)).
+- The migration processes at most 500 rows, ignores each update result, and then
+  records schema version six ([limit and writes](src/Activation.php#L290),
+  [version update](src/Activation.php#L256)). A remaining or failed row is not
+  retried on the next request.
+
+**Impact**
+
+The scope is narrow: a run must carry a legacy payload count and also receive a
+grounded call while version 1.5 is active. For such a run, one or more search
+surcharges remain missing. A closed affected row can also stay underpriced.
+
+**Recommended fix**
+
+- Treat the legacy payload value and the existing version-1.5 column as
+  additive. Migrate running and closed rows that still contain the legacy key.
+- Make the move idempotent. For example, use a compare-and-swap on the exact
+  payload and column to add the legacy value to the column and remove the legacy
+  key from the payload in the same row update. A retry can then select only rows
+  that still contain the key without adding twice.
+- Set `cost_stale` on migrated closed rows. Repricing through `GREATEST` is safe:
+  a row with no post-1.5 calls will not decrease or duplicate cost, and a row
+  with post-1.5 calls will add the omitted surcharge.
+- Page until no matching row remains. Check every read and write. Update the
+  global schema version only after all rows are migrated successfully.
+- Add tests for payload one plus column one, payload one plus column two, a
+  closed row with a late 1.5 call, more than 500 rows, an interrupted migration,
+  and an idempotent retry.
+
+### F160-04 — Low — The README gives a hard repair time that the queue cannot guarantee
+
+**Category:** Documentation, operations, reliability
+
+**Verified facts**
+
+- The README says a repair pass is “at most five minutes” away and always occurs
+  before the next run spends ([README](README.md#L272)).
+- The code schedules a recurring action at a five-minute interval
+  ([schedule](src/Pipeline/Stall_Sweeper.php#L187)). An interval is not a maximum
+  execution delay.
+- Action Scheduler starts its default queue through WP-Cron and says that it
+  “will attempt to run” on its schedule. Its FAQ says that past-due actions are
+  normal because of how WP-Cron works
+  ([official operation guide](https://actionscheduler.org/),
+  [official FAQ](https://actionscheduler.org/faq/#my-site-has-past-due-actions-what-can-i-do)).
+- The project also states that no test drives Action Scheduler dispatch
+  ([README](README.md#L252)).
+- F160-02 proves that one budget check does not always repair the complete
+  backlog before it authorizes spending.
+
+**Impact**
+
+Operators can read a best-effort queue interval as a guaranteed recovery
+deadline. A quiet site, disabled WP-Cron, queue backlog, failed action, or more
+than one repair batch can exceed five minutes.
+
+**Recommended fix**
+
+Replace the guarantee with the exact behavior: the sweep is scheduled every
+five minutes, but actual execution depends on Action Scheduler and WP-Cron. Say
+that budget preflight repairs known stale rows before spending only after
+F160-02 makes that statement true. Document how to find and run a past-due
+`autoscribe_sweep_runs` action from the Scheduled Actions screen or WP-CLI.
+
+### Version 1.6.0 conclusion
+
+The new stale marker is a useful and purpose-aligned recovery mechanism. It
+fixes an interrupted reconciliation after a row has already closed, and the
+original README defect is corrected. The code is readable, the marker query is
+indexed, and the bounded sweep avoids unbounded background work. The release
+metadata, archive, tests, style checks, dependency audit, CI, and CodeQL are
+verified.
+
+The financial invariant still has three incomplete boundaries. A counter can
+land before closure without a marker, budget preflight can stop after one batch,
+and migration can collapse disjoint legacy and version-1.5 grounded counts.
+F160-01 and F160-02 prevent an unconditional pass. Keep the provider-side limit
+as the hard ceiling. Use a revision-based close protocol, make budget preflight
+fail closed on incomplete repair, and replace the migration before stating that
+all recorded money always reaches the monthly cap.
+
 ## Fresh verification review — version 1.5.0
 
 **Review date:** 19 August 2026 (America/Chicago)

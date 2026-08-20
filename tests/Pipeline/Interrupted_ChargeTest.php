@@ -479,4 +479,236 @@ final class Interrupted_ChargeTest extends WP_UnitTestCase {
 		$this->assertSame( 0, (int) Run::latest_for_prompt( $prompt_id )['cost_stale'] );
 		$this->assertSame( array(), Run::unsettled() );
 	}
+	/**
+	 * A charge landing while a run is being closed is not lost.
+	 *
+	 * The boundary the marker alone does not cover. The closing worker measures
+	 * the cost, another worker's call returns and records its tokens — the row is
+	 * still open at that instant, so the counter statement does not mark it — and
+	 * then the close writes the figure measured before those tokens existed. The
+	 * money is on the row and nothing knows the price is short.
+	 *
+	 * The close carries the revision it priced, so a row whose counters have moved
+	 * since is marked by the close itself.
+	 *
+	 * @since 1.7.0
+	 *
+	 * @return void
+	 */
+	public function test_a_charge_landing_during_the_close_is_priced_afterwards(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+
+		$run->merge_payload( array( 'rates' => ( new Pricing_Table() )->snapshot( array( 'claude-opus-5' ) ) ) );
+
+		$late      = Run::load( $run->id() );
+		$arrived   = false;
+		$interpose = static function ( $query ) use ( &$arrived, $late ) {
+			$sql = (string) $query;
+
+			// The terminal statement, and the moment before it lands.
+			$closing = str_contains( $sql, "SET status = 'failed'" )
+				|| str_contains( $sql, "SET `status` = 'failed'" );
+
+			if ( ! $arrived && $closing ) {
+				$arrived = true;
+
+				$late->record_text_usage( 'claude-opus-5', 1000000, 1000000 );
+			}
+
+			return $query;
+		};
+
+		add_filter( 'query', $interpose );
+
+		$closed = $run->fail( 'Given up on.' );
+
+		remove_filter( 'query', $interpose );
+
+		$this->assertTrue( $arrived, 'The interleaving must have happened for this to test anything.' );
+		$this->assertTrue( $closed->ended() );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame( 1000000, (int) $row['input_tokens'] );
+		$this->assertSame(
+			1,
+			(int) $row['cost_stale'],
+			'A run closed with counters newer than its price says so.'
+		);
+
+		$this->assertTrue( Run::settle_all_unsettled() );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame( 0, (int) $row['cost_stale'] );
+		$this->assertGreaterThan( 0, (int) $row['cost_cents'] );
+		$this->assertSame(
+			(int) $row['cost_cents'],
+			( new Budget_Guard() )->month_to_date_cents( $prompt_id ),
+			'The cap reads what the run really cost.'
+		);
+	}
+
+	/**
+	 * The budget guard drains the whole backlog before it sums.
+	 *
+	 * One batch is right for a background sweep and wrong here: with a batch of
+	 * twenty-five and twenty-six unpriced rows, the guard summed a figure the
+	 * database itself said was short and authorised a run against it.
+	 *
+	 * @since 1.7.0
+	 *
+	 * @return void
+	 */
+	public function test_the_guard_drains_more_than_one_batch_before_summing(): void {
+		$prompt_id = $this->create_prompt();
+		$rates     = ( new Pricing_Table() )->snapshot( array( 'gpt-image-2' ) );
+
+		for ( $i = 0; $i < Run::REPAIR_BATCH + 1; $i++ ) {
+			$run = Run::start( $prompt_id );
+
+			$this->assertNotWPError( $run );
+
+			$run->merge_payload( array( 'rates' => $rates ) );
+			$this->assertTrue( $run->fail( 'Given up on.' )->ended() );
+
+			$this->with_refused(
+				'SET cost_cents = GREATEST',
+				fn() => $run->record_image( 'gpt-image-2' )
+			);
+		}
+
+		$this->assertCount(
+			Run::REPAIR_BATCH + 1,
+			Run::unsettled( 100 ),
+			'Every run recorded a charge nothing priced.'
+		);
+		$this->assertCount(
+			Run::REPAIR_BATCH,
+			Run::unsettled(),
+			'And one batch is less than the backlog, which is the whole point.'
+		);
+
+		// A cap the priced backlog exceeds and one batch of it does not.
+		update_option( Budget_Guard::GLOBAL_CAP_OPTION, ( Run::REPAIR_BATCH * 4 ) + 1 );
+
+		$verdict = ( new Budget_Guard() )->check( Prompt::load( $prompt_id ), 1 );
+
+		delete_option( Budget_Guard::GLOBAL_CAP_OPTION );
+
+		$this->assertWPError( $verdict, 'Every unpriced run has to be in the total before it is compared.' );
+		$this->assertSame( 'autoscribe_budget_exceeded', $verdict->get_error_code() );
+		$this->assertSame( array(), Run::unsettled( 100 ), 'And the backlog is gone by then.' );
+	}
+
+	/**
+	 * A repair that cannot finish stops the spending rather than guessing.
+	 *
+	 * The cap cannot be enforced against a total known to be incomplete, so the
+	 * guard refuses instead of authorising a run on it.
+	 *
+	 * @since 1.7.0
+	 *
+	 * @return void
+	 */
+	public function test_a_repair_that_cannot_finish_blocks_the_run(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+
+		$run->merge_payload( array( 'rates' => ( new Pricing_Table() )->snapshot( array( 'gpt-image-2' ) ) ) );
+
+		$this->assertTrue( $run->fail( 'Given up on.' )->ended() );
+
+		$this->with_refused(
+			'SET cost_cents = GREATEST',
+			fn() => $run->record_image( 'gpt-image-2' )
+		);
+
+		update_option( Budget_Guard::GLOBAL_CAP_OPTION, 100000 );
+
+		// The repair meets the same refusal the original write did.
+		$verdict = $this->with_refused(
+			'SET cost_cents = GREATEST',
+			fn() => ( new Budget_Guard() )->check( Prompt::load( $prompt_id ), 1 )
+		);
+
+		delete_option( Budget_Guard::GLOBAL_CAP_OPTION );
+
+		$this->assertWPError( $verdict );
+		$this->assertSame(
+			'autoscribe_accounting_unavailable',
+			$verdict->get_error_code(),
+			'A cap that cannot be worked out is not a cap that passes.'
+		);
+	}
+
+	/**
+	 * A reconciliation that changes nothing is not reported as settled.
+	 *
+	 * Zero affected rows means a charge landed while the price was being worked
+	 * out, so the figure just computed is already out of date. Saying "settled"
+	 * there is how a caller is told the books balance while they do not — and the
+	 * charge that caused the miss is priced by its own reconciliation, which is
+	 * why the row ends up correct either way.
+	 *
+	 * @since 1.7.0
+	 *
+	 * @return void
+	 */
+	public function test_a_missed_reconciliation_is_not_success(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+
+		$run->merge_payload( array( 'rates' => ( new Pricing_Table() )->snapshot( array( 'gpt-image-2' ) ) ) );
+
+		$this->assertTrue( $run->fail( 'Given up on.' )->ended() );
+
+		$this->with_refused(
+			'SET cost_cents = GREATEST',
+			fn() => $run->record_image( 'gpt-image-2' )
+		);
+
+		$one_image = ( new Pricing_Table( Run::load( $run->id() )->payload()['rates'] ) )
+			->cost_cents( '', 0, 0, 'gpt-image-2', 1 );
+
+		$racing  = Run::load( $run->id() );
+		$arrived = false;
+
+		// A charge that lands between the measurement and the write it belongs to.
+		$interpose = static function ( $query ) use ( &$arrived, $racing ) {
+			$sql = (string) $query;
+
+			if ( ! $arrived && str_contains( $sql, 'SET cost_cents = GREATEST' ) ) {
+				$arrived = true;
+
+				$racing->record_image( 'gpt-image-2' );
+			}
+
+			return $query;
+		};
+
+		add_filter( 'query', $interpose );
+
+		$settled = Run::load( $run->id() )->reconcile_cost();
+
+		remove_filter( 'query', $interpose );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertTrue( $arrived );
+		$this->assertFalse( $settled, 'A compare-and-swap that matched nothing settled nothing.' );
+		$this->assertSame( 2, (int) $row['image_count'] );
+		$this->assertGreaterThan(
+			$one_image,
+			(int) $row['cost_cents'],
+			'The charge that caused the miss priced itself, so the row is right anyway.'
+		);
+	}
 }

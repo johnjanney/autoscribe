@@ -243,15 +243,30 @@ final class Budget_Guard {
 	 */
 	public function check( Prompt $prompt, int $projected_cents ): bool|WP_Error {
 		/*
-		 * Price anything a closed run recorded and did not get costed before
-		 * summing. Late usage is written by one statement and priced by another,
-		 * and a worker that died between the two leaves a row flagged as owing.
-		 * Repairing here means the flag is cleared by the thing that most needs it
-		 * cleared: the caller holds the spend lock, so the sum below sees the
-		 * repaired figures and a run cannot slip past the cap on a total that was
-		 * known to be short.
+		 * Price everything a closed run recorded and did not get costed, before
+		 * summing anything. Late usage is written by one statement and priced by
+		 * another, and a run whose worker died between the two carries a flag
+		 * saying it owes a price. The caller holds the spend lock, so a total
+		 * taken after this is a total nothing is known to be missing from.
+		 *
+		 * "Everything" rather than a batch, and the difference is the whole point:
+		 * a single batch left the twenty-sixth of twenty-six unpriced rows out of
+		 * the sum, and the guard authorised a run against a figure the database
+		 * itself said was short.
 		 */
-		Run::settle_unsettled();
+		if ( ! Run::settle_all_unsettled() ) {
+			/*
+			 * The books cannot be closed, so the cap cannot be enforced, so nothing
+			 * may spend. Refusing is the only answer that keeps the cap meaning
+			 * what it says: the alternative is authorising a run against a total
+			 * known to be incomplete, which is the failure this whole mechanism
+			 * exists to prevent.
+			 */
+			return new WP_Error(
+				'autoscribe_accounting_unavailable',
+				__( 'The spend of one or more finished runs could not be worked out, so the monthly total cannot be trusted and this run was stopped before spending anything. Check that the AutoScribe runs table is writable; the run log lists what is outstanding.', 'autoscribe' )
+			);
+		}
 
 		$prompt_cap = $prompt->monthly_budget_cents();
 

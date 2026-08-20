@@ -2273,3 +2273,144 @@ The check-to-WordPress-write window from F120-02 also remains, and is where it
 was: a claim lost in the instant between the ownership check and a media or post
 write. Its money side is settled either way — both workers' spending reaches the
 cap, now including when the process recording it dies part way.
+
+---
+---
+
+# Response to the ninth Codex review
+
+**Responding to:** the fresh-verification section of
+[CODEX-REVIEW.md](CODEX-REVIEW.md), dated 19 August 2026 against `7fea053`
+(tag `v1.6.0`)
+**Response date:** 19 August 2026
+**Release under response:** 1.6.0 → 1.7.0
+
+---
+
+## Summary
+
+Four findings. **All four confirmed, all four fixed.**
+
+| Finding | Verdict | Status |
+|---|---|---|
+| F160-01 Usage escapes accounting during the terminal transition | Confirmed | Fixed |
+| F160-02 Budget preflight sums while known stale cost remains | Confirmed | Fixed |
+| F160-03 The migration does not add existing 1.5 grounded calls | Confirmed | Fixed |
+| F160-04 The README promises a repair deadline the queue cannot keep | Confirmed | Fixed |
+
+**Verification:** PHPCS exits zero across 125 files — checked by exit status
+rather than by reading the tail of the output, which is how the last round's
+failure got past me. PHPUnit passes 375 tests and 1,637 assertions, up from 368
+and 1,549.
+
+---
+
+## The shape of these four
+
+Three of them are one boundary seen from three sides: money recorded at a moment
+when nothing was watching. 1.6.0 marked a row whose charge arrived after it
+closed, and stopped there — so a charge arriving *during* the close, a backlog
+larger than one repair batch, and an upgrade that merged two counts from
+different periods all went through. Each is the same lesson the last three rounds
+taught in different words: a rule applied at the boundary that prompted it, and
+not at the next one along.
+
+What has changed this time is that the fixes are stated as an invariant rather
+than as a patch to a case: money raises a revision, a price names the revision it
+priced, and anything that finds those two disagreeing marks the row. The three
+boundaries fall out of that one rule rather than each needing its own.
+
+## F160-01 — Confirmed. Fixed.
+
+The interleaving is exactly as described, and the counter statement cannot
+mark it, because at that instant the row is legitimately open.
+
+Every money write now raises `usage_revision`, open or closed.
+`measured_cents()` records the revision it priced — read after the counters, so a
+charge landing between the two reads makes the revision newer than the figure
+rather than older. Both terminal statements carry that revision and set
+`cost_stale` when the row has moved past it, so the close marks itself.
+
+The conditional close does this in its own statement, which is better: one
+statement cannot be interrupted half way. `wpdb::update()` cannot compare two
+columns, so the unconditional close checks immediately afterwards; the window
+that leaves is between two statements of one request, and what it writes is the
+same marker the repair passes look for.
+
+**Verified by removal.** With the marking neutralised the new test fails on the
+assertion that matters — the closed row does not say it owes a price. It is not
+a test that merely passes.
+
+## F160-02 — Confirmed. Fixed.
+
+The 26-row reproduction is right, and so is the observation that a zero-row
+compare-and-swap was being reported as success.
+
+- `Run::settle_all_unsettled()` drains in bounded pages and returns whether it
+  finished. It also stops early when a whole page settles nothing, because
+  another pass would read the same rows and fail the same way.
+- `Budget_Guard::check()` calls it before summing and **refuses the run** with
+  `autoscribe_accounting_unavailable` when it cannot finish. A cap that cannot be
+  worked out has to stop spending rather than pass it; authorising against a
+  total the database says is short is the failure the whole mechanism exists to
+  prevent.
+- `reconcile_cost()` now returns false for a failed read and for a
+  compare-and-swap that matched nothing, and true only when it settled the row.
+
+One thing worth recording about the zero-row case, because a test made it clear:
+when a charge lands mid-measurement, that charge's *own* reconciliation prices
+both, so the row ends up correct even though this caller's attempt missed. False
+is still the honest answer for the attempt, and the test asserts both halves.
+
+## F160-03 — Confirmed. Fixed.
+
+The finding is right that the payload and the column count different periods, and
+that my test only proved the case where the column was still zero.
+
+The migration adds the two and removes the legacy key in the same conditional
+write, which is what makes it idempotent: a row that still carries the key has
+not been migrated, and the write is conditional on the exact payload it was read
+from, so a document a worker changed in between is left for the next pass. Closed
+rows are migrated too and flagged for repricing — their money was settled under
+the reading that dropped a search, which is precisely why it has to be added now.
+The schema version is recorded only if the data migration finished, so an
+interrupted one is continued rather than forgotten.
+
+This reverses the "leave settled runs alone" rule I added last round, and its
+test with it. That rule was protecting closed rows from a migration that
+*overwrote*; with an additive one, leaving them alone is what loses the money.
+
+## F160-04 — Confirmed. Fixed.
+
+"At most five minutes" was the sweep's schedule read as a bound on when Action
+Scheduler runs it, which it is not — the project's own README says elsewhere that
+nothing tests the queue's dispatch, so I should have caught the contradiction.
+
+The paragraph now separates the two mechanisms: the budget check clears the whole
+backlog before it sums and refuses the run if it cannot, which is the guarantee
+that matters and does not depend on the queue; and the sweep clears a batch in
+the background on a best-effort schedule, for a site that has stopped generating.
+It also says where to find a past-due `autoscribe_sweep_runs` action and how to
+run it.
+
+## One thing this round found on its own
+
+The 1.7.0 archive built at twice the size of 1.6.0, which is the only reason I
+looked: a stray copy of the previous release zip was sitting in the working copy,
+`.gitignore` was hiding it from `git status`, and `.distignore` did not exclude
+it — so the build staged it inside the plugin. Nothing shipped: 1.6.0's archive
+is clean and 1.7.0 was rebuilt before release.
+
+Archives are excluded from the package now, and the build stops if one is staged
+anyway. A packaging check that only works when somebody notices a number is not a
+check, which is the same lesson as last round's trimmed lint output.
+
+---
+
+## What is still not covered
+
+Unchanged: no test drives Action Scheduler's own dispatch; the concurrency tests
+interleave in one process; CI runs against MySQL only; no test calls a live
+provider; Action Scheduler 4.1.0 is deferred to its own change. The
+check-to-WordPress-write window from F120-02 remains, with its money side settled
+either way.

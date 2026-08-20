@@ -87,6 +87,71 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-08-19
+
+A ninth external review, against 1.6.0. Four findings, all confirmed and all
+fixed.
+
+Three of them are the same boundary examined from three sides: money recorded at
+a moment when nothing was looking. 1.6.0 marked a closed run whose charge arrived
+late; this covers the charge that arrives while the run is closing, the backlog
+that one repair batch cannot clear, and the upgrade that treated two counts from
+different periods as two copies of one.
+
+MINOR rather than PATCH: the runs table gains a column, the budget guard can now
+refuse to authorise a run, and the grounded-call migration is replaced.
+
+### Fixed
+
+- **A charge landing while a run was being closed escaped the accounting.** The
+  closing worker measures the cost, another worker's call returns and records its
+  tokens — the row is still open at that instant, so nothing marks it — and the
+  close then writes the figure measured before those tokens existed. The money
+  was on the row and nothing knew the price was short.
+
+  Every write that records money now raises a `usage_revision`, and every
+  terminal transition carries the revision its figure was priced from. A run
+  whose counters moved in between is marked by the close itself, and the repair
+  passes price it.
+
+- **The budget check could authorise a run against a total it knew was short.**
+  It repaired one batch of twenty-five unpriced runs and then summed, so a
+  twenty-sixth stayed out of the figure the cap was compared against. It now
+  drains the whole backlog in bounded pages before summing, and refuses the run
+  outright if it cannot: a cap that cannot be worked out stops spending rather
+  than passing it.
+
+- **A reconciliation that changed nothing reported success.** A charge landing
+  while the price was being worked out makes the compare-and-swap match no rows,
+  which means the figure is already out of date — the row stays marked, and the
+  caller is now told so rather than being told the books balance.
+
+- **The grounded-call migration collapsed two counts into one.** The payload
+  holds calls made before 1.5.0 and the column holds calls made after, which are
+  different periods rather than two copies of one number. The migration adds them
+  and removes the legacy key in the same conditional write, so it is safe to
+  repeat; it covers closed runs as well, flagging them for repricing, and it
+  pages until nothing is left rather than recording a schema version for a
+  migration that did not finish.
+
+- **The README promised a repair deadline the queue cannot keep.** "At most five
+  minutes" is the sweep's schedule, not a bound on when Action Scheduler runs it.
+  The text now says what is actually guaranteed — nothing spends until the total
+  is complete — describes the sweep as best effort, and says where to find a
+  past-due sweep action.
+
+- **The build could package a stray archive inside the plugin.** `.gitignore`
+  hides a zip in the working copy from `git status`, and `.distignore` did not
+  exclude one, so a copy of the previous release found its way into the staged
+  plugin and doubled the download. It was caught before shipping by the size
+  looking wrong. Archives are excluded now, and the build refuses to continue if
+  one is staged anyway.
+
+### Added
+
+- A `usage_revision` column on the runs table, migrated by the existing schema
+  version check.
+
 ## [1.6.0] - 2026-08-19
 
 An eighth external review, against 1.5.0. Three findings, all confirmed and all

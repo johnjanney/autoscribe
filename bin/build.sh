@@ -54,6 +54,20 @@ else
 	exit 1
 fi
 
+# Nothing that is not the plugin. .distignore is the list, and this is the check
+# that the list did its job: a stray archive in the working copy once shipped
+# inside the plugin and doubled the download, and it was invisible because
+# .gitignore hid it from git status. A build that has staged something it should
+# not is a build worth stopping.
+STRAY="$(find "$STAGE_DIR" \( -name '*.zip' -o -name '*.tar.gz' \) -print -quit)"
+
+if [ -n "$STRAY" ]; then
+	echo "Refusing to build: an archive was staged into the plugin." >&2
+	echo "  $STRAY" >&2
+	echo "Remove it, or add it to .distignore." >&2
+	exit 1
+fi
+
 # Production dependencies only.
 composer install \
 	--working-dir="$STAGE_DIR" \

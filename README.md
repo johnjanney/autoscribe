@@ -13,7 +13,7 @@ everything, and inserts the post as a draft or publishes it.
 
 | | |
 |---|---|
-| **Version** | 1.6.0 |
+| **Version** | 1.7.0 |
 | **Requires WordPress** | 6.4 |
 | **Requires PHP** | 8.1 |
 | **License** | GPL-2.0-or-later |
@@ -192,9 +192,9 @@ way to tell it apart from the rest of the site.
 
 ## Status and known limitations
 
-Version 1.6.0. Eight external audits have been run against this plugin, and all
-eight found real defects; the findings, the fixes, and the findings rejected with
-evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 368 tests run
+Version 1.7.0. Nine external audits have been run against this plugin, and all
+nine found real defects; the findings, the fixes, and the findings rejected with
+evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 375 tests run
 against PHP 8.1, 8.2, and 8.3 on every push.
 
 Six things this plugin does not do the way the brief describes, all of them
@@ -272,12 +272,22 @@ The first item is the one that matters most:
   Every *money* write is accepted, from any worker, at any time, open or closed:
   a call that was billed happened whoever made it. Token, image, and search
   counters are additive rather than overwritten, and a charge that arrives after
-  the run closed raises what that run is recorded as having cost. That second
-  step is a separate statement from the first, so it can be interrupted — the row
-  is marked as owing it in the same write that records the money, and the next
-  budget check or stall sweep prices it. What the monthly cap reads is therefore
-  correct once a repair pass has run, which is at most five minutes and always
-  before the next run is allowed to spend.
+  the run closed raises what that run is recorded as having cost. Pricing what a
+  counter records is a second statement, so it can be interrupted — the row is
+  marked as owing a price by the same write that records the money, so an
+  interrupted pricing is late rather than lost.
+
+  Two things clear that mark. **The budget check clears all of it before it sums**,
+  while it holds the spend lock, and refuses to authorise the run if it cannot:
+  a cap that cannot be worked out stops spending rather than passing it. **The
+  stall sweep clears a batch in the background**, which is what settles the books
+  on a site that has stopped generating. That sweep is *scheduled* every five
+  minutes; when it actually runs is up to Action Scheduler and your cron setup,
+  so treat it as best effort rather than a deadline. If figures look stale, look
+  for a past-due `autoscribe_sweep_runs` action under **Tools → Scheduled
+  Actions**, or run `wp action-scheduler run --hooks=autoscribe_sweep_runs`. The
+  guarantee that matters does not depend on it: nothing spends until the total is
+  complete.
 - **A run whose ending the database will not accept is left open on purpose.**
   Reporting a run as finished when the write that finishes it was refused is how
   one article becomes two emails and two schedules, so the queue says nothing and

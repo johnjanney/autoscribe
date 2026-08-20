@@ -38,7 +38,23 @@ final class Activation {
 	 * @since 0.1.0
 	 * @var string
 	 */
-	public const DB_VERSION = '6';
+	public const DB_VERSION = '7';
+
+	/**
+	 * How many rows one pass of a data migration reads at a time.
+	 *
+	 * @since 1.7.0
+	 * @var int
+	 */
+	public const MIGRATION_BATCH = 200;
+
+	/**
+	 * How many of those pages one request works through before leaving the rest.
+	 *
+	 * @since 1.7.0
+	 * @var int
+	 */
+	public const MIGRATION_PAGES = 50;
 
 	/**
 	 * Capability gating the settings screens.
@@ -182,6 +198,12 @@ final class Activation {
 	 * a shared JSON document cannot be updated by two writers without one of them
 	 * losing what the other stored.
 	 *
+	 * A seventh since 1.7.0: usage_revision, which every write that records money
+	 * raises. It is what lets a terminal transition tell whether the counters it
+	 * priced are still the counters the row has — a charge landing in the moment
+	 * between measuring a run's cost and closing it belongs to that run, and
+	 * without the revision nothing afterwards could tell it had arrived.
+	 *
 	 * A sixth since 1.6.0: cost_stale, marking a closed run whose settled cost does
 	 * not yet include everything its counters do. It is written by the same
 	 * statement that raises a counter, which is what makes the accounting durable:
@@ -239,6 +261,7 @@ final class Activation {
 			cost_floor int(10) unsigned NOT NULL DEFAULT 0,
 			grounded_calls smallint(5) unsigned NOT NULL DEFAULT 0,
 			cost_stale tinyint(1) unsigned NOT NULL DEFAULT 0,
+			usage_revision int(10) unsigned NOT NULL DEFAULT 0,
 			attempt tinyint(3) unsigned NOT NULL DEFAULT 1,
 			sweeps smallint(5) unsigned NOT NULL DEFAULT 0,
 			error text DEFAULT NULL,
@@ -255,64 +278,125 @@ final class Activation {
 
 		dbDelta( $sql );
 
-		self::migrate_grounded_calls();
-
-		update_option( self::DB_VERSION_OPTION, self::DB_VERSION );
+		/*
+		 * The version is recorded only when the data migration finished as well as
+		 * the schema one. A migration that ran out of pages, or met a write it
+		 * could not make, leaves the version behind so the next request carries on
+		 * — repeating it is safe, because a migrated row no longer matches.
+		 */
+		if ( self::migrate_grounded_calls() ) {
+			update_option( self::DB_VERSION_OPTION, self::DB_VERSION );
+		}
 	}
 
 	/**
-	 * Copies grounded-call counts out of the payload and into their column.
+	 * Moves grounded-call counts out of the payload and adds them to their column.
 	 *
 	 * Version 1.5.0 moved the count from the payload document to a column and read
-	 * the larger of the two. For a run that crossed the upgrade with one grounded
-	 * call already recorded, the first new call incremented the column from zero
-	 * to one — and the larger of one and one is one. The run had made two grounded
-	 * requests, been billed for two, and counted one.
+	 * the larger of the two, which loses a call: a run with one recorded before
+	 * the upgrade and one after has one in each place, and the larger of one and
+	 * one is one. Two searches billed, one counted.
 	 *
-	 * Copying the legacy value into the column makes the two consistent: from then
-	 * on every increment adds to a count that already includes what came before,
-	 * and the payload fallback in Run::grounded_calls() only ever matches or loses
-	 * to the column.
+	 * The two numbers count different periods, so they are added rather than
+	 * compared — and the legacy key is removed in the same write, which is what
+	 * makes the move safe to repeat. A row that still carries the key has not been
+	 * migrated; a row without it has. The write is conditional on the exact
+	 * payload it was read from, so a document a worker changed in between is left
+	 * for the next pass rather than being written back stale.
 	 *
-	 * Only open runs are touched. A closed run has already been settled, and
-	 * raising its counter now would price a surcharge into a figure whose money
-	 * was accounted for under the old reading. GREATEST rather than assignment for
-	 * the same reason the accounting elsewhere uses it: a migration must not lower
-	 * a number.
+	 * Closed rows are migrated too, and flagged for repricing. Their money was
+	 * settled under the old reading, which is precisely why the surcharge it
+	 * omitted has to be added now; GREATEST means repricing a row that owes
+	 * nothing changes nothing.
 	 *
 	 * @since 1.6.0
 	 *
-	 * @return void
+	 * @return bool True when nothing carrying the legacy key is left.
 	 */
-	private static function migrate_grounded_calls(): void {
+	private static function migrate_grounded_calls(): bool {
 		global $wpdb;
 
-		$rows = $wpdb->get_results(
-			$wpdb->prepare(
-				'SELECT id, grounded_calls, payload FROM %i WHERE status = %s AND payload LIKE %s LIMIT 500',
-				self::table_name(),
-				Run::STATUS_RUNNING,
-				'%grounded_calls%'
-			),
-			ARRAY_A
-		);
+		for ( $page = 0; $page < self::MIGRATION_PAGES; $page++ ) {
+			$rows = $wpdb->get_results(
+				$wpdb->prepare(
+					'SELECT id, status, payload FROM %i WHERE payload LIKE %s LIMIT %d',
+					self::table_name(),
+					'%grounded_calls%',
+					self::MIGRATION_BATCH
+				),
+				ARRAY_A
+			);
 
-		foreach ( (array) $rows as $row ) {
-			$decoded = json_decode( (string) $row['payload'], true );
-			$legacy  = is_array( $decoded ) ? (int) ( $decoded['grounded_calls'] ?? 0 ) : 0;
-
-			if ( $legacy <= (int) $row['grounded_calls'] ) {
-				continue;
+			if ( ! is_array( $rows ) || array() === $rows ) {
+				return true;
 			}
 
-			$wpdb->update(
-				self::table_name(),
-				array( 'grounded_calls' => $legacy ),
-				array( 'id' => (int) $row['id'] ),
-				array( '%d' ),
-				array( '%d' )
-			);
+			$moved = 0;
+
+			foreach ( $rows as $row ) {
+				if ( self::move_grounded_calls( $row ) ) {
+					++$moved;
+				}
+			}
+
+			if ( 0 === $moved ) {
+				// Nothing moved, so the next page would read the same rows and fail
+				// the same way. Leaving the schema version behind means the next
+				// request tries again rather than recording a migration that did
+				// not happen.
+				return false;
+			}
 		}
+
+		return array() === (array) $wpdb->get_col(
+			$wpdb->prepare(
+				'SELECT id FROM %i WHERE payload LIKE %s LIMIT 1',
+				self::table_name(),
+				'%grounded_calls%'
+			)
+		);
+	}
+
+	/**
+	 * Adds one row's legacy grounded count to its column and drops the old key.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @param array<string, mixed> $row Row with id, status, and payload.
+	 * @return bool True when this row no longer carries the legacy key.
+	 */
+	private static function move_grounded_calls( array $row ): bool {
+		global $wpdb;
+
+		$payload = (string) $row['payload'];
+		$decoded = json_decode( $payload, true );
+
+		if ( ! is_array( $decoded ) || ! array_key_exists( 'grounded_calls', $decoded ) ) {
+			// The match was on a substring of the JSON, so it can be something
+			// else entirely — a topic key, a source URL. Nothing to move.
+			return true;
+		}
+
+		$legacy = max( 0, (int) $decoded['grounded_calls'] );
+
+		unset( $decoded['grounded_calls'] );
+
+		$updated = $wpdb->query(
+			$wpdb->prepare(
+				'UPDATE %i SET grounded_calls = grounded_calls + %d, payload = %s,
+				cost_stale = IF( status <> %s AND %d > 0, 1, cost_stale )
+				WHERE id = %d AND payload = %s',
+				self::table_name(),
+				$legacy,
+				(string) wp_json_encode( $decoded ),
+				Run::STATUS_RUNNING,
+				$legacy,
+				(int) $row['id'],
+				$payload
+			)
+		);
+
+		return is_numeric( $updated ) && (int) $updated > 0;
 	}
 
 	/**

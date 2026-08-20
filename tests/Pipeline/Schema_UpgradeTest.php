@@ -153,27 +153,136 @@ final class Schema_UpgradeTest extends WP_UnitTestCase {
 	}
 
 	/**
-	 * A closed run is left exactly as it was settled.
+	 * A settled run's legacy count is carried over and its cost re-opened.
 	 *
-	 * @since 1.6.0
+	 * This reverses what 1.6.0 did, and the reversal is the fix: a closed run's
+	 * money was settled under a reading that dropped one of its searches, so
+	 * leaving it alone leaves the surcharge missing for ever. Adding the count and
+	 * flagging the row means the next repair pass prices it, and repricing a row
+	 * that owes nothing changes nothing, because the cost only ever rises.
+	 *
+	 * @since 1.7.0
 	 *
 	 * @return void
 	 */
-	public function test_the_migration_leaves_settled_runs_alone(): void {
+	public function test_a_settled_run_has_its_legacy_count_carried_over(): void {
 		$run = Run::start( $this->create_prompt() );
 
 		$this->assertNotWPError( $run );
 		$this->assertTrue( $run->merge_payload( array( 'grounded_calls' => 1 ) ) );
 		$this->assertTrue( $run->fail( 'Finished before the upgrade.' )->ended() );
 
-		update_option( Activation::DB_VERSION_OPTION, '5' );
+		update_option( Activation::DB_VERSION_OPTION, '6' );
+
+		Activation::maybe_upgrade();
+
+		$row = Run::latest_for_prompt( $run->prompt_id() );
+
+		$this->assertSame( 1, (int) $row['grounded_calls'] );
+		$this->assertSame( 1, (int) $row['cost_stale'], 'A settled run that owes a surcharge says so.' );
+	}
+
+	/**
+	 * A count recorded under 1.5 is added to the legacy one, not compared with it.
+	 *
+	 * The two numbers count different periods: the payload holds what was made
+	 * before the column existed, and the column holds what was made after. Version
+	 * 1.6.0 took the larger of the two, so a run with one in each place counted
+	 * one search and had been billed for two.
+	 *
+	 * @since 1.7.0
+	 *
+	 * @return void
+	 */
+	public function test_a_legacy_count_is_added_to_one_recorded_since(): void {
+		global $wpdb;
+
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+		$this->assertTrue( $run->merge_payload( array( 'grounded_calls' => 1 ) ) );
+
+		// What 1.5.x left: one call in the payload from before, one in the column
+		// from after.
+		$wpdb->update(
+			Activation::table_name(),
+			array( 'grounded_calls' => 1 ),
+			array( 'id' => $run->id() ),
+			array( '%d' ),
+			array( '%d' )
+		);
+
+		update_option( Activation::DB_VERSION_OPTION, '6' );
 
 		Activation::maybe_upgrade();
 
 		$this->assertSame(
-			0,
-			(int) Run::latest_for_prompt( $run->prompt_id() )['grounded_calls'],
-			'A run whose money was already accounted for is not re-counted.'
+			2,
+			Run::load( $run->id() )->grounded_calls(),
+			'Two searches billed is two searches counted.'
 		);
+	}
+
+	/**
+	 * Running the migration twice does not count the same call twice.
+	 *
+	 * The legacy key is removed by the same write that adds its value, so a row
+	 * that has been migrated no longer matches the query that finds them.
+	 *
+	 * @since 1.7.0
+	 *
+	 * @return void
+	 */
+	public function test_the_migration_can_be_repeated_without_double_counting(): void {
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+		$this->assertTrue( $run->merge_payload( array( 'grounded_calls' => 2 ) ) );
+
+		update_option( Activation::DB_VERSION_OPTION, '6' );
+
+		Activation::maybe_upgrade();
+
+		$this->assertSame( 2, Run::load( $run->id() )->grounded_calls() );
+
+		update_option( Activation::DB_VERSION_OPTION, '6' );
+
+		Activation::maybe_upgrade();
+
+		$this->assertSame(
+			2,
+			Run::load( $run->id() )->grounded_calls(),
+			'A migrated row carries no legacy key, so a second pass has nothing to add.'
+		);
+	}
+
+	/**
+	 * Other payload state survives the move.
+	 *
+	 * @since 1.7.0
+	 *
+	 * @return void
+	 */
+	public function test_the_migration_leaves_the_rest_of_the_payload_alone(): void {
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+		$this->assertTrue(
+			$run->merge_payload(
+				array(
+					'grounded_calls' => 1,
+					'topic'          => array( 'title' => 'Water' ),
+				)
+			)
+		);
+
+		update_option( Activation::DB_VERSION_OPTION, '6' );
+
+		Activation::maybe_upgrade();
+
+		$payload = Run::load( $run->id() )->payload();
+
+		$this->assertSame( array( 'title' => 'Water' ), $payload['topic'] ?? null );
+		$this->assertArrayNotHasKey( 'grounded_calls', $payload, 'The key moves rather than being copied.' );
 	}
 }

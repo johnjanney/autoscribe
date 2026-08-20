@@ -64,6 +64,23 @@ final class Run {
 	public const CLAIM_PREFIX = 'doing:';
 
 	/**
+	 * How many unpriced runs one repair pass reads at a time.
+	 *
+	 * @since 1.7.0
+	 * @var int
+	 */
+	public const REPAIR_BATCH = 25;
+
+	/**
+	 * How many of those pages a caller that needs a complete answer will work
+	 * through before giving up and saying so.
+	 *
+	 * @since 1.7.0
+	 * @var int
+	 */
+	public const REPAIR_PAGES = 40;
+
+	/**
 	 * Separator between a claimed step and the token identifying the claim.
 	 *
 	 * @since 1.1.1
@@ -203,6 +220,25 @@ final class Run {
 	 * @var bool
 	 */
 	private bool $closed_here = false;
+
+	/**
+	 * The usage revision the last cost measurement was taken from.
+	 *
+	 * A terminal transition writes a figure worked out a few statements earlier,
+	 * and a charge can land in between: a second worker returning from a provider
+	 * call while this one is closing the run. The counter statement cannot mark
+	 * the row for repair in that moment, because at that moment the row is still
+	 * open and settlement has not happened yet — so the close carries the revision
+	 * it priced and marks the row itself when the row has moved on.
+	 *
+	 * Null until something measures. Nothing that writes a cost closes a run
+	 * without measuring first, and a close that carries no figure carries no
+	 * claim about the counters either.
+	 *
+	 * @since 1.7.0
+	 * @var int|null
+	 */
+	private ?int $measured_revision = null;
 
 	/**
 	 * Wraps an existing row ID.
@@ -514,6 +550,7 @@ final class Run {
 		$written = $wpdb->query(
 			$wpdb->prepare(
 				'UPDATE %i SET text_model = %s, input_tokens = input_tokens + %d, output_tokens = output_tokens + %d,
+				usage_revision = usage_revision + 1,
 				cost_stale = IF( status <> %s, 1, cost_stale ) WHERE id = %d',
 				Activation::table_name(),
 				$model,
@@ -571,6 +608,7 @@ final class Run {
 		$written = $wpdb->query(
 			$wpdb->prepare(
 				'UPDATE %i SET image_model = %s, image_count = image_count + 1,
+				usage_revision = usage_revision + 1,
 				cost_stale = IF( status <> %s, 1, cost_stale ) WHERE id = %d',
 				Activation::table_name(),
 				$model,
@@ -823,6 +861,7 @@ final class Run {
 		$written = $wpdb->query(
 			$wpdb->prepare(
 				'UPDATE %i SET grounded_calls = grounded_calls + 1,
+				usage_revision = usage_revision + 1,
 				cost_stale = IF( status <> %s, 1, cost_stale ) WHERE id = %d',
 				Activation::table_name(),
 				self::STATUS_RUNNING,
@@ -1003,16 +1042,21 @@ final class Run {
 		 * skipped states a reason and a cost, and a successful ending states
 		 * neither. Both are static statements with bound values, per D-26.
 		 */
+		$revision = $this->measured_revision ?? -1;
+
 		$updated = array_key_exists( 'cost_cents', $data )
 			? $wpdb->query(
 				$wpdb->prepare(
-					'UPDATE %i SET status = %s, error = %s, cost_cents = %d, finished_at = %s
+					'UPDATE %i SET status = %s, error = %s, cost_cents = %d, finished_at = %s,
+					cost_stale = IF( %d >= 0 AND usage_revision <> %d, 1, cost_stale )
 					WHERE id = %d AND status = %s AND COALESCE( step, %s ) = %s',
 					Activation::table_name(),
 					(string) $data['status'],
 					(string) ( $data['error'] ?? '' ),
 					(int) $data['cost_cents'],
 					(string) $data['finished_at'],
+					$revision,
+					$revision,
 					$this->id,
 					self::STATUS_RUNNING,
 					'',
@@ -1021,11 +1065,14 @@ final class Run {
 			)
 			: $wpdb->query(
 				$wpdb->prepare(
-					'UPDATE %i SET status = %s, finished_at = %s
+					'UPDATE %i SET status = %s, finished_at = %s,
+					cost_stale = IF( %d >= 0 AND usage_revision <> %d, 1, cost_stale )
 					WHERE id = %d AND status = %s AND COALESCE( step, %s ) = %s',
 					Activation::table_name(),
 					(string) $data['status'],
 					(string) $data['finished_at'],
+					$revision,
+					$revision,
 					$this->id,
 					self::STATUS_RUNNING,
 					'',
@@ -1950,35 +1997,46 @@ final class Run {
 
 		$row = $wpdb->get_row(
 			$wpdb->prepare(
-				'SELECT status, input_tokens, output_tokens, image_count, grounded_calls FROM %i WHERE id = %d',
+				'SELECT status, grounded_calls, cost_stale FROM %i WHERE id = %d',
 				Activation::table_name(),
 				$this->id
 			),
 			ARRAY_A
 		);
 
-		if ( ! is_array( $row ) || self::STATUS_RUNNING === (string) $row['status'] ) {
+		if ( ! is_array( $row ) ) {
+			// The row could not be read. Nothing is known, so nothing is claimed.
+			return false;
+		}
+
+		if ( self::STATUS_RUNNING === (string) $row['status'] ) {
+			// Settlement has not happened yet and will read the counters when it
+			// does. Nothing is owed, which is a different answer from "settled".
 			return true;
 		}
+
+		$cents = $this->measured_cents( null, (int) $row['grounded_calls'] );
 
 		$updated = $wpdb->query(
 			$wpdb->prepare(
 				'UPDATE %i SET cost_cents = GREATEST( cost_cents, %d ), cost_stale = 0
-				WHERE id = %d AND status <> %s
-					AND input_tokens = %d AND output_tokens = %d
-					AND image_count = %d AND grounded_calls = %d',
+				WHERE id = %d AND status <> %s AND usage_revision = %d',
 				Activation::table_name(),
-				$this->measured_cents( null, (int) $row['grounded_calls'] ),
+				$cents,
 				$this->id,
 				self::STATUS_RUNNING,
-				(int) $row['input_tokens'],
-				(int) $row['output_tokens'],
-				(int) $row['image_count'],
-				(int) $row['grounded_calls']
+				(int) $this->measured_revision
 			)
 		);
 
-		return false !== $updated;
+		/*
+		 * Zero rows is not success. It means a charge landed while the price was
+		 * being worked out, so the figure just computed is already out of date and
+		 * the row is still marked — which is exactly the state a retry is for.
+		 * Reporting it as settled was how a caller could be told the books
+		 * balanced while the row said otherwise.
+		 */
+		return is_numeric( $updated ) && (int) $updated > 0;
 	}
 
 	/**
@@ -2016,7 +2074,7 @@ final class Run {
 	 * @param int $limit Most runs to settle.
 	 * @return int How many were settled.
 	 */
-	public static function settle_unsettled( int $limit = 25 ): int {
+	public static function settle_unsettled( int $limit = self::REPAIR_BATCH ): int {
 		$settled = 0;
 
 		foreach ( self::unsettled( $limit ) as $id ) {
@@ -2028,6 +2086,55 @@ final class Run {
 		}
 
 		return $settled;
+	}
+
+	/**
+	 * Prices every outstanding run, in bounded pages, and says whether it managed.
+	 *
+	 * The bounded batch is right for a background sweep and wrong for the budget
+	 * guard, which is about to decide whether a run may spend: one batch left a
+	 * backlog of twenty-six rows with twenty-five priced, and the guard summed a
+	 * total the database itself said was short. Draining is the difference
+	 * between a repair and an answer.
+	 *
+	 * The page count is a bound rather than a target. A site with more unpriced
+	 * runs than this has something wrong that a longer loop will not fix, and the
+	 * caller is told so rather than being handed a total it cannot rely on.
+	 *
+	 * @since 1.7.0
+	 *
+	 * @param int $pages Most pages to work through.
+	 * @return bool True when nothing is outstanding by the end.
+	 */
+	public static function settle_all_unsettled( int $pages = self::REPAIR_PAGES ): bool {
+		$allowed = max( 1, $pages );
+
+		for ( $page = 0; $page < $allowed; $page++ ) {
+			$outstanding = self::unsettled( self::REPAIR_BATCH );
+
+			if ( array() === $outstanding ) {
+				return true;
+			}
+
+			$settled = 0;
+
+			foreach ( $outstanding as $id ) {
+				$run = self::load( $id );
+
+				if ( $run instanceof self && $run->reconcile_cost() ) {
+					++$settled;
+				}
+			}
+
+			if ( 0 === $settled ) {
+				// Nothing moved, so another pass would read the same rows and fail
+				// the same way. A write is being refused, or a charge is arriving
+				// faster than it can be priced.
+				return false;
+			}
+		}
+
+		return array() === self::unsettled( 1 );
 	}
 
 	/**
@@ -2046,6 +2153,10 @@ final class Run {
 	 */
 	private function measured_cents( ?Pricing_Table $pricing, int $grounded_calls = 0 ): int {
 		$this->load_usage( true );
+
+		// Read after the counters, so a charge landing between the two makes the
+		// revision newer than the figure rather than older.
+		$this->measured_revision = (int) $this->column( 'usage_revision' );
 
 		/*
 		 * The floor is applied to every ending, including the one that measures
@@ -2197,7 +2308,43 @@ final class Run {
 			return Close_Result::Write_Failed;
 		}
 
+		if ( (int) $updated > 0 ) {
+			$this->mark_if_usage_moved();
+		}
+
 		return $this->closed_by_me( (int) $updated > 0 ? Close_Result::Closed : Close_Result::Already_Closed );
+	}
+
+	/**
+	 * Flags a run this object has just closed if its counters moved while it did.
+	 *
+	 * The conditional close writes this into its own statement, which is better —
+	 * one statement cannot be interrupted half way. `wpdb::update()` cannot
+	 * express a comparison between two columns, so the unconditional close checks
+	 * afterwards instead. The window that leaves is between two statements of the
+	 * same request, and the marker it writes is the same marker a repair pass
+	 * looks for.
+	 *
+	 * @since 1.7.0
+	 *
+	 * @return void
+	 */
+	private function mark_if_usage_moved(): void {
+		global $wpdb;
+
+		if ( null === $this->measured_revision ) {
+			return;
+		}
+
+		$wpdb->query(
+			$wpdb->prepare(
+				'UPDATE %i SET cost_stale = 1 WHERE id = %d AND status <> %s AND usage_revision <> %d',
+				Activation::table_name(),
+				$this->id,
+				self::STATUS_RUNNING,
+				$this->measured_revision
+			)
+		);
 	}
 
 	/**
