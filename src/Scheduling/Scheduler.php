@@ -8,7 +8,7 @@
 namespace AutoScribe\Scheduling;
 
 use AutoScribe\Concurrency\Named_Lock;
-
+use AutoScribe\Prompts\Prompt;
 use WP_Error;
 
 defined( 'ABSPATH' ) || exit;
@@ -125,26 +125,39 @@ final class Scheduler {
 		$lock->acquire();
 
 		try {
-			$existing = $this->next_scheduled( $prompt_id );
-
-			if ( null !== $existing ) {
-				return $existing;
-			}
-
-			$next = $this->calculator->next( $schedule );
-
-			if ( is_wp_error( $next ) ) {
-				return $next;
-			}
-
-			$timestamp = $next->getTimestamp();
-
-			$armed = as_schedule_single_action( $timestamp, self::HOOK_RUN_PROMPT, $this->args( $prompt_id ), self::GROUP );
-
-			return $this->armed( $armed ) ? $timestamp : $this->not_armed();
+			return $this->arm_held( $prompt_id, $schedule );
 		} finally {
 			$lock->release();
 		}
+	}
+
+	/**
+	 * Arms the next occurrence, with this prompt's lock already held.
+	 *
+	 * @since 1.13.4
+	 *
+	 * @param int      $prompt_id Prompt to arm.
+	 * @param Schedule $schedule  Schedule to evaluate.
+	 * @return int|WP_Error Unix timestamp the run is armed for, or an error.
+	 */
+	private function arm_held( int $prompt_id, Schedule $schedule ): int|WP_Error {
+		$existing = $this->next_scheduled( $prompt_id );
+
+		if ( null !== $existing ) {
+			return $existing;
+		}
+
+		$next = $this->calculator->next( $schedule );
+
+		if ( is_wp_error( $next ) ) {
+			return $next;
+		}
+
+		$timestamp = $next->getTimestamp();
+
+		$armed = as_schedule_single_action( $timestamp, self::HOOK_RUN_PROMPT, $this->args( $prompt_id ), self::GROUP );
+
+		return $this->armed( $armed ) ? $timestamp : $this->not_armed();
 	}
 
 	/**
@@ -153,10 +166,23 @@ final class Scheduler {
 	 * Section 4.3 requires this on prompt save, cancelling first so a changed
 	 * schedule does not leave the previous occurrence armed alongside the new.
 	 *
+	 * Cancel and insert are one critical section, which they were not until
+	 * 1.13.4: the cancel sat outside the lock arm() takes, so a prompt save and a
+	 * finishing run could interleave as cancel, cancel, insert, insert — and the
+	 * second insert found an occurrence already queued and left it there. The one
+	 * that survived was whichever worker got the lock, not whichever schedule the
+	 * prompt actually holds.
+	 *
+	 * The schedule is re-read inside the lock for the same reason. A caller
+	 * resolves it before it calls, and a run that finishes seconds after a save
+	 * carries a snapshot of the schedule that save replaced. What is persisted
+	 * now is the only version worth arming; the caller's copy is the fallback for
+	 * a prompt that has since been deleted.
+	 *
 	 * @since 0.4.0
 	 *
 	 * @param int      $prompt_id Prompt to re-arm.
-	 * @param Schedule $schedule  Schedule to evaluate.
+	 * @param Schedule $schedule  Schedule to evaluate when the prompt cannot be read.
 	 * @return int|WP_Error Unix timestamp the run is armed for, or an error.
 	 */
 	public function rearm( int $prompt_id, Schedule $schedule ): int|WP_Error {
@@ -164,9 +190,38 @@ final class Scheduler {
 			return $this->unavailable();
 		}
 
-		$this->cancel( $prompt_id );
+		$lock = new Named_Lock( 'prompt_' . $prompt_id );
 
-		return $this->arm( $prompt_id, $schedule );
+		$lock->acquire();
+
+		try {
+			$this->cancel( $prompt_id );
+
+			return $this->arm_held( $prompt_id, $this->persisted_schedule( $prompt_id, $schedule ) );
+		} finally {
+			$lock->release();
+		}
+	}
+
+	/**
+	 * Returns the schedule the prompt currently holds, or the caller's copy.
+	 *
+	 * @since 1.13.4
+	 *
+	 * @param int      $prompt_id Prompt to read.
+	 * @param Schedule $fallback  Used when the prompt is gone or unreadable.
+	 * @return Schedule
+	 */
+	private function persisted_schedule( int $prompt_id, Schedule $fallback ): Schedule {
+		$prompt = Prompt::load( $prompt_id );
+
+		if ( null === $prompt ) {
+			return $fallback;
+		}
+
+		$schedule = $prompt->schedule();
+
+		return $schedule instanceof Schedule ? $schedule : $fallback;
 	}
 
 	/**

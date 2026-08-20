@@ -2220,6 +2220,23 @@ final class Run {
 	 * at all. The cost is one status read per paid call, on a path that has just
 	 * spent up to two minutes talking to a provider.
 	 *
+	 * Two things the first version of this got wrong, both fixed in 1.13.4.
+	 *
+	 * It took the lock and ignored whether it got it, so a wait that timed out —
+	 * or a database with no GET_LOCK at all — carried straight on and priced the
+	 * row anyway, which is the one thing the lock exists to prevent. The charge
+	 * itself still goes in: a provider that answered has been paid, and a charge
+	 * nobody records is worse than one recorded late. What does not happen is the
+	 * *pricing*. The write marks the closed row as owing a price in the same
+	 * statement, and a row that owes a price is one the budget guard must settle,
+	 * under this lock, before it authorises any further spending. Late rather
+	 * than lost, and never priced outside the lock.
+	 *
+	 * And the status it read could be out of date by the time the write landed:
+	 * a run closing in that gap left an open-path charge pricing a closed row
+	 * with no lock held. The open path now asks again after writing, and hands a
+	 * row that closed underneath it to the same locked path.
+	 *
 	 * @since 1.11.0
 	 *
 	 * @param callable $write Performs the counter write and returns whether it landed.
@@ -2229,14 +2246,16 @@ final class Run {
 		if ( self::STATUS_RUNNING === $this->status() ) {
 			$written = (bool) $write();
 
-			$this->reconcile_cost();
+			$this->price_if_closed();
 
 			return $written;
 		}
 
 		$lock = new Spend_Lock();
 
-		$lock->acquire();
+		if ( ! $lock->acquire() ) {
+			return (bool) $write();
+		}
 
 		try {
 			$written = (bool) $write();
@@ -2244,6 +2263,41 @@ final class Run {
 			$this->reconcile_cost();
 
 			return $written;
+		} finally {
+			$lock->release();
+		}
+	}
+
+	/**
+	 * Prices this run when it turns out to have closed, and only under the lock.
+	 *
+	 * Called after a charge written on the open path. The row is re-read rather
+	 * than trusted, because the decision to skip the lock was made before the
+	 * write and a run can close in between; on the ordinary path the answer is
+	 * "still open", which costs one read and settles nothing, because settlement
+	 * will read the counters when it happens.
+	 *
+	 * @since 1.13.4
+	 *
+	 * @return void
+	 */
+	private function price_if_closed(): void {
+		$this->load_usage( true );
+
+		if ( null === $this->snapshot || self::STATUS_RUNNING === (string) $this->snapshot['status'] ) {
+			return;
+		}
+
+		$lock = new Spend_Lock();
+
+		if ( ! $lock->acquire() ) {
+			// The row is already marked as owing a price. The budget guard settles
+			// what it finds outstanding before it authorises anything else.
+			return;
+		}
+
+		try {
+			$this->reconcile_cost();
 		} finally {
 			$lock->release();
 		}

@@ -69,6 +69,10 @@ final class GoogleTest extends Provider_Test_Case {
 		$this->assertSame( 'Write about rain.', $body['input'] );
 		$this->assertSame( 'You are a writer.', $body['system_instruction'] );
 		$this->assertSame( 4096, $body['generation_config']['max_output_tokens'] );
+		$this->assertFalse(
+			$body['store'],
+			'Nothing here reads a stored Interaction back, so none is asked for: the API keeps them for 55 days by default.'
+		);
 
 		$this->assertSame( 'Generated body.', $result->text() );
 		$this->assertSame( 5, $result->usage()->input_tokens() );

@@ -313,6 +313,117 @@ final class Two_ConnectionTest extends Two_Connection_Test_Case {
 	}
 
 	/**
+	 * A late charge that cannot take the lock is recorded but not priced.
+	 *
+	 * The contract this method's own comment describes was not the one it kept:
+	 * it took the lock and ignored whether it got it, so a wait that timed out
+	 * carried on and priced the row inside the window the budget guard holds the
+	 * lock for. The charge still lands — a provider that answered has been paid —
+	 * and the row is left saying it owes a price, which is a state the guard must
+	 * clear before it authorises anything else.
+	 *
+	 * @since 1.13.4
+	 *
+	 * @return void
+	 */
+	public function test_a_late_charge_that_cannot_take_the_lock_is_recorded_but_not_priced(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+
+		$run_id = $run->id();
+
+		$this->assertTrue( $run->fail( 'Given up on.' )->ended() );
+
+		$before = Run::latest_for_prompt( $prompt_id );
+		$guard  = $this->worker();
+		$lock   = new Spend_Lock();
+
+		$this->assertTrue( $guard->run( static fn() => $lock->acquire() ) );
+
+		$charged = $this->worker()->run(
+			static fn() => Run::load( $run_id )->record_image( 'gpt-image-2' )
+		);
+
+		$during = Run::latest_for_prompt( $prompt_id );
+
+		$guard->run( static fn() => $lock->release() );
+
+		$this->assertTrue( $charged, 'A charge the provider has already billed is never dropped.' );
+		$this->assertSame( 1, (int) $during['image_count'], 'The money is recorded.' );
+		$this->assertSame(
+			(int) $before['cost_cents'],
+			(int) $during['cost_cents'],
+			'And nothing is priced while somebody else is counting the money.'
+		);
+		$this->assertSame( 1, (int) $during['cost_stale'], 'The row says it owes a price.' );
+
+		// What clears it: the same repair the budget check runs before it sums.
+		$this->assertTrue( Run::settle_all_unsettled() );
+
+		$after = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame( 0, (int) $after['cost_stale'] );
+		$this->assertGreaterThan(
+			(int) $before['cost_cents'],
+			(int) $after['cost_cents'],
+			'The late charge reaches the figure the monthly cap reads.'
+		);
+	}
+
+	/**
+	 * A run closing under an open charge is not priced outside the lock either.
+	 *
+	 * The status is read before the write and can be stale by the time it lands.
+	 * That gap used to route a closed row down the open path, which prices
+	 * without coordinating with anybody.
+	 *
+	 * @since 1.13.4
+	 *
+	 * @return void
+	 */
+	public function test_a_run_that_closes_under_a_charge_is_not_priced_outside_the_lock(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+
+		$run_id = $run->id();
+		$guard  = $this->worker();
+		$lock   = new Spend_Lock();
+
+		$this->assertTrue( $guard->run( static fn() => $lock->acquire() ) );
+
+		$closed    = false;
+		$interpose = static function ( $query ) use ( &$closed, $run_id ) {
+			// The run closes in the gap between the status read and the write.
+			if ( ! $closed && str_contains( (string) $query, 'image_count = image_count +' ) ) {
+				$closed = true;
+
+				Run::load( $run_id )->fail( 'Closed under the charge.' );
+			}
+
+			return $query;
+		};
+
+		add_filter( 'query', $interpose );
+
+		$charged = Run::load( $run_id )->record_image( 'gpt-image-2' );
+
+		remove_filter( 'query', $interpose );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$guard->run( static fn() => $lock->release() );
+
+		$this->assertTrue( $closed, 'The interleaving must have happened for this to test anything.' );
+		$this->assertTrue( $charged );
+		$this->assertSame( 1, (int) $row['image_count'] );
+		$this->assertSame( 1, (int) $row['cost_stale'], 'Left owing a price rather than priced unprotected.' );
+	}
+
+	/**
 	 * Counts GET_LOCK attempts made while running a callable.
 	 *
 	 * @since 1.12.0

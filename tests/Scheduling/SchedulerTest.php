@@ -9,6 +9,7 @@ namespace AutoScribe\Tests\Scheduling;
 
 use AutoScribe\Activation;
 use AutoScribe\Prompts\Prompt;
+use AutoScribe\Scheduling\Next_Run_Calculator;
 use AutoScribe\Scheduling\Scheduler;
 use AutoScribe\Tests\Support\Creates_Prompts;
 use WP_UnitTestCase;
@@ -214,5 +215,48 @@ final class SchedulerTest extends WP_UnitTestCase {
 
 			$this->refusal = null;
 		}
+	}
+	/**
+	 * A re-arm uses the schedule the prompt holds, not the caller's copy of it.
+	 *
+	 * Both callers resolve a schedule and then call: a prompt save, and a run
+	 * finishing. A run that finishes seconds after a save carries the schedule
+	 * that save replaced, and until 1.13.4 whichever of the two got the lock
+	 * second found an occurrence already queued and left it alone — so the queue
+	 * could hold a time computed from a schedule nobody had asked for since.
+	 *
+	 * @since 1.13.4
+	 *
+	 * @return void
+	 */
+	public function test_a_rearm_uses_the_persisted_schedule_rather_than_the_callers(): void {
+		$prompt_id = $this->create_prompt(
+			array(
+				'schedule_type'   => 'daily',
+				'schedule_params' => array( 'time' => '06:00' ),
+			)
+		);
+
+		$stale = Prompt::load( $prompt_id )->schedule();
+
+		$this->assertNotWPError( $stale );
+
+		// The prompt is saved with a different time.
+		update_post_meta( $prompt_id, '_autoscribe_schedule_params', array( 'time' => '18:00' ) );
+
+		$scheduler = new Scheduler();
+		$armed     = $scheduler->rearm( $prompt_id, $stale );
+
+		$this->assertIsInt( $armed );
+
+		$expected = ( new Next_Run_Calculator() )->next( Prompt::load( $prompt_id )->schedule() );
+
+		$this->assertNotWPError( $expected );
+		$this->assertSame(
+			$expected->getTimestamp(),
+			$armed,
+			'The occurrence armed is the one the prompt now asks for.'
+		);
+		$this->assertSame( $armed, $scheduler->next_scheduled( $prompt_id ) );
 	}
 }

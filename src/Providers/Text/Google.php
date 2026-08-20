@@ -170,10 +170,20 @@ final class Google implements Text_Provider_Interface {
 	 * @return Generation_Result|WP_Error
 	 */
 	public function generate( string $api_key, string $model, Generation_Request $request ): Generation_Result|WP_Error {
+		/*
+		 * store is false for the reason the OpenAI adapter gives: the Interactions
+		 * API stores every Interaction object by default — 55 days on the paid
+		 * tier, one day on the free tier — and this plugin never reads one back.
+		 * Google documents two things store=false gives up, background execution
+		 * and previous_interaction_id, and the pipeline uses neither. Confirmed
+		 * against Google's Interactions storage and retention documentation on
+		 * 20 August 2026.
+		 */
 		$body = array(
 			'model'              => $model,
 			'input'              => $request->user_prompt(),
 			'system_instruction' => $request->system_prompt(),
+			'store'              => false,
 			'generation_config'  => array(
 				'max_output_tokens' => $request->max_output_tokens(),
 			),

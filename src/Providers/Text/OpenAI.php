@@ -146,11 +146,24 @@ final class OpenAI implements Text_Provider_Interface {
 	 * @return Generation_Result|WP_Error
 	 */
 	public function generate( string $api_key, string $model, Generation_Request $request ): Generation_Result|WP_Error {
+		/*
+		 * store is false because nothing here needs a stored response. The
+		 * Responses API keeps every response by default and the plugin never
+		 * fetches one back: each generation is independent, and the pipeline
+		 * carries its own state in the runs table rather than in
+		 * previous_response_id. Leaving the default in place would have left the
+		 * prompt, the site's recent post titles, and any rejected model output
+		 * sitting in provider-side storage to support a feature this plugin does
+		 * not use. Confirmed against OpenAI's Responses reference on 20 August
+		 * 2026: the field defaults to true, and false is the documented stateless
+		 * mode.
+		 */
 		$body = array(
 			'model'             => $model,
 			'instructions'      => $request->system_prompt(),
 			'input'             => $request->user_prompt(),
 			'max_output_tokens' => $request->max_output_tokens(),
+			'store'             => false,
 		);
 
 		if ( $request->wants_json() ) {

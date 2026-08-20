@@ -2,14 +2,14 @@
 # This file is distributed under the GPL-2.0-or-later.
 msgid ""
 msgstr ""
-"Project-Id-Version: AutoScribe 1.13.3\n"
+"Project-Id-Version: AutoScribe 1.13.4\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/autoscribe\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-20T17:44:08+00:00\n"
+"POT-Creation-Date: 2026-08-20T18:51:42+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: autoscribe\n"
@@ -535,16 +535,16 @@ msgid "The spend of one or more finished runs could not be worked out, so the mo
 msgstr ""
 
 #. translators: 1: which cap was hit, 2: spend so far in dollars, 3: cap in dollars.
-#: src/Cost/Budget_Guard.php:596
+#: src/Cost/Budget_Guard.php:597
 #, php-format
 msgid "The %1$s monthly budget would be exceeded. Estimated spend so far is $%2$s against a cap of $%3$s."
 msgstr ""
 
-#: src/Cost/Budget_Guard.php:597
+#: src/Cost/Budget_Guard.php:598
 msgid "per-prompt"
 msgstr ""
 
-#: src/Cost/Budget_Guard.php:597
+#: src/Cost/Budget_Guard.php:598
 msgid "global"
 msgstr ""
 
@@ -719,7 +719,7 @@ msgstr ""
 msgid "The run could not be recorded. Check that the AutoScribe runs table exists and is writable."
 msgstr ""
 
-#: src/Pipeline/Run.php:2576
+#: src/Pipeline/Run.php:2630
 msgid "The cost of this run could not be written to the run log, so the reservation it made against the monthly cap still stands. The run was not reported as finished."
 msgstr ""
 
@@ -1418,7 +1418,7 @@ msgstr ""
 msgid "Google (Gemini)"
 msgstr ""
 
-#: src/Providers/Text/Google.php:262
+#: src/Providers/Text/Google.php:272
 msgid "Google returned no text content."
 msgstr ""
 
@@ -1426,7 +1426,7 @@ msgstr ""
 msgid "OpenAI"
 msgstr ""
 
-#: src/Providers/Text/OpenAI.php:230
+#: src/Providers/Text/OpenAI.php:243
 msgid "OpenAI returned no text content."
 msgstr ""
 
@@ -1456,11 +1456,11 @@ msgstr ""
 msgid "The %1$s parameter is invalid. Expected %2$s."
 msgstr ""
 
-#: src/Scheduling/Scheduler.php:635
+#: src/Scheduling/Scheduler.php:690
 msgid "The action queue would not accept the job. Check that the Action Scheduler tables exist and are writable."
 msgstr ""
 
-#: src/Scheduling/Scheduler.php:661
+#: src/Scheduling/Scheduler.php:716
 msgid "Action Scheduler is not loaded, so runs cannot be queued."
 msgstr ""
 

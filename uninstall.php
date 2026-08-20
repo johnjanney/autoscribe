@@ -43,10 +43,34 @@ foreach (
 		'autoscribe_global_budget_cents',
 		'autoscribe_budget_notice_month',
 		'autoscribe_sweep_cursor',
+		'autoscribe_schedule_cursor',
 		'autoscribe_grounded_migration_cursor',
 	) as $autoscribe_option
 ) {
 	delete_option( $autoscribe_option );
+}
+
+/*
+ * The 80-percent warning claims one option per month it fires in, named for that
+ * month, so the set of them is not known in advance and cannot be listed above.
+ * Matched by their exact prefix rather than by anything broader: this file
+ * deliberately leaves the three meta keys on generated content behind, and a
+ * sweeping autoscribe_% deletion is how that intent gets undone by accident.
+ */
+$autoscribe_notice_prefix = $wpdb->esc_like( 'autoscribe_budget_notice_month_' ) . '%';
+
+// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Option names are not known in advance, and there is no API for finding them by prefix.
+$autoscribe_notice_options = $wpdb->get_col(
+	$wpdb->prepare(
+		"SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE %s",
+		$autoscribe_notice_prefix
+	)
+);
+
+// Found by query and removed by API: a direct DELETE would leave the options
+// cache holding rows that are no longer there.
+foreach ( (array) $autoscribe_notice_options as $autoscribe_notice_option ) {
+	delete_option( (string) $autoscribe_notice_option );
 }
 
 /*

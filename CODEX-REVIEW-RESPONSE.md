@@ -2811,3 +2811,172 @@ have found before a reviewer did. The locks are the reason the single-process
 tests are still meaningful — they make the interleavings unreachable rather than
 merely unlikely — but a harness that can actually run two workers is the next
 thing this suite needs.
+
+---
+
+# Response to the thirteenth Codex review
+
+**Responding to:** [CODEX-REVIEW.md](CODEX-REVIEW.md), review dated 20 August 2026 against `c7f372c` (tag `v1.13.3`)
+**Response date:** 20 August 2026
+**Release under response:** 1.13.3 → 1.13.4
+
+## Summary
+
+All five findings are confirmed. All five are fixed. Two are fixed differently
+from the way the review recommends, and both departures are set out below rather
+than left as silent disagreement.
+
+| Finding | Verdict | Status |
+|---|---|---|
+| F1333-01 Late charge writes after a failed lock acquisition | Confirmed, both windows | Fixed — differently |
+| F1333-02 Stateless calls use stored response resources | Confirmed against both providers' current documentation | Fixed |
+| F1333-03 Re-arm does not hold one lock across cancel and insert | Confirmed; impact smaller than stated | Fixed — one departure |
+| F1333-04 Uninstall leaves plugin-owned options behind | Confirmed, both halves | Fixed |
+| F1333-05 Stale and conflicting documentation | Confirmed, all four points | Fixed |
+
+**Verification:** 436 tests and 2,032 assertions pass, up from 430 and 1,993.
+PHPCS exits 0 with no errors and no warnings. Every fix was checked by removal:
+the change was reverted, the new test was confirmed to fail, and the failure was
+confirmed to be the expected one.
+
+## F1333-01 — Confirmed. The lock was taken and the answer thrown away
+
+The finding is right, and the reproduction is right. `under_spend_lock_if_closed()`
+called `Spend_Lock::acquire()` and ignored its return value, so a wait that timed
+out, or a database with no `GET_LOCK` at all, wrote *and priced* a closed run
+inside the interval the budget guard holds that lock for. The method's own
+comment described the opposite. The second window the review names is real too:
+the status was read before the write and could be stale by the time the write
+landed, so a run closing in that gap took the open path and priced a closed row
+with nothing held.
+
+**What was changed.** The result is now used. On the locked path a failed
+acquisition writes the charge and stops there. On the open path, the row is
+re-read after the write and, if it has closed underneath, pricing goes through
+the same locked path.
+
+**The departure.** The review asks for the charge itself to be withheld and
+persisted as a durable pending item with a bounded retry. This does the opposite
+with the money and the same thing with the books: **the charge is always
+written, and the pricing is what waits.**
+
+The reason is the invariant the rest of this accounting rests on. A provider that
+answered has been paid, and this plugin's money writes are unfenced and additive
+precisely so that no worker, however stale, can fail to record real spending. A
+pending-item queue would replace a write that always lands with a write that
+lands if a later job runs — and a dropped retry is a charge that never reaches
+the cap at all, which is the failure the whole mechanism exists to prevent.
+
+Withholding the price costs nothing, because the row already says so. Every money
+increment sets `cost_stale` on a closed row in the same statement, `Budget_Guard`
+settles what is outstanding **under the lock, before it sums**, and refuses to
+authorise anything when it cannot. So a charge written outside the lock is late
+rather than lost, and it cannot be included in an authorisation that has not
+first accounted for it. That is the same "interrupted reconciliation is late
+rather than lost" property the design already had; a failed acquisition now
+simply joins the set of things that produce it.
+
+**Tests.** Two new two-connection tests, both of which fail against 1.13.3:
+
+- one connection holds `Spend_Lock` while another calls the real
+  `Run::record_image()` on a closed run — the counter moves, `cost_cents` does
+  not, `cost_stale` is 1, and `settle_all_unsettled()` afterwards brings the
+  figure up;
+- the run is closed from inside the `query` filter, in the gap between the
+  status read and the usage write, while another connection holds the lock — the
+  row is left owing a price instead of being priced unprotected.
+
+Against 1.13.3 the first records a settled 4 cents while the lock is held
+elsewhere, and the second prices the row with nothing held.
+
+## F1333-02 — Confirmed, and verified against first-party documentation today
+
+Both claims check out against the providers' own current pages, read on
+20 August 2026: Google's Interactions API stores every Interaction by default
+(`store=true`, 55 days on the paid tier and one day on the free tier), and
+OpenAI's Responses API stores responses unless `store` is false. The plugin uses
+neither stored state: no `previous_interaction_id`, no `previous_response_id`, no
+retrieval, no background execution. Google names those last two as what
+`store=false` gives up, and the pipeline uses neither.
+
+Both adapters now send `'store' => false`, with the reasoning at the call site
+and a request-shape assertion in each adapter's test. The README's data
+disclosure states it.
+
+## F1333-03 — Confirmed, with a smaller impact than stated
+
+`rearm()` cancelled outside the lock `arm()` takes, so the interleaving described
+is reachable: two workers cancel, the first inserts under the lock, and the
+second finds an occurrence queued and leaves a timestamp computed from a schedule
+nobody holds any more.
+
+`rearm()` is now one critical section — lock, cancel, calculate, insert, release
+— and the schedule is **re-read from the prompt inside the lock**, with the
+caller's copy kept only as the fallback for a prompt that has since been deleted.
+A new test proves it: a stale snapshot handed to `rearm()` arms the time the
+prompt currently holds, and against 1.13.3 it arms the stale one.
+
+Two corrections to the finding's framing:
+
+- The impact is bounded more tightly than "the prompt can run at the old time
+  once". A run dispatched under a superseded configuration is stopped by the
+  `config_changed` guard in `Queued_Run_Handler::handle_step()`, which fails the
+  run rather than publishing under settings its budget and duplicate checks never
+  saw. That guard fired on a live site the day before this review, for exactly
+  this reason, and the Run Log said so.
+- The review asks for a `WP_Error` when the lock cannot be acquired. That is
+  rejected. The cancel has to happen for a re-arm to mean anything, and refusing
+  after cancelling would leave the prompt with nothing queued at all — trading a
+  possibly-stale occurrence for no occurrence, which is the failure section 4.3
+  exists to prevent. Without the lock the sequence degrades to what it did
+  before, which is documented at the call site, and the schedule sweep re-arms
+  anything that falls out entirely.
+
+## F1333-04 — Confirmed. Both halves fixed
+
+`autoscribe_schedule_cursor` is now in the uninstall list. The dated warning
+claims are found by their exact prefix, with `esc_like()`, and removed through
+`delete_option()` rather than a direct `DELETE` — a raw statement leaves the
+options cache holding rows that no longer exist, which the test caught.
+
+`UninstallTest::OPTIONS` now names all three cursors through their own class
+constants rather than string literals, and the test seeds two dated claims. A
+second test seeds three bystander options whose names sit close to the prefix —
+including `another_autoscribe_budget_notice_month_2026-08` — and asserts they
+survive, because a prefix deletion is one typo away from taking somebody else's
+row with it.
+
+## F1333-05 — Confirmed, all four points
+
+- The README said version 1.11.0 while the plugin shipped 1.13.3. Fixed, and
+  fixed so it cannot recur: `VersionTest` now asserts that the README's summary
+  table and its status paragraph both name `AutoScribe\VERSION`. The release
+  checklist asked for this and the checklist drifted anyway; a test does not.
+- The uninstall section said two preserved meta keys where the code preserves
+  three. It now names all three and says why the topic key is kept: duplicate
+  avoidance compares against it, so keeping it means a reinstall does not propose
+  every previous topic again.
+- The `Budget_Guard` estimate comment still said 512 tokens. It now refers to the
+  step's own constant rather than repeating a number — the same mistake in
+  reverse, one release apart.
+- `Source_Extractor`'s comment described only the legacy `groundingChunks` shape.
+  It now describes the Interactions `url_citation` annotations as the current
+  surface, and a new test covers a current `steps` payload. The legacy fixture is
+  kept deliberately, and the comment says so: the extractor still reads that
+  shape, and dropping a parser loses source URLs silently.
+
+## On the review-history file
+
+The review is right that `CODEX-REVIEW.md` is now 5,000 lines and that the
+current report is hard to find in it. It is left as it is, because appending is
+how this project's audit trail has been kept and rewriting it would break the
+references in every earlier response. The finding IDs are stable, which is the
+part that matters for a reply.
+
+## What is still not covered
+
+Unchanged from last round, minus one: Action Scheduler's dispatch **is** now
+driven by a test. Still true — CI runs against MySQL only; no test calls a live
+provider; Action Scheduler 4.1.0 is deferred; the archive is built locally rather
+than by CI; and the two-connection tests interleave two sessions deterministically
+rather than racing them in wall-clock time.

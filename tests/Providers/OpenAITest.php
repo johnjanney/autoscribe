@@ -65,6 +65,10 @@ final class OpenAITest extends Provider_Test_Case {
 		$this->assertSame( 'You are a writer.', $body['instructions'] );
 		$this->assertSame( 'Write about tea.', $body['input'] );
 		$this->assertSame( 2048, $body['max_output_tokens'] );
+		$this->assertFalse(
+			$body['store'],
+			'The Responses API stores every response by default, and this plugin never fetches one back.'
+		);
 
 		$this->assertSame( 'Generated body.', $result->text() );
 		$this->assertSame( 7, $result->usage()->input_tokens() );

@@ -87,6 +87,57 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.13.4] - 2026-08-20
+
+The thirteenth external review. All five findings confirmed and fixed; the
+verdicts, and the two places this departs from the recommended fix, are in
+`CODEX-REVIEW-RESPONSE.md`.
+
+### Fixed
+
+- **A late charge could be priced while the budget check held the spend lock.**
+  Money arriving after a run has closed takes the same lock the budget check
+  holds from its final sum through its reservation — except that the code took
+  the lock and ignored whether it got it, so a wait that timed out, or a database
+  with no `GET_LOCK`, carried on and priced the row anyway. The charge is still
+  always written: a provider that answered has been paid, and a charge nobody
+  records is worse than one recorded late. What now waits is the *pricing*. The
+  write marks the closed row as owing a price, and a row that owes a price is one
+  the budget check must settle, under the lock, before it authorises any further
+  spending.
+
+  The status a charge decides on could also be out of date by the time the write
+  landed, so a run closing in that gap was priced on the open path with nothing
+  held. The row is re-read after the write and handed to the locked path.
+
+- **Re-arming a prompt was two critical sections pretending to be one.** The
+  cancel sat outside the lock the insert takes, so a prompt save and a finishing
+  run could interleave and leave the queue holding an occurrence computed from a
+  schedule that had already been replaced. Cancel and insert now happen under one
+  lock, and the schedule is re-read from the prompt inside it — the caller's copy
+  is only the fallback for a prompt that has since been deleted.
+
+- **Uninstall left three options behind.** The schedule sweep's cursor was not in
+  the list, and the 80-percent warning claims one option per month it fires in,
+  named for that month, so they could not be listed at all. They are now found by
+  their exact prefix and removed through the options API.
+
+- **Documentation that had drifted.** The README said version 1.11.0 while the
+  plugin shipped 1.13.3, and said two preserved meta keys where the code
+  preserves three. `VersionTest` now asserts the README states the shipping
+  version, so that particular drift cannot be committed again. A `Budget_Guard`
+  comment still named the 512-token proposal ceiling that 1.13.1 replaced, and
+  `Source_Extractor` described only the legacy Google grounding shape.
+
+### Changed
+
+- **The OpenAI and Google text calls are explicitly stateless.** Both APIs store
+  every response by default — Google for 55 days on the paid tier — and this
+  plugin never reads one back: each generation is independent and the pipeline
+  keeps its own state in the runs table. Both adapters now send `store: false`,
+  which is the only part of provider retention a caller can turn off. Verified
+  against both providers' current documentation on 20 August 2026.
+
 ## [1.13.3] - 2026-08-20
 
 A run that was interrupted once and then finished normally reported about three

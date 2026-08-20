@@ -155,10 +155,50 @@ final class GroundingTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Google Interactions citations are recognised.
+	 *
+	 * The shape the adapter actually talks to: grounded sources arrive as
+	 * url_citation annotations inside the response steps, not as the
+	 * groundingChunks of the older generateContent API. The test below keeps the
+	 * legacy shape covered; this one covers the current surface.
+	 *
+	 * @since 1.13.4
+	 *
+	 * @return void
+	 */
+	public function test_extractor_reads_google_interactions_citations(): void {
+		$urls = Source_Extractor::from(
+			array(
+				'steps' => array(
+					array(
+						'content' => array(
+							array(
+								'type'        => 'text',
+								'text'        => 'Body.',
+								'annotations' => array(
+									array(
+										'type'  => 'url_citation',
+										'url'   => 'https://example.com/interactions',
+										'title' => 'Search result',
+									),
+								),
+							),
+						),
+					),
+				),
+			)
+		);
+
+		$this->assertSame( array( 'https://example.com/interactions' ), $urls );
+	}
+
+	/**
 	 * Google grounding chunks are recognised.
 	 *
 	 * These carry no type field at all, which is why the extractor also keys off
-	 * the parent name.
+	 * the parent name. Kept alongside the Interactions shape above rather than
+	 * replaced: a response from the older API is still readable, and losing a
+	 * parser loses source URLs without saying so.
 	 *
 	 * @since 0.8.0
 	 *

@@ -1,3 +1,490 @@
+# Fresh Codex review — AutoScribe 1.13.3
+
+**Review date:** 20 August 2026 (America/Chicago)
+
+**Reviewed revision:** `c7f372c8014b0eca0c5101cab5fee292ca6d526b` on
+`main`, tag `v1.13.3`
+
+**Change range:** `cfd09d0..c7f372c` (versions 1.11.0 through 1.13.3; 36 files,
+4,212 insertions, and 302 deletions)
+
+**Release reviewed:** [AutoScribe 1.13.3 on GitHub](https://github.com/johnjanney/autoscribe/releases/tag/v1.13.3)
+
+**Result:** **Conditional pass.** The plugin now implements its stated purpose
+well. Its code structure, automated tests, resource limits, provider adapters,
+and queue recovery are strong. However, one high-severity accounting race makes
+the WordPress monthly cap weaker than the documentation states. OpenAI and
+Google text requests also use provider-side storage when AutoScribe does not need
+stored response state. Keep a provider-side spending limit enabled. Fix
+F1333-01 before you treat the WordPress cap as a dependable control.
+
+## Executive assessment
+
+| Area | Result | Assessment |
+|---|---|---|
+| Purpose | Pass | The plugin has separate text and image providers, independent prompt schedules, post and featured-image assembly, and review or automatic publication. |
+| Quality | Conditional pass | The architecture is clear and extensively tested. One lock contract is not implemented by its production caller. Schedule re-arming also has a smaller concurrency gap. |
+| Performance | Pass | Queue work is split by step. Recovery work is paged and bounded. HTTP bodies, downloaded image bytes, and image pixels have limits. I found no new material performance defect. |
+| Security and privacy | Conditional pass | I found no verified authentication bypass, CSRF, SQL injection, stored XSS, arbitrary provider URL, code execution, or API-key disclosure. F1333-01 affects financial integrity. F1333-02 increases provider-side data retention. |
+| Tests and release | Pass with gaps | 430 tests pass with 1,993 assertions. PHPCS, Composer validation, Composer audit, GitHub CI, and CodeQL pass. The tests do not cover the production late-charge contention path. |
+| Documentation | Needs correction | The setup and privacy sections are useful. The README version and uninstall statement are stale, and two code comments describe old provider or token behavior. |
+
+The release is suitable for controlled use if the site owner keeps the provider's
+own spending limit enabled and accepts the provider retention rules. It is not
+yet suitable for a claim that the WordPress monthly cap closes all known
+concurrency windows.
+
+## Findings
+
+### F1333-01 — High — A late charge writes after the spend lock acquisition fails
+
+**Category:** Financial integrity, concurrency, quality
+
+**Verified facts**
+
+1. [`Run::under_spend_lock_if_closed()`](src/Pipeline/Run.php#L2228) reads the
+   run status before it selects the locked path.
+2. For a closed row, it calls `Spend_Lock::acquire()` but discards the Boolean
+   result. It then performs the usage write and cost reconciliation even when it
+   does not hold the lock ([`Run.php`](src/Pipeline/Run.php#L2237)).
+3. [`Named_Lock::acquire()`](src/Concurrency/Named_Lock.php#L81) returns `false`
+   when `GET_LOCK()` times out, is unsupported, or fails. `release()` does
+   nothing when the instance does not hold the lock.
+4. The budget check does use the acquisition result and changes to its weaker
+   confirmation path when the result is false
+   ([`Step_Budget_Check.php`](src/Pipeline/Step_Budget_Check.php#L67)). The late
+   charge path has no equivalent failure branch.
+5. The existing two-connection test holds the lock in one connection and calls
+   `Spend_Lock::acquire()` directly in the other connection
+   ([`Two_ConnectionTest.php`](tests/Concurrency/Two_ConnectionTest.php#L292)).
+   It does not call `record_text_usage()`, `record_image()`, or
+   `record_grounded_call()` while the lock is held.
+6. I ran a temporary two-connection probe through the production method. One
+   connection held `Spend_Lock`. A second connection called
+   `Run::record_image()` on a closed run. The call returned `true` while the
+   first connection still held the lock. The probe failed with: `The production
+   write passed the lock.` I removed the temporary probe after the reproduction.
+
+There is a second time-of-check/time-of-use window. A worker can read `running`,
+skip the lock, and then write after another worker closes the row. The usage
+statement correctly marks the closed row stale, but the write did not coordinate
+with a budget check that can be active at that time.
+
+**Inference and impact**
+
+The shared lock does not exclude every late charge from the interval between a
+budget total check and a new reservation. A charge can therefore make the total
+that authorized a new run incomplete. The WordPress cap can overshoot by more
+than the documented estimate difference. This is not a verified remote attack
+path. It is a concurrency and accounting defect that can increase real provider
+cost.
+
+**Recommended fix**
+
+1. Remove the status-read decision before the write.
+2. First attempt an atomic open-row update with `WHERE id = ... AND status =
+   'running'`.
+3. If the open-row update does not match, acquire the spend lock before any
+   closed-row usage update.
+4. If lock acquisition fails, do not write the closed charge outside the lock.
+   Persist a durable pending-accounting item, or schedule a bounded retry. Do not
+   drop the charge because the provider has already billed it.
+5. Under the lock, reload the row, add the usage, and reconcile the settled cost.
+6. Return a distinct accounting error when neither the protected write nor the
+   durable retry can be recorded.
+
+**Required tests**
+
+- Hold `Spend_Lock` in connection A. Call each real `Run::record_*()` money path
+  in connection B. Verify that no counter or settled cost changes before the
+  lock is released.
+- Release the lock and process the durable retry. Verify that the real charge is
+  recorded exactly once.
+- Close a run between the open-row update attempt and the fallback path. Verify
+  that the closed write takes the lock.
+- Run a budget reservation and a late production charge at the same time. Verify
+  that one observes the other before authorization completes.
+
+### F1333-02 — Medium — Stateless OpenAI and Google calls use stored response resources
+
+**Category:** Privacy, data minimization, documentation
+
+**Verified facts**
+
+1. AutoScribe sends system prompts, user prompts, recent site titles, rejected
+   proposals, and malformed model output to its selected text provider. The
+   README discloses these data classes ([`README.md`](README.md#L117)).
+2. The Google request body does not set `store`
+   ([`Google.php`](src/Providers/Text/Google.php#L172)). Google states that the
+   Interactions API stores requests by default. It states that `store=false`
+   enables stateless behavior. It also states retention periods of 55 days for
+   the paid tier and one day for the free tier. See the official
+   [Google Interactions API storage and retention documentation](https://ai.google.dev/gemini-api/docs/interactions-overview#data-storage-and-retention).
+3. The OpenAI request body also does not set `store`
+   ([`OpenAI.php`](src/Providers/Text/OpenAI.php#L148)). The official create
+   examples show `store: true` in responses when the request omits this field,
+   and the official reference describes `store: false` as stateless operation.
+   See the official [OpenAI Responses API reference](https://developers.openai.com/api/reference/typescript/resources/beta/subresources/responses/methods/create).
+4. AutoScribe does not use `previous_interaction_id`, `previous_response_id`,
+   response retrieval, response deletion, or background response state. Each
+   generation request is independent.
+5. The README gives a general warning that provider retention rules apply. It
+   does not state that these two adapters request stored response resources when
+   the provider default permits it ([`README.md`](README.md#L163)).
+
+**Inference and impact**
+
+The stored resources do not support an AutoScribe feature. They increase how
+long prompt and site-title data can remain available in provider response
+storage. Provider account terms, abuse monitoring, and Zero Data Retention rules
+can still apply after this fix. The fix only removes storage that these APIs let
+the caller disable.
+
+**Recommended fix**
+
+1. Add `'store' => false` to the Google Interactions request body.
+2. Add `'store' => false` to the OpenAI Responses request body.
+3. Add request-shape tests for both adapters.
+4. State the explicit stateless setting in the README. Link to the provider API
+   or service terms, not only consumer product terms.
+5. If stored responses become a feature later, make it an explicit opt-in and
+   explain the retention effect before it is enabled.
+
+### F1333-03 — Medium — Re-arming does not hold one lock across cancel and insert
+
+**Category:** Scheduling integrity, availability, concurrency
+
+**Verified facts**
+
+1. [`Scheduler::arm()`](src/Scheduling/Scheduler.php#L104) holds a per-prompt
+   named lock around its queue check and insert.
+2. [`Scheduler::rearm()`](src/Scheduling/Scheduler.php#L162) cancels the existing
+   action before it calls `arm()`. The cancellation is outside the lock.
+3. Prompt saves and run completion both call `rearm()` with a `Schedule` object
+   that the caller resolved before the cancel and insert sequence
+   ([`Plugin.php`](src/Plugin.php#L198),
+   [`Queued_Run_Handler.php`](src/Pipeline/Queued_Run_Handler.php#L553)).
+4. The schedule sweep also operates on the same prompt actions.
+
+A concrete interleaving is possible:
+
+1. A prompt save cancels the old action for schedule B.
+2. A run-completion worker, which already resolved old schedule A, cancels.
+3. The run-completion worker inserts schedule A under the lock.
+4. The prompt-save worker takes the lock, sees an existing action, and returns
+   the timestamp for stale schedule A without inserting schedule B.
+
+**Inference and impact**
+
+The queue can retain an occurrence computed from a superseded schedule. The
+prompt can run at the old time once. The normal completion or the recovery sweep
+can correct later occurrences. This is a schedule-integrity defect, not a
+verified duplicate-spend path, because the run-opening guard still rejects a
+second open run.
+
+**Recommended fix**
+
+1. Make re-arm one critical section: acquire the per-prompt lock, cancel, load
+   the current persisted prompt schedule, calculate, and insert before release.
+2. Do not accept a caller-owned schedule snapshot for the final insert, or bind
+   it to a configuration fingerprint and reject it if the prompt changed.
+3. If the lock cannot be acquired, return a `WP_Error` and let the sweep retry.
+   Do not silently perform the cancel-and-insert sequence without protection.
+4. Add a two-connection test in which an old run completion races a new prompt
+   save. Assert that the final queued timestamp matches the persisted schedule.
+
+Not found in documents: a test that interleaves `Scheduler::rearm()` from a
+prompt save and a run completion with two different schedule snapshots.
+
+### F1333-04 — Low — Uninstall leaves plugin-owned options behind
+
+**Category:** Data lifecycle, quality, documentation
+
+**Verified facts**
+
+1. The schedule sweep writes `autoscribe_schedule_cursor`
+   ([`Schedule_Sweeper.php`](src/Scheduling/Schedule_Sweeper.php#L69)).
+2. [`uninstall.php`](uninstall.php#L37) deletes the stall-sweep cursor and the
+   grounded-migration cursor, but it does not delete the schedule-sweep cursor.
+3. Each monthly warning claim creates an option named
+   `autoscribe_budget_notice_month_YYYY-MM`
+   ([`Budget_Guard.php`](src/Cost/Budget_Guard.php#L423)). These dynamic options
+   are not removed during uninstall. One non-autoloaded row is added per month
+   in which the warning threshold is claimed.
+4. [`UninstallTest::OPTIONS`](tests/UninstallTest.php#L42) lists only six
+   options. It omits both cursor options, the migration cursor, and the dynamic
+   monthly claims. Its statement that it covers every option is therefore not
+   correct.
+5. The README states that deleting the plugin removes its options
+   ([`README.md`](README.md#L180)).
+
+**Inference and impact**
+
+The retained rows are small and are not sensitive. They violate the documented
+data-lifecycle behavior and leave unnecessary state after removal.
+
+**Recommended fix**
+
+1. Add `autoscribe_schedule_cursor` to the uninstall list.
+2. Delete the exact monthly-claim prefix with a prepared query and
+   `$wpdb->esc_like()`. Do not use a broad `autoscribe_%` deletion because the
+   uninstall design intentionally preserves generated-content metadata.
+3. Define one authoritative registry for fixed plugin options, or add a test
+   that enumerates every plugin option constant and compares it with uninstall.
+4. Extend `UninstallTest` with the schedule cursor, both existing cursors, and at
+   least two dated warning-claim options.
+
+### F1333-05 — Low — Release documentation contains stale and conflicting facts
+
+**Category:** Documentation, maintainability, release quality
+
+**Verified facts**
+
+1. The plugin header and runtime constant are version 1.13.3
+   ([`autoscribe.php`](autoscribe.php#L3)). The README status still says version
+   1.11.0 ([`README.md`](README.md#L193)). The release checklist requires the
+   README version and status claims to be updated
+   ([`CHANGELOG.md`](CHANGELOG.md#L48)).
+2. The README says that uninstall preserves two generated-content meta keys.
+   The implementation and uninstall test preserve three:
+   `_autoscribe_generated`, `_autoscribe_run_id`, and `_autoscribe_topic_key`
+   ([`UninstallTest.php`](tests/UninstallTest.php#L214)).
+3. A `Budget_Guard` method comment still says that proposal calls use a
+   512-token ceiling ([`Budget_Guard.php`](src/Cost/Budget_Guard.php#L447)). The
+   active ceiling is 2,048 tokens
+   ([`Step_Propose_Topic.php`](src/Pipeline/Step_Propose_Topic.php#L59)). The
+   calculation uses the correct constant, so this is documentation drift, not
+   an active under-reservation defect.
+4. `Source_Extractor` says that Google Interactions responses use
+   `groundingChunks`, and its Google test fixture uses the older
+   `generateContent` shape
+   ([`Source_Extractor.php`](src/Providers/Response/Source_Extractor.php#L13),
+   [`GroundingTest.php`](tests/Pipeline/GroundingTest.php#L157)). The current
+   Interactions API returns `url_citation` annotations in `steps`. The generic
+   extractor already accepts this shape because it recognizes citation types and
+   `annotations`. See Google's official
+   [grounding response documentation](https://ai.google.dev/gemini-api/docs/google-search#understanding-the-grounding-response).
+
+**Recommended fix**
+
+1. Update the README to version 1.13.3 and correct the audit-status text.
+2. State all three preserved meta keys, or explain why the topic key is retained.
+3. Change the token comment to 2,048 or refer only to the shared constant.
+4. Update the Google source-extraction comment and add a current `steps` plus
+   `url_citation` fixture. Keep the older fixture only if backward compatibility
+   with `generateContent` payloads is intentional.
+5. Add a release check that compares the README status version with the plugin
+   header. The existing version test checks only the header and runtime constant.
+
+## Quality review
+
+### Strengths
+
+- The plugin has clear namespaces and narrow provider, schedule, pipeline, cost,
+  security, and admin boundaries.
+- The queued pipeline now stores intermediate state and advances one paid step
+  per action. This limits the work lost to a host timeout.
+- Run updates use compare-and-swap claim markers for most state changes. Usage
+  counters use database increments so concurrent workers do not lose paid usage.
+- Queue and stall recovery use bounded pages and persistent cursors. Batch work
+  does not grow without a limit in one request.
+- The two-connection harness is a large improvement. It tests real database
+  sessions instead of only interleaved objects on one session.
+- Failure paths usually fail closed. Unknown open-run reads do not authorize a
+  second run. Failed reservations stop before a provider call.
+- Comments explain the reason for non-obvious concurrency and accounting code.
+  F1333-01 shows that these comments must still be checked against the exact
+  return-value handling.
+
+### Weaknesses
+
+- Several correctness properties depend on named-lock return values, but three
+  callers discard the result. The scheduling code documents a weaker fallback.
+  The late charge caller has no safe fallback.
+- The review history is valuable but very large. The current state is hard to
+  find because `CODEX-REVIEW.md` contains all older reports. Keep this fresh
+  section first, and use stable finding IDs in responses.
+- Option ownership is duplicated between classes, uninstall code, and tests.
+  The lists have already drifted.
+- Provider API fixtures can remain structurally valid while their comments and
+  source shapes become stale. Current first-party contract fixtures should be a
+  release task.
+
+## Performance review
+
+I found no release-blocking performance regression in the reviewed change
+range.
+
+Verified positive controls:
+
+- Each queued generation action performs at most one pipeline step.
+- The stall sweep limits pages and recovered runs. The schedule sweep limits
+  prompts per pass.
+- Active Action Scheduler rows are fetched once per sweep, not once per run.
+- Run-log reads are paginated.
+- Provider response bodies have an 8 MiB limit.
+- Image downloads have a 20 MiB byte limit and a 50-megapixel decoded-image
+  limit.
+- HTTP timeouts are finite.
+- The run table has indexes for its status and time queries.
+
+Residual performance risks:
+
+- `active_action_args()` reads every pending or running AutoScribe action for a
+  hook before it intersects the set with one page of runs. This is reasonable
+  for the expected queue size, but memory and query time grow with the full
+  active AutoScribe queue.
+- A recovered provider step can repeat one paid call after a hard process death.
+  Version 1.13.3 reserves a bounded interrupted-step allowance for this case.
+  This is a deliberate reliability and cost trade-off.
+- Action Scheduler 4.1.0 is available while the lock contains 3.9.3. This is a
+  major-version update, not a verified defect. Composer reports no advisory for
+  the installed version. Test the major upgrade separately before adoption.
+
+## Security and privacy review
+
+### Verified controls
+
+- Admin mutations use capability and nonce checks in the reviewed action paths.
+- API keys are encrypted with Sodium and are not rendered back into forms.
+- Provider generation URLs are adapter constants. User model IDs are encoded
+  only into fixed model-test paths.
+- Remote images use WordPress safe HTTP retrieval and are validated as images
+  before sideloading.
+- Generated HTML is sanitized through a narrow KSES allowlist before post write.
+- Untrusted post titles and rejected model output are fenced in model prompts.
+- SQL values use WordPress preparation in the reviewed custom queries.
+- Composer audit reports no known advisory in the locked packages.
+- GitHub CodeQL passed for the reviewed commit.
+
+### Result
+
+I found no verified unauthenticated code execution, SQL injection, stored XSS,
+CSRF, capability bypass, provider-endpoint SSRF, API-key disclosure, or unsafe
+deserialization path. F1333-01 is a security-relevant integrity control failure,
+but no untrusted remote trigger was established. F1333-02 is a data-minimization
+and retention defect.
+
+## Purpose review
+
+The implementation matches the four purposes in the project brief:
+
+1. It supports independent text and image provider selections.
+2. It stores prompts as a custom post type and computes independent schedules.
+3. It creates WordPress posts, applies taxonomy and SEO metadata, and attaches a
+   generated or fallback featured image.
+4. It supports review drafts and automatic publication.
+
+The design also supports the operational purpose:
+
+- Action Scheduler owns queued work.
+- A real system cron is documented.
+- One run is split into separate actions.
+- Stalled runs and lost prompt actions have recovery paths.
+- Run rows keep model, token, image, source, outcome, and cost records.
+- Global and per-prompt caps reserve cost before provider calls.
+
+The principal purpose gap is not feature absence. It is that the late-charge
+implementation does not fully supply the cost-control property that the design
+and README claim.
+
+## Provider contract verification
+
+I checked the current first-party provider documents on 20 August 2026.
+
+- Anthropic lists `claude-opus-5`, `claude-sonnet-5`, and
+  `claude-haiku-4-5` as valid IDs or aliases. It lists
+  `web_search_20260209` as a supported web-search tool version. See the official
+  [Anthropic model table](https://platform.claude.com/docs/en/about-claude/models/overview)
+  and [web search tool documentation](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool).
+- OpenAI lists the current GPT-5.6 model family and Responses API support. The
+  adapter request structure and `web_search` tool name are consistent with the
+  current official [OpenAI model documentation](https://developers.openai.com/api/docs/models).
+- Google lists `gemini-3.7-flash`, `gemini-3.6-flash`, and
+  `gemini-3.5-flash-lite` as supported Interactions models. It recommends the
+  Interactions API for new projects. See the official
+  [Google Interactions API overview](https://ai.google.dev/gemini-api/docs/interactions-overview).
+- DeepSeek lists the v4 Flash and Pro model family and records retirement of the
+  old Chat and Reasoner names. See the official
+  [DeepSeek API update log](https://api-docs.deepseek.com/updates/).
+
+I found no verified current provider model-ID defect. No funded live provider
+generation call was made. Therefore, live account availability, regional access,
+quota, billing, and provider-side schema enforcement were not tested.
+
+## Verification record
+
+| Check | Result |
+|---|---|
+| Revision and tag | `main` at `c7f372c`, tag `v1.13.3` |
+| PHP | 8.1.2 in the local WSL runtime |
+| PHPUnit in the existing `wp-env` test container | PASS — 430 tests, 1,993 assertions, 15.831 seconds, 74.50 MiB |
+| Temporary production late-charge contention probe | EXPECTED FAILURE — proved F1333-01; probe removed after execution |
+| PHPCS | PASS — 136 PHP files |
+| `composer validate --strict --no-check-publish` | PASS |
+| `composer audit --locked --no-interaction` | PASS — no known advisory |
+| `git diff --check cfd09d0..HEAD` | PASS |
+| GitHub CI for `c7f372c` | PASS — [CI run 32400416885](https://github.com/johnjanney/autoscribe/actions/runs/32400416885) |
+| GitHub CodeQL for `c7f372c` | PASS — [CodeQL run 32400416294](https://github.com/johnjanney/autoscribe/actions/runs/32400416294) |
+| Release asset | `autoscribe-1.13.3.zip`, 531,879 bytes |
+| Local and GitHub release SHA-256 | MATCH — `8d276e306d200033fd5b8010c7a3464666aeba4e142fdc9ac20db55a2b02b4aa` |
+
+The direct local PHPUnit command did not start tests because the local
+`wp-phpunit` configuration does not define its required WordPress test
+constants. The existing project `wp-env` container has the correct database and
+WordPress test configuration, and the complete suite passed there. This is a
+local review-environment condition, not a plugin test failure.
+
+The working tree already contained two unrelated items before this review: a
+mode-only change for `bin/build.sh` and an untracked Zone Identifier file under
+`docs/`. I did not modify or remove them. The tagged release asset matches the
+local 1.13.3 archive by SHA-256.
+
+## Test gaps
+
+High-priority gaps:
+
+- The production late-charge methods under a lock held by another connection.
+- A status transition between the open-row status check and usage write.
+- A prompt-save re-arm racing a run-completion re-arm with different schedules.
+- Explicit `store=false` assertions for Google and OpenAI.
+- Complete uninstall coverage for all fixed and dynamic plugin options.
+
+Lower-priority gaps:
+
+- A current Google Interactions `url_citation` fixture.
+- Settings-save behavior remains listed as a known limitation.
+- A built-zip activation smoke test is not in the automated suite.
+- Live provider generation, SMTP delivery, and a real shared-host timeout were
+  not tested. Not found in documents.
+- MariaDB CI was not present in the reviewed workflow. Not found in documents.
+
+## Recommended remediation order
+
+1. Fix F1333-01 and add the production two-connection tests.
+2. Set `store=false` for Google and OpenAI and update the privacy disclosure.
+3. Make re-arm one current-configuration critical section.
+4. Complete uninstall cleanup and its authoritative test list.
+5. Correct the README and stale code comments.
+6. Add the current Google grounding fixture and a built-archive activation test.
+7. Evaluate Action Scheduler 4.x as a separate dependency upgrade.
+
+## Final conclusion
+
+AutoScribe 1.13.3 is a substantial improvement over the earlier revisions in
+this file. The queue split, stall recovery, two-session tests, cost snapshots,
+resource limits, write checks, and current provider adapters are serious
+engineering work. The plugin serves its stated content-generation purpose.
+
+The main remaining defect is narrow but important: the code says that a late
+charge takes the spend lock, but the production method writes after that lock
+returns false. This was reproduced through the real method. Correct that path,
+use stateless provider requests where supported, and close the smaller schedule
+and uninstall gaps. Until then, use the provider's spending limit as the hard
+ceiling and treat the WordPress cap as a brake.
+
+---
+
 # AutoScribe code quality and security audit
 
 ## Fresh verification review — version 1.10.0

@@ -19,7 +19,11 @@ defined( 'ABSPATH' ) || exit;
  * - Anthropic returns web_search_result blocks, and web_search_result_location
  *   citations attached to the text blocks that cite them.
  * - OpenAI returns url_citation annotations on the output message content.
- * - Google returns groundingChunks, each with a web.uri.
+ * - Google returns url_citation annotations inside the steps of an Interactions
+ *   response, and groundingChunks with a web.uri on the older generateContent
+ *   shape. Both are recognised: the legacy shape is kept because a site can be
+ *   pointed at either surface, and because dropping a parser costs source URLs
+ *   silently.
  *
  * Rather than three parsers that each break the next time a provider adds a
  * wrapper level, this walks the decoded body and picks up any node that both

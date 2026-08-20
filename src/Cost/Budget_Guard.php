@@ -455,7 +455,8 @@ final class Budget_Guard {
 	 *
 	 * Every call the pipeline can make is now counted:
 	 *
-	 * - two proposal calls, at the 512-token ceiling section 7.2's cheap call uses;
+	 * - two proposal calls, at whatever ceiling section 7.2's cheap call requests,
+	 *   read from the step rather than repeated here;
 	 * - the body call, at the same token ceiling the body step requests;
 	 * - one repair call, whose prompt also carries the rejected response back;
 	 * - one image, and one grounded request.

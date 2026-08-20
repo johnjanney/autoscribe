@@ -11,9 +11,11 @@ use AutoScribe\Activation;
 use AutoScribe\Cost\Budget_Guard;
 use AutoScribe\Cost\Pricing_Table;
 use AutoScribe\Media\Image_Sideloader;
+use AutoScribe\Pipeline\Stall_Sweeper;
 use AutoScribe\Pipeline\Step_Assemble_Post;
 use AutoScribe\Prompts\Prompt_Fields;
 use AutoScribe\Prompts\Prompt_Post_Type;
+use AutoScribe\Scheduling\Schedule_Sweeper;
 use AutoScribe\Security\Key_Store;
 use AutoScribe\Tests\Support\Creates_Prompts;
 use WP_UnitTestCase;
@@ -51,6 +53,24 @@ final class UninstallTest extends WP_UnitTestCase {
 		Pricing_Table::OPTION,
 		Budget_Guard::GLOBAL_CAP_OPTION,
 		Budget_Guard::NOTICE_SENT_OPTION,
+		Stall_Sweeper::CURSOR_OPTION,
+		Schedule_Sweeper::CURSOR_OPTION,
+		Activation::MIGRATION_CURSOR_OPTION,
+	);
+
+	/**
+	 * Warning claims, which are named for the month they were made in.
+	 *
+	 * The list above cannot hold these: the plugin writes one per month it warns
+	 * in, so the names are not known until they exist. They were the half of this
+	 * that uninstall missed while the test claimed to cover every option.
+	 *
+	 * @since 1.13.4
+	 * @var string[]
+	 */
+	private const DATED_CLAIMS = array(
+		Budget_Guard::NOTICE_SENT_OPTION . '_2026-07',
+		Budget_Guard::NOTICE_SENT_OPTION . '_2026-08',
 	);
 
 	/**
@@ -178,18 +198,50 @@ final class UninstallTest extends WP_UnitTestCase {
 	 * @return void
 	 */
 	public function test_every_option_is_removed(): void {
-		foreach ( self::OPTIONS as $option ) {
+		$options = array_merge( self::OPTIONS, self::DATED_CLAIMS );
+
+		foreach ( $options as $option ) {
 			update_option( $option, 'set' );
 		}
 
-		foreach ( self::OPTIONS as $option ) {
+		foreach ( $options as $option ) {
 			$this->assertNotFalse( get_option( $option, false ), $option . ' was not set up for the test' );
 		}
 
 		$this->uninstall();
 
-		foreach ( self::OPTIONS as $option ) {
+		foreach ( $options as $option ) {
 			$this->assertFalse( get_option( $option, false ), $option . ' survived the uninstall' );
+		}
+	}
+
+	/**
+	 * Options belonging to other plugins are left alone.
+	 *
+	 * The dated claims are removed by prefix, and a prefix deletion is one typo
+	 * away from taking somebody else's row with it.
+	 *
+	 * @since 1.13.4
+	 *
+	 * @return void
+	 */
+	public function test_a_prefix_deletion_does_not_reach_past_its_prefix(): void {
+		$bystanders = array(
+			'autoscribe_budget_notice_monthly_report',
+			'another_autoscribe_budget_notice_month_2026-08',
+			'unrelated_plugin_option',
+		);
+
+		foreach ( $bystanders as $option ) {
+			update_option( $option, 'set' );
+		}
+
+		$this->uninstall();
+
+		foreach ( $bystanders as $option ) {
+			$this->assertNotFalse( get_option( $option, false ), $option . ' was deleted by a prefix match' );
+
+			delete_option( $option );
 		}
 	}
 

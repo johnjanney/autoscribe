@@ -13,7 +13,7 @@ everything, and inserts the post as a draft or publishes it.
 
 | | |
 |---|---|
-| **Version** | 1.13.3 |
+| **Version** | 1.13.4 |
 | **Requires WordPress** | 6.4 |
 | **Requires PHP** | 8.1 |
 | **License** | GPL-2.0-or-later |
@@ -183,18 +183,20 @@ Deleting the plugin removes its table, its options, its capabilities, and every
 prompt. It does **not** remove the posts and images it generated — those are
 your content.
 
-Two meta keys are deliberately left behind so you can act on that content later:
-`_autoscribe_generated` on every generated attachment, and `_autoscribe_run_id`
-on every generated post. Without them you would keep the content but lose any
-way to tell it apart from the rest of the site.
+Three meta keys are deliberately left behind so you can act on that content
+later: `_autoscribe_generated` on every generated attachment, `_autoscribe_run_id`
+on every generated post, and `_autoscribe_topic_key` on every generated post.
+The first two are how you tell generated content apart from the rest of the site.
+The third is what duplicate avoidance compares against, so keeping it means a
+reinstall does not propose every topic again.
 
 ---
 
 ## Status and known limitations
 
-Version 1.11.0. Twelve external audits have been run against this plugin, and all
-twelve found real defects; the findings, the fixes, and the findings rejected
-with evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 430 tests
+Version 1.13.4. Thirteen external audits have been run against this plugin, and
+all thirteen found real defects; the findings, the fixes, and the findings rejected
+with evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 436 tests
 run against PHP 8.1, 8.2, and 8.3 on every push.
 
 Five things this plugin does not do the way the brief describes, all of them
