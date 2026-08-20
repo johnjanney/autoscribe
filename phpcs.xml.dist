@@ -64,6 +64,13 @@
 	-->
 	<rule ref="WordPress.DB.DirectDatabaseQuery">
 		<exclude-pattern>/uninstall.php</exclude-pattern>
+		<!--
+		The schema migration reads and rewrites rows of the plugin's own table to
+		move a counter out of the payload document and into its column. There is
+		no wrapper for that, and caching a migration would be meaningless: it runs
+		once, before anything else reads the values it is correcting.
+		-->
+		<exclude-pattern>*/src/Activation.php</exclude-pattern>
 		<exclude-pattern>*/src/Pipeline/Run.php</exclude-pattern>
 		<exclude-pattern>*/src/Cost/Budget_Guard.php</exclude-pattern>
 		<!--

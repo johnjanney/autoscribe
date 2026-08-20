@@ -479,5 +479,4 @@ final class Interrupted_ChargeTest extends WP_UnitTestCase {
 		$this->assertSame( 0, (int) Run::latest_for_prompt( $prompt_id )['cost_stale'] );
 		$this->assertSame( array(), Run::unsettled() );
 	}
-
 }

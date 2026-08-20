@@ -29,6 +29,12 @@ Do not pass `--parallel` to phpcs. Its progress counter reports worker batches
 rather than files, which makes a partial run look like a complete one — a 33-file
 run displaying "7 / 7" reads as a pass.
 
+Read the whole of what phpcs prints, or check its exit status. Trimming the
+output — `--report=summary | tail -3`, say — hides the summary table when there
+is one, so a run with errors in it looks exactly like a clean run and CI is the
+first thing to disagree. That has happened; the exit status is zero only when
+there is genuinely nothing to report.
+
 ## Standards
 
 - WordPress Coding Standards, `WordPress` and `WordPress-Docs`. `phpcs.xml.dist`

@@ -176,5 +176,4 @@ final class Schema_UpgradeTest extends WP_UnitTestCase {
 			'A run whose money was already accounted for is not re-counted.'
 		);
 	}
-
 }
