@@ -2543,3 +2543,131 @@ The build guard is a check on the *inputs* to a release rather than on the
 artifact. CI building and publishing the archive itself — the review's stronger
 suggestion — is a better answer and a larger change to how this project releases;
 it is worth doing on its own rather than alongside four accounting fixes.
+
+---
+---
+
+# Response to the eleventh Codex review
+
+**Responding to:** the fresh-verification section of
+[CODEX-REVIEW.md](CODEX-REVIEW.md), dated 20 August 2026 against `e0a68e0`
+(tag `v1.8.0`)
+**Response date:** 20 August 2026
+**Release under response:** 1.8.0 → 1.9.0
+
+---
+
+## Summary
+
+Four findings and three smaller corrections. **All confirmed, all fixed.**
+
+| Finding | Verdict | Status |
+|---|---|---|
+| F180-01 A cost-floor increase can escape the revision snapshot | Confirmed | Fixed |
+| F180-02 Database read failures make capped accounting fail open | Confirmed | Fixed |
+| F180-03 A charge can become stale after repair and before the sum | Confirmed | Fixed |
+| F180-04 The migration cursor restarts before a later real key | Confirmed | Fixed |
+| Changelog credits `usage_revision` to the wrong release | Confirmed | Corrected |
+| Build guard's path list not derived from `.distignore` | Confirmed | Fixed |
+| Release tag is unsigned | Confirmed | Not done; see below |
+
+**Verification:** PHPCS exits zero across 125 files. PHPUnit passes 388 tests and
+1,847 assertions, up from 382 and 1,666.
+
+---
+
+## F180-01 — Confirmed. Fixed.
+
+The claim I made last round — everything a price is made of comes from one
+`SELECT` — was true of everything except the one line that read the floor again.
+That is the third round running where the sentence in my response was more
+complete than the code, and the pattern is specific enough to name: I describe
+the rule, implement it where the finding pointed, and do not re-read the method
+afterwards asking what else it touches.
+
+Three changes:
+
+- The floor comes from the snapshot and is not read again.
+- `release_claim()` raises `usage_revision`. Raising a floor changes what a run
+  is known to have cost, so anything holding a price worked out before it is
+  holding a price that is now too low — and the terminal comparison already knows
+  what to do with a revision that has moved.
+- Every terminal statement also marks a row whose `cost_floor` exceeds the cost
+  being written. Belt and braces, and it is the invariant stated directly rather
+  than derived: a closed run may not sit below its own floor unmarked.
+
+## F180-02 — Confirmed. Fixed.
+
+This one is worth stating plainly: the rule I introduced in 1.7.0 was "a cap that
+cannot be worked out must not authorise", and I applied it to a repair that
+failed while leaving both of the reads that decide the answer converting failure
+into the most permissive possible value. An unreadable backlog looked empty; an
+unreadable `SUM()` looked like a month with no spending.
+
+`Run::unsettled()` returns null on a query error, `Run::has_unsettled()` is
+three-valued, and `Budget_Guard::month_total()` returns null rather than casting
+a failed `get_var()` to zero. The public `month_to_date_cents()` still answers an
+integer for the screens that show a figure. Every path that authorises spending —
+`check()` and `confirm_reservation()` — refuses on null.
+
+`$wpdb->last_error` is cleared immediately before each of these queries, so a
+failure left behind by an unrelated statement cannot be read as this one's.
+
+## F180-03 — Confirmed. Fixed, by the second of the two designs offered.
+
+The spend lock never covered the late-usage writers and was never going to: they
+take no lock deliberately, because a provider that answered has charged whoever
+asked, and making a paid write wait on a site-wide lock would serialise every
+run's accounting behind every other run's.
+
+So the guard uses the bounded loop the finding describes as the weaker option,
+and the reason for preferring it is that the stronger one changes the property
+that makes the money side reliable. The guard now requires its total to have been
+taken while nothing was outstanding, and *checks* that afterwards rather than
+assuming it: repair, sum, then ask again whether anything relevant is stale. If
+something arrived in between, the total just read is discarded and the loop tries
+again; if three attempts cannot get a stable answer, the run is refused.
+
+The finding is right that this narrows rather than closes. What it does close is
+the reproduced case — a charge landing between repair and sum is now either
+priced into the total or the reason the run is refused, never summed past.
+
+## F180-04 — Confirmed. Fixed.
+
+Both halves, because they compound:
+
+- The cursor is remembered between requests, so a pass that runs out of pages
+  leaves the next one further on rather than starting again. It is cleared when
+  the migration completes, and it does not advance past a row whose write failed.
+- The candidate predicate matches `"grounded_calls":` rather than any occurrence
+  of the words, so a title or a source URL containing them is not read at all.
+  The decoded-key check still decides what moves; this only decides what is worth
+  reading.
+
+## The three smaller corrections
+
+- **The changelog credited `usage_revision` to 1.8.0.** It arrived in 1.7.0;
+  1.8.0 bumped the schema version so a failed migration would be retried. The
+  1.8.0 entry is corrected, and the correction is recorded in 1.9.0 rather than
+  made silently.
+- **The build guard checked a hand-kept path list.** It now stages first and
+  compares every staged file with `HEAD`, so the list of what matters comes from
+  `.distignore` — which is what decides the archive's contents — and an
+  uncommitted review file the archive excludes can no longer refuse a build.
+  Confirmed both ways: a dirty `CODEX-REVIEW.md` no longer blocks, and a dirty
+  `src/` file names itself and does.
+- **The tag is not signed.** Not done, and not something to do quietly on
+  somebody's behalf: signing needs a key that is the maintainer's rather than
+  mine, and a release signed by a key nobody has published is worth less than an
+  unsigned one. It is worth setting up, and it belongs to whoever holds the key.
+
+---
+
+## What is still not covered
+
+Unchanged: no test drives Action Scheduler's own dispatch; the concurrency tests
+interleave in one process rather than across two connections; CI runs against
+MySQL only; no test calls a live provider; Action Scheduler 4.1.0 is deferred;
+and the archive is built locally rather than by CI. The
+check-to-WordPress-write window from F120-02 remains, with its money side settled
+either way.

@@ -49,6 +49,35 @@ final class Activation {
 	public const MIGRATION_BATCH = 200;
 
 	/**
+	 * Option holding how far the grounded-call move has read.
+	 *
+	 * The cursor used to be a local variable, so it restarted at zero on every
+	 * request — and a request only records the schema version when the migration
+	 * finishes. A table with more candidates than one request inspects therefore
+	 * read the same first ten thousand rows for ever, and a real legacy count
+	 * beyond them was never reached. Remembering the position turns that into
+	 * progress.
+	 *
+	 * @since 1.9.0
+	 * @var string
+	 */
+	public const MIGRATION_CURSOR_OPTION = 'autoscribe_grounded_migration_cursor';
+
+	/**
+	 * Pattern matching the legacy grounded-call key rather than the words in it.
+	 *
+	 * `%grounded_calls%` matched any payload containing those characters — a
+	 * title, a source URL — and every one of them came back as a candidate with
+	 * nothing to move. Matching the encoded key narrows that to documents that
+	 * really do carry it. The decoded check still decides, because JSON can encode
+	 * a value that looks like this too; this only decides what is worth reading.
+	 *
+	 * @since 1.9.0
+	 * @var string
+	 */
+	public const LEGACY_GROUNDED_LIKE = '%"grounded_calls":%';
+
+	/**
 	 * How many of those pages one request works through before leaving the rest.
 	 *
 	 * @since 1.7.0
@@ -348,7 +377,8 @@ final class Activation {
 		global $wpdb;
 
 		/*
-		 * An ID cursor rather than a repeated LIMIT over the same predicate. The
+		 * An ID cursor, remembered between requests, rather than a repeated LIMIT
+		 * over the same predicate. The
 		 * candidate query matches a substring of the JSON, so it also matches a row
 		 * whose payload merely contains those characters — a title, a source URL —
 		 * and such a row has nothing to move. Re-reading from the start meant the
@@ -358,7 +388,7 @@ final class Activation {
 		 * site served. The cursor moves past every row it has looked at, whether or
 		 * not there was anything in it.
 		 */
-		$after = 0;
+		$after = max( 0, (int) get_option( self::MIGRATION_CURSOR_OPTION, 0 ) );
 
 		for ( $page = 0; $page < self::MIGRATION_PAGES; $page++ ) {
 			$rows = $wpdb->get_results(
@@ -366,7 +396,7 @@ final class Activation {
 					'SELECT id, status, payload FROM %i WHERE id > %d AND payload LIKE %s ORDER BY id ASC LIMIT %d',
 					self::table_name(),
 					$after,
-					'%grounded_calls%',
+					self::LEGACY_GROUNDED_LIKE,
 					self::MIGRATION_BATCH
 				),
 				ARRAY_A
@@ -384,6 +414,8 @@ final class Activation {
 			}
 
 			if ( ! is_array( $rows ) || array() === $rows ) {
+				delete_option( self::MIGRATION_CURSOR_OPTION );
+
 				return true;
 			}
 
@@ -391,11 +423,17 @@ final class Activation {
 				$after = max( $after, (int) $row['id'] );
 
 				if ( ! self::move_grounded_calls( $row ) ) {
-					// A write that would not land. The next request starts again
-					// from the beginning and meets it, or not, as the case may be.
+					/*
+					 * A write that would not land. The cursor stays where it was, so
+					 * the next request retries this row rather than skipping it.
+					 */
 					return false;
 				}
 			}
+
+			// Remembered per page, so a request that is cut short still leaves the
+			// next one further on than it started.
+			update_option( self::MIGRATION_CURSOR_OPTION, $after, false );
 		}
 
 		$remaining = $wpdb->get_col(
@@ -403,11 +441,23 @@ final class Activation {
 				'SELECT id FROM %i WHERE id > %d AND payload LIKE %s LIMIT 1',
 				self::table_name(),
 				$after,
-				'%grounded_calls%'
+				self::LEGACY_GROUNDED_LIKE
 			)
 		);
 
-		return '' === $wpdb->last_error && array() === (array) $remaining;
+		if ( '' !== $wpdb->last_error ) {
+			return false;
+		}
+
+		if ( array() !== (array) $remaining ) {
+			// More to do than this request had pages for. The cursor is what makes
+			// the next one carry on rather than start again.
+			return false;
+		}
+
+		delete_option( self::MIGRATION_CURSOR_OPTION );
+
+		return true;
 	}
 
 	/**

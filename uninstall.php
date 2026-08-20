@@ -42,6 +42,8 @@ foreach (
 		'autoscribe_pricing',
 		'autoscribe_global_budget_cents',
 		'autoscribe_budget_notice_month',
+		'autoscribe_sweep_cursor',
+		'autoscribe_grounded_migration_cursor',
 	) as $autoscribe_option
 ) {
 	delete_option( $autoscribe_option );

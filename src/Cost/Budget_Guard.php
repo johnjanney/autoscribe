@@ -72,6 +72,19 @@ final class Budget_Guard {
 	public const WARNING_FRACTION = 0.8;
 
 	/**
+	 * How many times a check will repair, sum, and re-check before refusing.
+	 *
+	 * Late charges arrive without taking the spend lock, so one can land between
+	 * a repair and the sum that follows it. Each attempt is cheap; a run that
+	 * cannot get a stable answer in three of them is one where charges are
+	 * arriving faster than they can be priced, and refusing is the honest end.
+	 *
+	 * @since 1.9.0
+	 * @var int
+	 */
+	public const SETTLE_ATTEMPTS = 3;
+
+	/**
 	 * Output token ceiling assumed for one topic proposal call.
 	 *
 	 * Matches the ceiling Step_Propose_Topic actually requests.
@@ -155,10 +168,33 @@ final class Budget_Guard {
 	 * @return int
 	 */
 	public function month_to_date_cents( ?int $prompt_id = null, int $max_run_id = 0 ): int {
+		return (int) $this->month_total( $prompt_id, $max_run_id );
+	}
+
+	/**
+	 * Returns the month-to-date spend, or null when the query failed.
+	 *
+	 * The public accessor above answers an integer because the screens that show
+	 * a figure want a figure. Anything deciding whether a run may spend wants the
+	 * other answer: `wpdb::get_var()` returns null on failure, and casting that to
+	 * an integer turns "the database would not answer" into "nothing has been
+	 * spent this month" — which is the most permissive possible reading of a
+	 * failure, arrived at silently.
+	 *
+	 * @since 1.9.0
+	 *
+	 * @param int|null $prompt_id  Prompt to limit the sum to, or null for the site.
+	 * @param int      $max_run_id Only rows up to this ID, or 0 for all of them.
+	 * @return int|null
+	 */
+	private function month_total( ?int $prompt_id = null, int $max_run_id = 0 ): ?int {
 		global $wpdb;
 
 		$bounds = $this->month_bounds_utc();
 		$table  = Activation::table_name();
+
+		// Cleared first, so what is read afterwards is this statement's answer.
+		$wpdb->last_error = '';
 
 		// %i is an identifier placeholder, supported since WordPress 6.2. A table
 		// name cannot be passed as %s because that would quote it as a string.
@@ -177,6 +213,10 @@ final class Budget_Guard {
 				$bounds['end']
 			)
 		);
+
+		if ( '' !== $wpdb->last_error ) {
+			return null;
+		}
 
 		return (int) $total;
 	}
@@ -209,7 +249,11 @@ final class Budget_Guard {
 		$prompt_cap = $prompt->monthly_budget_cents();
 
 		if ( $prompt_cap > 0 ) {
-			$prompt_total = $this->month_to_date_cents( $prompt->id(), $run_id );
+			$prompt_total = $this->month_total( $prompt->id(), $run_id );
+
+			if ( null === $prompt_total ) {
+				return $this->accounting_unavailable();
+			}
 
 			if ( $prompt_total > $prompt_cap ) {
 				return $this->over_budget( $prompt_total, $prompt_cap, true );
@@ -219,7 +263,11 @@ final class Budget_Guard {
 		$global_cap = $this->global_cap_cents();
 
 		if ( $global_cap > 0 ) {
-			$global_total = $this->month_to_date_cents( null, $run_id );
+			$global_total = $this->month_total( null, $run_id );
+
+			if ( null === $global_total ) {
+				return $this->accounting_unavailable();
+			}
 
 			if ( $global_total > $global_cap ) {
 				return $this->over_budget( $global_total, $global_cap, false );
@@ -279,37 +327,72 @@ final class Budget_Guard {
 			'end'       => $month['end'],
 		);
 
-		if ( ! Run::settle_all_unsettled( $scope ) ) {
-			/*
-			 * The books cannot be closed, so the cap cannot be enforced, so nothing
-			 * may spend. Refusing is the only answer that keeps the cap meaning
-			 * what it says: the alternative is authorising a run against a total
-			 * known to be incomplete, which is the failure this whole mechanism
-			 * exists to prevent.
-			 */
-			return new WP_Error(
-				'autoscribe_accounting_unavailable',
-				__( 'The spend of one or more finished runs could not be worked out, so the monthly total cannot be trusted and this run was stopped before spending anything. Check that the AutoScribe runs table is writable. The Run Log marks the runs concerned as "Accounting pending".', 'autoscribe' )
-			);
-		}
+		/*
+		 * Repairing and then summing are two phases, and the spend lock only
+		 * serialises this check against other checks — the workers that record a
+		 * late charge deliberately take no lock, because a provider that answered
+		 * has charged whoever asked. So a charge can arrive after the repair and
+		 * before the sum, and the sum then reads a figure the row already knows is
+		 * short.
+		 *
+		 * The answer is to require the total to have been taken while nothing was
+		 * outstanding, and to check that afterwards rather than assume it. If
+		 * something arrived in between, the loop repairs and sums again; if the
+		 * two never agree, the run is refused rather than authorised on a figure
+		 * that was out of date before it was compared.
+		 */
+		for ( $attempt = 0; $attempt < self::SETTLE_ATTEMPTS; $attempt++ ) {
+			if ( ! Run::settle_all_unsettled( $scope ) ) {
+				return $this->accounting_unavailable();
+			}
 
-		if ( $prompt_cap > 0 ) {
-			$prompt_total = $this->month_to_date_cents( $prompt->id() );
+			$prompt_total = $prompt_cap > 0 ? $this->month_total( $prompt->id() ) : 0;
+			$global_total = $global_cap > 0 ? $this->month_total() : 0;
 
-			if ( $prompt_total + $projected_cents > $prompt_cap ) {
+			if ( null === $prompt_total || null === $global_total ) {
+				// The sum itself could not be read. Casting that to zero is how a
+				// database fault becomes an authorisation.
+				return $this->accounting_unavailable();
+			}
+
+			$outstanding = Run::has_unsettled( $scope );
+
+			if ( null === $outstanding ) {
+				return $this->accounting_unavailable();
+			}
+
+			if ( $outstanding ) {
+				// A charge landed while this was being worked out. The total just
+				// read is already out of date, so it is not compared with anything.
+				continue;
+			}
+
+			if ( $prompt_cap > 0 && $prompt_total + $projected_cents > $prompt_cap ) {
 				return $this->over_budget( $prompt_total, $prompt_cap, true );
 			}
-		}
 
-		if ( $global_cap > 0 ) {
-			$global_total = $this->month_to_date_cents();
-
-			if ( $global_total + $projected_cents > $global_cap ) {
+			if ( $global_cap > 0 && $global_total + $projected_cents > $global_cap ) {
 				return $this->over_budget( $global_total, $global_cap, false );
 			}
+
+			return true;
 		}
 
-		return true;
+		return $this->accounting_unavailable();
+	}
+
+	/**
+	 * The refusal for a cap that cannot be worked out.
+	 *
+	 * @since 1.9.0
+	 *
+	 * @return WP_Error
+	 */
+	private function accounting_unavailable(): WP_Error {
+		return new WP_Error(
+			'autoscribe_accounting_unavailable',
+			__( 'The spend of one or more finished runs could not be worked out, so the monthly total cannot be trusted and this run was stopped before spending anything. Check that the AutoScribe runs table is readable and writable. The Run Log marks the runs concerned as "Accounting pending".', 'autoscribe' )
+		);
 	}
 
 	/**

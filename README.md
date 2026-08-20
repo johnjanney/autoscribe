@@ -13,7 +13,7 @@ everything, and inserts the post as a draft or publishes it.
 
 | | |
 |---|---|
-| **Version** | 1.8.0 |
+| **Version** | 1.9.0 |
 | **Requires WordPress** | 6.4 |
 | **Requires PHP** | 8.1 |
 | **License** | GPL-2.0-or-later |
@@ -192,10 +192,10 @@ way to tell it apart from the rest of the site.
 
 ## Status and known limitations
 
-Version 1.8.0. Ten external audits have been run against this plugin, and all
-ten found real defects; the findings, the fixes, and the findings rejected with
-evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 382 tests run
-against PHP 8.1, 8.2, and 8.3 on every push.
+Version 1.9.0. Eleven external audits have been run against this plugin, and all
+eleven found real defects; the findings, the fixes, and the findings rejected
+with evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 388 tests
+run against PHP 8.1, 8.2, and 8.3 on every push.
 
 Six things this plugin does not do the way the brief describes, all of them
 deliberate and all of them below: **Run now** queues rather than streaming its

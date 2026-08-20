@@ -399,4 +399,94 @@ final class Schema_UpgradeTest extends WP_UnitTestCase {
 			'A counter that changed is a counter a close needs to notice.'
 		);
 	}
+	/**
+	 * Progress survives a request that runs out of pages.
+	 *
+	 * The cursor used to be a local variable, so every request started at zero —
+	 * and a request only records the schema version when the migration finishes.
+	 * A table with more candidates than one request inspects therefore read the
+	 * same rows for ever, and a real legacy count beyond them was never reached.
+	 *
+	 * @since 1.9.0
+	 *
+	 * @return void
+	 */
+	public function test_migration_progress_survives_between_requests(): void {
+		$prompt_id = $this->create_prompt();
+		$ids       = array();
+
+		// More candidates than one pass can inspect, once the page size below is
+		// forced down to a single row.
+		for ( $i = 0; $i < Activation::MIGRATION_PAGES + 2; $i++ ) {
+			$run = Run::start( $prompt_id );
+
+			$this->assertNotWPError( $run );
+			$this->assertTrue( $run->merge_payload( array( 'grounded_calls' => 1 ) ) );
+
+			$ids[] = $run->id();
+		}
+
+		update_option( Activation::DB_VERSION_OPTION, '7' );
+
+		// One page of one row, so the first pass cannot finish.
+		$one_page = static function ( $query ) {
+			$sql = (string) $query;
+
+			return str_contains( $sql, 'payload LIKE' ) && str_contains( $sql, 'LIMIT' )
+				? preg_replace( '/LIMIT \d+$/', 'LIMIT 1', $sql )
+				: $query;
+		};
+
+		add_filter( 'query', $one_page );
+
+		Activation::maybe_upgrade();
+
+		$first = (int) get_option( Activation::MIGRATION_CURSOR_OPTION, 0 );
+
+		remove_filter( 'query', $one_page );
+
+		$this->assertGreaterThan( 0, $first, 'A pass that could not finish still records where it got to.' );
+
+		Activation::maybe_upgrade();
+
+		$this->assertSame( Activation::DB_VERSION, get_option( Activation::DB_VERSION_OPTION ) );
+		$this->assertFalse(
+			(bool) get_option( Activation::MIGRATION_CURSOR_OPTION, false ),
+			'A finished migration puts its cursor away.'
+		);
+
+		foreach ( $ids as $id ) {
+			$this->assertSame( 1, Run::load( $id )->grounded_calls() );
+		}
+	}
+
+	/**
+	 * A payload mentioning the words is not even a candidate any more.
+	 *
+	 * The predicate matches the encoded key rather than the words in it, so a
+	 * title or a source URL containing them is not read at all. The decoded check
+	 * still decides; this only decides what is worth reading.
+	 *
+	 * @since 1.9.0
+	 *
+	 * @return void
+	 */
+	public function test_a_payload_mentioning_the_words_is_not_a_candidate(): void {
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+		$this->assertTrue(
+			$run->merge_payload( array( 'topic' => array( 'title' => 'grounded_calls everywhere' ) ) )
+		);
+
+		update_option( Activation::DB_VERSION_OPTION, '7' );
+
+		Activation::maybe_upgrade();
+
+		$this->assertSame( Activation::DB_VERSION, get_option( Activation::DB_VERSION_OPTION ) );
+		$this->assertSame(
+			array( 'title' => 'grounded_calls everywhere' ),
+			Run::load( $run->id() )->payload()['topic'] ?? null
+		);
+	}
 }

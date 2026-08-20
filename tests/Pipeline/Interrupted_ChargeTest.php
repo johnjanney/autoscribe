@@ -896,4 +896,205 @@ final class Interrupted_ChargeTest extends WP_UnitTestCase {
 			'A row this cap does not sum has no business answering for it.'
 		);
 	}
+	/**
+	 * A run cannot be closed below a floor raised while it was being priced.
+	 *
+	 * The floor is what a run must settle for when a worker died inside a paid
+	 * call. It was read twice — once with the counters and once again a statement
+	 * later — so a claim released in between raised it after the price had been
+	 * worked out, and the close wrote a figure below it and cleared the row.
+	 *
+	 * @since 1.9.0
+	 *
+	 * @return void
+	 */
+	public function test_a_close_cannot_settle_below_a_floor_raised_mid_price(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+		$this->assertTrue( $run->reserve_cost( 250 ) );
+
+		// A worker holds the step; a second object is about to close the run.
+		$held = Run::load( $run->id() );
+
+		$this->assertTrue( $held->claim_step( '' ) );
+
+		$closer    = Run::load( $run->id() );
+		$observed  = Run::load( $run->id() )->raw_step();
+		$released  = false;
+		$interpose = static function ( $query ) use ( &$released, $observed, $run ) {
+			$sql = (string) $query;
+
+			// The sweep releases the claim in the moment before the close lands,
+			// which is what raises the floor to the reservation.
+			if ( ! $released && str_contains( $sql, "SET status = 'failed'" ) ) {
+				$released = true;
+
+				Run::load( $run->id() )->release_claim( $observed );
+			}
+
+			return $query;
+		};
+
+		add_filter( 'query', $interpose );
+
+		$closed = $closer->fail( 'Given up on.' );
+
+		remove_filter( 'query', $interpose );
+
+		$this->assertTrue( $released, 'The interleaving must have happened for this to test anything.' );
+		$this->assertTrue( $closed->ended() );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame( 250, (int) $row['cost_floor'], 'The release raised the floor.' );
+
+		if ( (int) $row['cost_cents'] >= 250 ) {
+			// Priced at or above the floor already, which is the other safe answer.
+			$this->assertSame( 0, (int) $row['cost_stale'] );
+
+			return;
+		}
+
+		$this->assertSame(
+			1,
+			(int) $row['cost_stale'],
+			'A run closed below its floor must say it owes a price.'
+		);
+
+		$this->assertTrue( Run::settle_all_unsettled() );
+		$this->assertGreaterThanOrEqual(
+			250,
+			(int) Run::latest_for_prompt( $prompt_id )['cost_cents'],
+			'And the repair brings it up to the floor.'
+		);
+	}
+
+	/**
+	 * A stale-row query that fails is not an empty backlog.
+	 *
+	 * @since 1.9.0
+	 *
+	 * @return void
+	 */
+	public function test_a_failed_stale_row_read_refuses_the_run(): void {
+		global $wpdb;
+
+		$prompt_id = $this->create_prompt();
+
+		update_option( Budget_Guard::GLOBAL_CAP_OPTION, 100000 );
+
+		$break = static function ( $query ) {
+			$sql = (string) $query;
+
+			return str_contains( $sql, 'cost_stale = 1' )
+				? 'SELECT id FROM autoscribe_no_such_table'
+				: $query;
+		};
+
+		add_filter( 'query', $break );
+		$wpdb->suppress_errors( true );
+
+		$verdict = ( new Budget_Guard() )->check( Prompt::load( $prompt_id ), 1 );
+
+		$wpdb->suppress_errors( false );
+		remove_filter( 'query', $break );
+		delete_option( Budget_Guard::GLOBAL_CAP_OPTION );
+
+		$this->assertWPError( $verdict );
+		$this->assertSame(
+			'autoscribe_accounting_unavailable',
+			$verdict->get_error_code(),
+			'A backlog that cannot be read is not a backlog that is empty.'
+		);
+	}
+
+	/**
+	 * A monthly total that cannot be read is not a total of zero.
+	 *
+	 * @since 1.9.0
+	 *
+	 * @return void
+	 */
+	public function test_a_failed_monthly_sum_refuses_the_run(): void {
+		global $wpdb;
+
+		$prompt_id = $this->create_prompt();
+
+		update_option( Budget_Guard::GLOBAL_CAP_OPTION, 100000 );
+
+		$break = static function ( $query ) {
+			$sql = (string) $query;
+
+			return str_contains( $sql, 'SUM(cost_cents)' )
+				? 'SELECT SUM(cost_cents) FROM autoscribe_no_such_table'
+				: $query;
+		};
+
+		add_filter( 'query', $break );
+		$wpdb->suppress_errors( true );
+
+		$verdict = ( new Budget_Guard() )->check( Prompt::load( $prompt_id ), 1 );
+
+		$wpdb->suppress_errors( false );
+		remove_filter( 'query', $break );
+		delete_option( Budget_Guard::GLOBAL_CAP_OPTION );
+
+		$this->assertWPError( $verdict );
+		$this->assertSame( 'autoscribe_accounting_unavailable', $verdict->get_error_code() );
+	}
+
+	/**
+	 * A charge landing between the repair and the sum is not authorised past.
+	 *
+	 * The spend lock serialises budget checks against each other and not against
+	 * the workers that record late charges — they take no lock on purpose. So one
+	 * can arrive after the backlog is cleared and before the total is read, and
+	 * the total is then a figure the row already knows is short.
+	 *
+	 * @since 1.9.0
+	 *
+	 * @return void
+	 */
+	public function test_a_charge_landing_before_the_sum_is_not_summed_past(): void {
+		$prompt_id = $this->create_prompt( array( 'monthly_budget_cents' => 3 ) );
+		$late      = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $late );
+
+		$late->merge_payload( array( 'rates' => ( new Pricing_Table() )->snapshot( array( 'gpt-image-2' ) ) ) );
+
+		$this->assertTrue( $late->fail( 'Given up on.' )->ended() );
+
+		$arrived   = false;
+		$interpose = function ( $query ) use ( &$arrived, $late ) {
+			$sql = (string) $query;
+
+			// Immediately before the total is read, and refusing the pricing that
+			// would otherwise follow it.
+			if ( ! $arrived && str_contains( $sql, 'SUM(cost_cents)' ) ) {
+				$arrived = true;
+
+				$this->with_refused(
+					'SET cost_cents = GREATEST',
+					fn() => $late->record_image( 'gpt-image-2' )
+				);
+			}
+
+			return $query;
+		};
+
+		add_filter( 'query', $interpose );
+
+		$verdict = ( new Budget_Guard() )->check( Prompt::load( $prompt_id ), 1 );
+
+		remove_filter( 'query', $interpose );
+
+		$this->assertTrue( $arrived, 'The interleaving must have happened for this to test anything.' );
+		$this->assertWPError(
+			$verdict,
+			'A four-cent charge against a three-cent cap must not be authorised, whenever it arrived.'
+		);
+	}
 }

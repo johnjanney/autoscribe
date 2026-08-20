@@ -37,21 +37,14 @@ echo "Building ${SLUG} ${VERSION}"
 # contain. Nothing about the archive itself showed it — the runtime files
 # matched, only the changelog differed.
 #
-# So a build refuses to run against a working copy with uncommitted changes to
-# anything it would package. Set AUTOSCRIBE_ALLOW_DIRTY=1 for a local build that
-# is not going to be published.
-if git -C "$ROOT" rev-parse --git-dir > /dev/null 2>&1; then
-	DIRTY="$(git -C "$ROOT" status --porcelain -- . ':(exclude)build' ':(exclude)tests' ':(exclude)docs' ':(exclude)bin' ':(exclude).github')"
-
-	if [ -n "$DIRTY" ] && [ "${AUTOSCRIBE_ALLOW_DIRTY:-0}" != "1" ]; then
-		echo "Refusing to build: the working copy has uncommitted changes to packaged files." >&2
-		echo "$DIRTY" >&2
-		echo >&2
-		echo "Commit them first, so the archive matches the commit it will be tagged as." >&2
-		echo "For a throwaway local build, set AUTOSCRIBE_ALLOW_DIRTY=1." >&2
-		exit 1
-	fi
-fi
+# The check therefore happens after staging rather than before it, and compares
+# what was staged with what is committed. That way the list of what matters comes
+# from .distignore, which decides what is packaged, rather than from a second
+# list here that has to be kept in step with it — a dirty CODEX-REVIEW.md used to
+# refuse a build whose archive would not have contained it.
+#
+# Set AUTOSCRIBE_ALLOW_DIRTY=1 for a local build that is not going to be
+# published.
 
 # Only the staging copy is cleared. Previously built zips stay where they are:
 # build/ is the local archive of released artefacts, and wiping it on every
@@ -88,6 +81,34 @@ if [ -n "$STRAY" ]; then
 	echo "  $STRAY" >&2
 	echo "Remove it, or add it to .distignore." >&2
 	exit 1
+fi
+
+# Every staged file has to be the committed one. Only files that are actually
+# packaged are compared, so an uncommitted note or review file — which the
+# archive excludes — cannot refuse a build it has no part in.
+if [ "${AUTOSCRIBE_ALLOW_DIRTY:-0}" != "1" ] && git -C "$ROOT" rev-parse --git-dir > /dev/null 2>&1; then
+	DRIFTED=""
+
+	while IFS= read -r staged; do
+		REL="${staged#"$STAGE_DIR/"}"
+
+		if ! git -C "$ROOT" cat-file -e "HEAD:$REL" 2> /dev/null; then
+			DRIFTED="$DRIFTED  $REL (not committed)"$'\n'
+			continue
+		fi
+
+		if ! git -C "$ROOT" show "HEAD:$REL" | cmp -s - "$staged"; then
+			DRIFTED="$DRIFTED  $REL (differs from HEAD)"$'\n'
+		fi
+	done < <(find "$STAGE_DIR" -type f)
+
+	if [ -n "$DRIFTED" ]; then
+		echo "Refusing to build: the staged plugin does not match HEAD." >&2
+		printf '%s' "$DRIFTED" >&2
+		echo "Commit first, so the archive is a build of the commit it will be tagged as." >&2
+		echo "For a throwaway local build, set AUTOSCRIBE_ALLOW_DIRTY=1." >&2
+		exit 1
+	fi
 fi
 
 # Production dependencies only.

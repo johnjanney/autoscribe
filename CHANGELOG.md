@@ -87,6 +87,65 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-08-20
+
+An eleventh external review, against 1.8.0. Four findings, all confirmed and all
+fixed, plus three smaller corrections the review noted.
+
+Three of the four are the same class of mistake as the round before: a rule
+applied to the case that prompted it and not to the neighbouring one. The price
+came from one read except for the floor, which was read again. Failure was
+handled for writes but not for the reads that decide whether a run may spend.
+Repair covered the rows a cap sums, but only until the moment the sum was taken.
+
+### Fixed
+
+- **A cost floor raised mid-price could be settled under.** The floor is what a
+  run must pay when a worker died inside a paid call. It was read with the
+  counters and then read again a statement later, so a claim released in between
+  raised it after the price was worked out — and the close wrote a figure below
+  it and cleared the row. The floor now comes from the same read as everything
+  else; releasing a claim raises `usage_revision`, so a close holding an older
+  price marks the row; and every terminal statement marks a row whose floor is
+  above the cost being written.
+
+- **A database read failure could authorise a paid run.** An unreadable
+  stale-row query looked like an empty backlog and an unreadable `SUM()` looked
+  like a month with no spending — the most permissive possible reading of a
+  fault, arrived at silently. Both are now three-valued: yes, no, or unreadable.
+  The budget guard refuses on the third, as it already did for a repair it could
+  not complete, and `confirm_reservation()` refuses too.
+
+- **A charge could become stale between the repair and the sum.** The spend lock
+  serialises budget checks against each other, not against the workers that
+  record late charges — those take no lock on purpose, because a provider that
+  answered has charged whoever asked. The guard now requires its total to have
+  been taken while nothing was outstanding, checks that afterwards rather than
+  assuming it, and repairs and sums again if something arrived in between.
+  Refusal, not authorisation, is what happens if the two never agree.
+
+- **The migration could make no progress and repeat for ever.** Its cursor was a
+  local variable, so every request restarted at zero, and a request only records
+  the schema version when the migration finishes — so a table with more
+  candidates than one request inspects read the same rows on every request and
+  never reached a real legacy key beyond them. The cursor is remembered between
+  requests now, and the candidate query matches the encoded key rather than any
+  occurrence of the words, so a title or a source URL containing them is not a
+  candidate at all.
+
+### Changed
+
+- **The build's provenance check is derived from what is packaged.** It compares
+  the staged tree with `HEAD` after staging, rather than testing a hand-kept list
+  of paths beforehand — so an uncommitted note the archive excludes cannot refuse
+  a build, and any packaged file that differs from the commit does.
+
+- **The 1.8.0 entry said `usage_revision` was added in 1.8.0.** The column
+  arrived in 1.7.0; 1.8.0 bumped the schema version so a failed migration would
+  be retried. The entry is corrected.
+
+- The uninstaller removes the sweep and migration cursor options.
+
 ## [1.8.0] - 2026-08-20
 
 A tenth external review, against 1.7.0. Four findings, all confirmed and all
@@ -98,8 +157,8 @@ landing between them got a price computed without it and a revision that said th
 price was current. The comment in that code argued the ordering made it safe. It
 made it certain.
 
-MINOR rather than PATCH: the runs table migration changes shape again, the budget
-guard's refusal is narrowed to the cap it protects, and the Run Log shows a new
+MINOR rather than PATCH: the budget guard's refusal is narrowed to the cap it
+protects, the grounded-call migration changes shape, and the Run Log shows a new
 state.
 
 ### Fixed
@@ -147,10 +206,11 @@ state.
   refuses to run against a working copy with uncommitted changes to packaged
   files, so an archive cannot be built from a tree that is not the one committed.
 
-### Added
+### Changed
 
-- A `usage_revision` column on the runs table, migrated by the existing schema
-  version check.
+- The schema version is bumped so that an install which recorded version 7 after
+  a failed read retries the grounded-call move. No column is added: the
+  `usage_revision` column arrived in 1.7.0.
 
 ## [1.7.0] - 2026-08-20
 

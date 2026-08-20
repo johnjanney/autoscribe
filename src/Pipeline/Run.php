@@ -1073,7 +1073,7 @@ final class Run {
 			? $wpdb->query(
 				$wpdb->prepare(
 					'UPDATE %i SET status = %s, error = %s, cost_cents = %d, finished_at = %s,
-					cost_stale = IF( %d = 1 OR ( %d >= 0 AND usage_revision <> %d ), 1, cost_stale )
+					cost_stale = IF( %d = 1 OR ( %d >= 0 AND usage_revision <> %d ) OR cost_floor > %d, 1, cost_stale )
 					WHERE id = %d AND status = %s AND COALESCE( step, %s ) = %s',
 					Activation::table_name(),
 					(string) $data['status'],
@@ -1083,6 +1083,7 @@ final class Run {
 					$unpriced,
 					$revision,
 					$revision,
+					(int) $data['cost_cents'],
 					$this->id,
 					self::STATUS_RUNNING,
 					'',
@@ -1092,7 +1093,7 @@ final class Run {
 			: $wpdb->query(
 				$wpdb->prepare(
 					'UPDATE %i SET status = %s, finished_at = %s,
-					cost_stale = IF( %d = 1 OR ( %d >= 0 AND usage_revision <> %d ), 1, cost_stale )
+					cost_stale = IF( %d = 1 OR ( %d >= 0 AND usage_revision <> %d ) OR cost_floor > cost_cents, 1, cost_stale )
 					WHERE id = %d AND status = %s AND COALESCE( step, %s ) = %s',
 					Activation::table_name(),
 					(string) $data['status'],
@@ -1231,13 +1232,20 @@ final class Run {
 		 * GREATEST, and in the same conditional update, so two sweeps racing
 		 * cannot lower it and a released claim can never be recorded without it.
 		 *
+		 * It raises usage_revision too, because raising a floor changes what this
+		 * run is known to have cost — and anything holding a price worked out
+		 * before it has a price that is now too low. The terminal statements
+		 * compare that revision, so such a close marks the row instead of settling
+		 * under the floor.
+		 *
 		 * Written out rather than passed to wpdb::update(), which cannot express a
 		 * function in a SET clause. One static statement with placeholders, per
 		 * D-26.
 		 */
 		$released = $wpdb->query(
 			$wpdb->prepare(
-				'UPDATE %i SET step = %s, cost_floor = GREATEST( cost_floor, cost_cents )
+				'UPDATE %i SET step = %s, cost_floor = GREATEST( cost_floor, cost_cents ),
+				usage_revision = usage_revision + 1
 				WHERE id = %d AND step = %s AND status = %s',
 				Activation::table_name(),
 				self::completed_step( $observed ),
@@ -2100,9 +2108,9 @@ final class Run {
 	 *
 	 * @param int                  $limit Most rows to return.
 	 * @param array<string, mixed> $scope Optional prompt_id, start, and end bounds.
-	 * @return int[]
+	 * @return int[]|null Null when the query failed.
 	 */
-	public static function unsettled( int $limit = 25, array $scope = array() ): array {
+	public static function unsettled( int $limit = 25, array $scope = array() ): ?array {
 		global $wpdb;
 
 		/*
@@ -2116,6 +2124,13 @@ final class Run {
 		$prompt_id = max( 0, (int) ( $scope['prompt_id'] ?? 0 ) );
 		$start     = (string) ( $scope['start'] ?? '1000-01-01 00:00:00' );
 		$end       = (string) ( $scope['end'] ?? '9999-12-31 23:59:59' );
+
+		/*
+		 * Cleared first, so what is read afterwards is this statement's own answer.
+		 * An error left behind by an unrelated query would otherwise make this one
+		 * look like a failure.
+		 */
+		$wpdb->last_error = '';
 
 		$ids = $wpdb->get_col(
 			$wpdb->prepare(
@@ -2134,6 +2149,16 @@ final class Run {
 			)
 		);
 
+		/*
+		 * Null rather than an empty array when the query failed, because those two
+		 * answers mean opposite things and only one of them may authorise a run.
+		 * An empty result says nothing is owed; a failed read says nothing is
+		 * known, and a cap computed on "nothing is known" is not a cap.
+		 */
+		if ( '' !== $wpdb->last_error ) {
+			return null;
+		}
+
 		return array_map( 'intval', (array) $ids );
 	}
 
@@ -2148,7 +2173,7 @@ final class Run {
 	public static function settle_unsettled( int $limit = self::REPAIR_BATCH ): int {
 		$settled = 0;
 
-		foreach ( self::unsettled( $limit ) as $id ) {
+		foreach ( (array) self::unsettled( $limit ) as $id ) {
 			$run = self::load( $id );
 
 			if ( $run instanceof self && $run->reconcile_cost() ) {
@@ -2184,6 +2209,11 @@ final class Run {
 		for ( $page = 0; $page < $allowed; $page++ ) {
 			$outstanding = self::unsettled( self::REPAIR_BATCH, $scope );
 
+			if ( null === $outstanding ) {
+				// The books cannot even be read, let alone balanced.
+				return false;
+			}
+
 			if ( array() === $outstanding ) {
 				return true;
 			}
@@ -2207,6 +2237,23 @@ final class Run {
 		}
 
 		return array() === self::unsettled( 1, $scope );
+	}
+
+	/**
+	 * Whether anything in this scope is still waiting to be priced.
+	 *
+	 * Three-valued on purpose: yes, no, or unreadable. The caller that authorises
+	 * spending has to tell the third from the second.
+	 *
+	 * @since 1.9.0
+	 *
+	 * @param array<string, mixed> $scope Optional prompt_id, start, and end bounds.
+	 * @return bool|null True when something is outstanding, null when unreadable.
+	 */
+	public static function has_unsettled( array $scope = array() ): ?bool {
+		$outstanding = self::unsettled( 1, $scope );
+
+		return null === $outstanding ? null : array() !== $outstanding;
 	}
 
 	/**
@@ -2235,8 +2282,14 @@ final class Run {
 		 * nothing. A run interrupted inside its first paid call has no usage to
 		 * measure and may still have been charged, which is precisely the case the
 		 * floor exists for — see release_claim().
+		 *
+		 * From the snapshot, and only from it. Reading the column again here was
+		 * the last thing left outside the one statement this measurement is
+		 * supposed to be: a claim released between the two reads raised the floor
+		 * after the price had been worked out, and the close then wrote a figure
+		 * below the floor the row was carrying.
 		 */
-		$floor = max( (int) ( $this->snapshot['cost_floor'] ?? 0 ), $this->cost_floor() );
+		$floor = (int) ( $this->snapshot['cost_floor'] ?? 0 );
 
 		if ( ! $this->has_usage() ) {
 			return $floor;
@@ -2380,7 +2433,7 @@ final class Run {
 			? $wpdb->query(
 				$wpdb->prepare(
 					'UPDATE %i SET status = %s, error = %s, cost_cents = %d, finished_at = %s,
-					cost_stale = IF( %d = 1 OR ( %d >= 0 AND usage_revision <> %d ), 1, cost_stale )
+					cost_stale = IF( %d = 1 OR ( %d >= 0 AND usage_revision <> %d ) OR cost_floor > %d, 1, cost_stale )
 					WHERE id = %d AND status = %s',
 					Activation::table_name(),
 					(string) $data['status'],
@@ -2390,6 +2443,7 @@ final class Run {
 					$unpriced,
 					$revision,
 					$revision,
+					(int) $data['cost_cents'],
 					$this->id,
 					self::STATUS_RUNNING
 				)
@@ -2397,7 +2451,7 @@ final class Run {
 			: $wpdb->query(
 				$wpdb->prepare(
 					'UPDATE %i SET status = %s, finished_at = %s,
-					cost_stale = IF( %d = 1 OR ( %d >= 0 AND usage_revision <> %d ), 1, cost_stale )
+					cost_stale = IF( %d = 1 OR ( %d >= 0 AND usage_revision <> %d ) OR cost_floor > cost_cents, 1, cost_stale )
 					WHERE id = %d AND status = %s',
 					Activation::table_name(),
 					(string) $data['status'],
