@@ -11,6 +11,7 @@ use AutoScribe\Activation;
 use AutoScribe\Admin\Prompt_Meta_Box;
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Prompts\Prompt_Fields;
+use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Tests\Support\Creates_Prompts;
 use WP_UnitTestCase;
 
@@ -412,5 +413,109 @@ final class Prompt_Meta_BoxTest extends WP_UnitTestCase {
 		$markup = $this->render( $this->create_prompt() );
 
 		$this->assertStringNotContainsString( 'sk-secret-value-9876', $markup );
+	}
+	/**
+	 * A daily prompt is not asked which week of the month it means.
+	 *
+	 * Every schedule parameter used to render for every schedule type, so a daily
+	 * prompt displayed a weekday, a day of the month, an ordinal week, an interval
+	 * and a cron expression — five controls, four of which had no effect on it and
+	 * none of which said so. The field list has always recorded which types each
+	 * parameter belongs to; nothing read it.
+	 *
+	 * @since 1.10.0
+	 *
+	 * @return void
+	 */
+	public function test_a_daily_prompt_only_shows_daily_fields(): void {
+		$markup = $this->render_editor(
+			$this->create_prompt(
+				array(
+					'schedule_type'   => 'daily',
+					'schedule_params' => array( 'time' => '06:00' ),
+				)
+			)
+		);
+
+		$this->assertStringContainsString( 'autoscribe-field-time', $markup, 'A daily run happens at a time.' );
+
+		foreach ( array( 'weekday', 'day_of_month', 'ordinal', 'hours', 'expression' ) as $irrelevant ) {
+			$this->assertMatchesRegularExpression(
+				'/<tr[^>]*style="display:none"[^>]*>(?:(?!<\/tr>).)*autoscribe-field-' . $irrelevant . '/s',
+				$markup,
+				sprintf( 'The %s row belongs to another schedule type and must be hidden.', $irrelevant )
+			);
+		}
+	}
+
+	/**
+	 * A monthly prompt shows the fields that monthly type uses.
+	 *
+	 * @since 1.10.0
+	 *
+	 * @return void
+	 */
+	public function test_a_monthly_ordinal_prompt_shows_its_own_fields(): void {
+		$markup = $this->render_editor(
+			$this->create_prompt(
+				array(
+					'schedule_type'   => 'monthly_ordinal',
+					'schedule_params' => array(
+						'time'    => '06:00',
+						'ordinal' => 'second',
+						'weekday' => 'tuesday',
+					),
+				)
+			)
+		);
+
+		foreach ( array( 'time', 'ordinal', 'weekday' ) as $relevant ) {
+			$this->assertDoesNotMatchRegularExpression(
+				'/<tr[^>]*style="display:none"[^>]*>(?:(?!<\/tr>).)*autoscribe-field-' . $relevant . '/s',
+				$markup,
+				sprintf( 'The %s row is part of this schedule and must be shown.', $relevant )
+			);
+		}
+
+		$this->assertMatchesRegularExpression(
+			'/<tr[^>]*style="display:none"[^>]*>(?:(?!<\/tr>).)*autoscribe-field-day_of_month/s',
+			$markup,
+			'A prompt that repeats on the second Tuesday has no day of the month.'
+		);
+	}
+
+	/**
+	 * Every schedule parameter says which types it belongs to.
+	 *
+	 * The script follows the control as it changes, and it reads these.
+	 *
+	 * @since 1.10.0
+	 *
+	 * @return void
+	 */
+	public function test_schedule_rows_declare_the_types_they_belong_to(): void {
+		$markup = $this->render_editor( $this->create_prompt() );
+
+		$this->assertStringContainsString( 'data-autoscribe-for="daily weekly', $markup );
+		$this->assertStringContainsString( 'data-autoscribe-for="interval"', $markup );
+		$this->assertStringContainsString( 'data-autoscribe-for="cron_expression"', $markup );
+	}
+
+	/**
+	 * Renders the prompt editor and returns its markup.
+	 *
+	 * @since 1.10.0
+	 *
+	 * @param int $prompt_id Prompt to render.
+	 * @return string
+	 */
+	private function render_editor( int $prompt_id ): string {
+		wp_set_current_user( self::factory()->user->create( array( 'role' => 'administrator' ) ) );
+
+		ob_start();
+
+		( new Prompt_Meta_Box( new Provider_Registry() ) )->render( get_post( $prompt_id ) );
+
+		return (string) ob_get_clean();
 	}
 }

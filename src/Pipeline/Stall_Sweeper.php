@@ -8,6 +8,7 @@
 namespace AutoScribe\Pipeline;
 
 use AutoScribe\Prompts\Prompt;
+use AutoScribe\Scheduling\Schedule_Sweeper;
 use AutoScribe\Scheduling\Scheduler;
 use WP_Error;
 
@@ -165,16 +166,26 @@ final class Stall_Sweeper {
 	private Queued_Run_Handler $handler;
 
 	/**
+	 * Schedule recovery, which asks the question this class cannot.
+	 *
+	 * @since 1.10.0
+	 * @var Schedule_Sweeper
+	 */
+	private Schedule_Sweeper $schedules;
+
+	/**
 	 * Builds the sweeper.
 	 *
 	 * @since 1.1.0
 	 *
-	 * @param Scheduler          $scheduler Queue wrapper.
-	 * @param Queued_Run_Handler $handler   Queued run handler.
+	 * @param Scheduler             $scheduler Queue wrapper.
+	 * @param Queued_Run_Handler    $handler   Queued run handler.
+	 * @param Schedule_Sweeper|null $schedules Schedule recovery, or null for a default.
 	 */
-	public function __construct( Scheduler $scheduler, Queued_Run_Handler $handler ) {
+	public function __construct( Scheduler $scheduler, Queued_Run_Handler $handler, ?Schedule_Sweeper $schedules = null ) {
 		$this->scheduler = $scheduler;
 		$this->handler   = $handler;
+		$this->schedules = $schedules instanceof Schedule_Sweeper ? $schedules : new Schedule_Sweeper( $scheduler );
 	}
 
 	/**
@@ -280,6 +291,15 @@ final class Stall_Sweeper {
 		 * spend — a site that has stopped generating would never clear the flag.
 		 */
 		Run::settle_unsettled();
+
+		/*
+		 * Prompts before runs, and for the same reason this class exists at all:
+		 * an action killed part way leaves something with nobody looking after it.
+		 * A run at least leaves a row to find. A prompt whose action died before
+		 * its run row existed leaves nothing here at all, so it is asked about
+		 * from the other end — see Schedule_Sweeper.
+		 */
+		$this->schedules->handle();
 
 		$cutoff = gmdate( 'Y-m-d H:i:s', time() - self::threshold() );
 		$acted  = 0;

@@ -196,6 +196,28 @@ final class Assets {
 	 * means a prompt cannot be saved claiming a capability the provider does not
 	 * have. The server repeats both checks; this is the courtesy, not the guard.
 	 */
+	/*
+	 * Schedule parameters belong to some schedule types and not others. The
+	 * server renders the right ones for the type as saved; this follows the
+	 * control as it changes, so a prompt switched from monthly to daily stops
+	 * asking which week of the month it means before the page is even saved.
+	 */
+	var repeats = document.getElementById( 'autoscribe-field-schedule_type' );
+	var rows    = wrap.querySelectorAll( '[data-autoscribe-for]' );
+
+	function syncSchedule() {
+		rows.forEach( function ( row ) {
+			var applies = row.dataset.autoscribeFor.split( ' ' );
+
+			row.style.display = applies.indexOf( repeats.value ) === -1 ? 'none' : '';
+		} );
+	}
+
+	if ( repeats && rows.length ) {
+		repeats.addEventListener( 'change', syncSchedule );
+		syncSchedule();
+	}
+
 	var caps      = window.autoscribeCapabilities || { webSearch: {}, noSearch: '' };
 	var provider  = document.getElementById( 'autoscribe-field-text_provider' );
 	var grounding = document.getElementById( 'autoscribe-field-grounding_enabled' );

@@ -1623,6 +1623,33 @@ final class Run {
 	}
 
 	/**
+	 * Whether this prompt has a run in flight.
+	 *
+	 * The schedule sweep asks before arming an occurrence: a prompt part way
+	 * through a run has its next occurrence armed deliberately late, when that run
+	 * concludes, so arming one now would start a second article beside the first.
+	 *
+	 * @since 1.10.0
+	 *
+	 * @param int $prompt_id Prompt to ask about.
+	 * @return bool
+	 */
+	public static function has_open_run( int $prompt_id ): bool {
+		global $wpdb;
+
+		$found = $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT id FROM %i WHERE prompt_id = %d AND status = %s LIMIT 1',
+				Activation::table_name(),
+				$prompt_id,
+				self::STATUS_RUNNING
+			)
+		);
+
+		return null !== $found;
+	}
+
+	/**
 	 * Returns how many times a sweeper has re-dispatched this run.
 	 *
 	 * The count lives in its own column. It used to live in the payload document,

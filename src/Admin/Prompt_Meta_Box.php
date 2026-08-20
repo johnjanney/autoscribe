@@ -139,7 +139,12 @@ final class Prompt_Meta_Box {
 					continue;
 				}
 
-				$this->render_row( $key, $field, $values[ $key ] ?? $field['default'] );
+				$this->render_row(
+					$key,
+					$field,
+					$values[ $key ] ?? $field['default'],
+					(string) ( $values['schedule_type'] ?? '' )
+				);
 			}
 
 			echo '</tbody></table></section>';
@@ -155,15 +160,37 @@ final class Prompt_Meta_Box {
 	 *
 	 * @since 0.7.0
 	 *
-	 * @param string               $key   Field key.
-	 * @param array<string, mixed> $field Field definition.
-	 * @param mixed                $value Current value.
+	 * @param string               $key           Field key.
+	 * @param array<string, mixed> $field         Field definition.
+	 * @param mixed                $value         Current value.
+	 * @param string               $schedule_type The schedule type as saved.
 	 * @return void
 	 */
-	private function render_row( string $key, array $field, $value ): void {
+	private function render_row( string $key, array $field, $value, string $schedule_type = '' ): void {
 		$id = 'autoscribe-field-' . $key;
 
-		echo '<tr>';
+		/*
+		 * A schedule parameter belongs to some schedule types and not others, and
+		 * the field list has always said which — nothing read it. So the editor
+		 * asked every prompt for a weekday, a day of the month, an interval, and a
+		 * cron expression at once, whatever it was set to repeat, and a daily
+		 * prompt displayed four controls that had no effect on it. They are
+		 * harmless to store and impossible to interpret: somebody reading that
+		 * screen cannot tell which of the seven fields the schedule is made of.
+		 *
+		 * The applicable ones are marked, and the rest are hidden — server-side
+		 * for the type as saved, and by the script as the control changes. Hidden
+		 * rather than disabled, because a disabled control still asks a question,
+		 * and this one has no answer for a daily prompt.
+		 */
+		$applies = isset( $field['for'] ) && is_array( $field['for'] ) ? array_map( 'strval', $field['for'] ) : array();
+		$hidden  = array() !== $applies && '' !== $schedule_type && ! in_array( $schedule_type, $applies, true );
+
+		printf(
+			'<tr%1$s%2$s>',
+			array() === $applies ? '' : sprintf( ' data-autoscribe-for="%s"', esc_attr( implode( ' ', $applies ) ) ),
+			$hidden ? ' style="display:none"' : ''
+		);
 
 		printf(
 			'<th scope="row"><label for="%1$s">%2$s</label></th><td>',
@@ -221,7 +248,7 @@ final class Prompt_Meta_Box {
 					esc_attr( $id ),
 					esc_attr( $name ),
 					esc_attr( (string) $value ),
-					esc_html( wp_timezone_string() )
+					esc_html( self::timezone_label() )
 				);
 				break;
 
@@ -265,6 +292,38 @@ final class Prompt_Meta_Box {
 				);
 				break;
 		}
+	}
+
+	/**
+	 * Names the timezone every time on this screen is expressed in.
+	 *
+	 * `wp_timezone_string()` answers "+00:00" for a site set to a UTC offset
+	 * rather than a city, and an offset on its own beside a time field is easy to
+	 * read as decoration. It is not: a prompt set to six o'clock on a site whose
+	 * timezone is UTC runs at six UTC, which is one in the morning in Chicago. The
+	 * label says which timezone, and where it is set, so a run that happened at an
+	 * unexpected hour is a question with an answer on the screen.
+	 *
+	 * @since 1.10.0
+	 *
+	 * @return string
+	 */
+	private static function timezone_label(): string {
+		$zone = wp_timezone_string();
+
+		if ( 1 === preg_match( '/^[+-]\d{2}:\d{2}$/', $zone ) ) {
+			return sprintf(
+				/* translators: %s: UTC offset, such as +00:00. */
+				__( 'UTC%s — the site timezone, set in Settings → General', 'autoscribe' ),
+				$zone
+			);
+		}
+
+		return sprintf(
+			/* translators: %s: timezone name, such as America/Chicago. */
+			__( '%s — the site timezone, set in Settings → General', 'autoscribe' ),
+			$zone
+		);
 	}
 
 	/**

@@ -9,6 +9,7 @@ namespace AutoScribe\Admin;
 
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Scheduling\Next_Run_Calculator;
+use AutoScribe\Scheduling\Scheduler;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -51,13 +52,38 @@ final class Next_Run_Readout {
 			return sprintf( __( 'Schedule is not valid: %s', 'autoscribe' ), $schedule->get_error_message() );
 		}
 
+		/*
+		 * What the queue actually holds, not what the calendar would like. This
+		 * used to answer with the calculation alone, which is a different question
+		 * wearing the same words: a prompt that had fallen out of the queue — an
+		 * action killed part way, a re-arm that failed — displayed a confident
+		 * next occurrence that nothing on the site was going to run. The screen
+		 * said Tuesday at six and meant "Tuesday at six is when it would run, if
+		 * anything were going to".
+		 */
+		$armed = ( new Scheduler() )->next_scheduled( $prompt_id );
+
+		if ( null !== $armed ) {
+			return self::format( $armed );
+		}
+
 		$next = ( new Next_Run_Calculator() )->next( $schedule );
 
 		if ( is_wp_error( $next ) ) {
 			return $next->get_error_message();
 		}
 
-		return self::format( $next->getTimestamp() );
+		/*
+		 * Nothing is queued. Saying when it would have run and leaving it there is
+		 * how the old readout misled; this says both, and says which is which. The
+		 * five-minute sweep arms it by itself, so the honest report is that it is
+		 * not queued yet rather than that it is broken.
+		 */
+		return sprintf(
+			/* translators: %s: formatted date and time. */
+			__( 'Not queued yet — due %s. Saving this prompt queues it, and the scheduled sweep does so within a few minutes.', 'autoscribe' ),
+			self::format( $next->getTimestamp() )
+		);
 	}
 
 	/**

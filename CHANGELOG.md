@@ -87,6 +87,47 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-08-20
+
+Reported from a live site: a daily prompt showed controls for weekdays, days of
+the month and ordinal weeks, and did not run when it said it would. Three
+defects, one of which explains the second half of that.
+
+### Fixed
+
+- **An enabled prompt could fall out of the queue and stay out of it.** A prompt
+  is armed in exactly two places — when it is saved, and when one of its runs
+  concludes — and nothing ever asked the standing question of whether an enabled
+  prompt was actually queued. Action Scheduler records an action killed by a PHP
+  timeout as failed and does not retry it, so a request that died before its run
+  row existed left no queued action, no open run, and nothing for the stall sweep
+  to find: the prompt stopped, silently, until somebody opened the editor and
+  pressed Update.
+
+  The five-minute sweep now arms any enabled prompt that has nothing queued and
+  no run in flight. It leaves alone anything that is queued, running, disabled, or
+  whose schedule does not validate.
+
+- **The editor promised runs that nothing was going to perform.** The "Next run"
+  readout computed the next occurrence from the schedule; it never asked the queue
+  whether anything was armed. A prompt that had fallen out of the queue therefore
+  displayed a confident date. It now reports the queued time when there is one,
+  and says "Not queued yet" when there is not.
+
+- **Every schedule field showed for every schedule type.** A daily prompt was
+  asked for a weekday, a day of the month, an ordinal week, an interval and a
+  cron expression — five controls, four with no effect on it and none saying so.
+  The field list has recorded which types each parameter belongs to since 0.7.0;
+  nothing read it. The applicable fields now show and the rest are hidden, both as
+  the page is rendered and as the control changes.
+
+### Changed
+
+- **The time field names the timezone rather than showing an offset.** "+00:00"
+  beside a time reads as decoration; it is not. A prompt set to six o'clock on a
+  site whose timezone is UTC runs at six UTC, which is one in the morning in
+  Chicago. The label now says which timezone and where it is set.
+
 ## [1.9.0] - 2026-08-20
 
 An eleventh external review, against 1.8.0. Four findings, all confirmed and all
