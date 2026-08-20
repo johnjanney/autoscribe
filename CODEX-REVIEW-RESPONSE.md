@@ -2671,3 +2671,143 @@ MySQL only; no test calls a live provider; Action Scheduler 4.1.0 is deferred;
 and the archive is built locally rather than by CI. The
 check-to-WordPress-write window from F120-02 remains, with its money side settled
 either way.
+
+---
+---
+
+# Response to the twelfth Codex review
+
+**Responding to:** the fresh-verification section of
+[CODEX-REVIEW.md](CODEX-REVIEW.md), dated 20 August 2026 against `cfd09d0`
+(tag `v1.10.0`)
+**Response date:** 20 August 2026
+**Release under response:** 1.10.0 → 1.11.0
+
+---
+
+## Summary
+
+Four findings and two smaller corrections. **All confirmed, all fixed.**
+
+| Finding | Verdict | Status |
+|---|---|---|
+| F1100-01 Concurrent re-arm paths can create two paid runs | Confirmed | Fixed |
+| F1100-02 A failed open-run query reads as no open run | Confirmed | Fixed |
+| F1100-03 The recovery scan can starve prompts and makes N+1 queries | Confirmed | Fixed |
+| F1100-04 A late charge can invalidate the total after the final check | Confirmed | Fixed |
+| The 1.9.0 changelog overstates F180-03 | Confirmed | Corrected |
+| Tab panels need JavaScript to be visible at all | Confirmed | Fixed |
+| The release tag is unsigned | Confirmed | Not done; the key is the maintainer's |
+
+**Verification:** PHPCS exits zero across 128 files. PHPUnit passes 403 tests and
+1,893 assertions, up from 398 and 1,880.
+
+---
+
+## F1100-01 — Confirmed. Fixed.
+
+This is the worst kind of finding to receive and the most useful: the defect is
+in code I added the same day, and it is a *worse* failure than the one that code
+fixed. A prompt that stops running costs nothing; a prompt that runs twice buys
+two articles.
+
+The sequence is exactly as described. Three callers arm a prompt — save, run
+conclusion, and the new sweep — and each asks whether anything is queued and then
+queues, which is two statements that can both answer "no". `as_schedule_single_action()`
+is not unique by default, so both rows survive and both dispatch.
+
+Two changes, because one is not enough:
+
+- **Arming is serialised per prompt.** `Scheduler::arm()` takes a named lock
+  scoped to the prompt, so the check and the insert are one operation to anybody
+  else. Per prompt, so arming one never waits on another.
+- **Opening a run is guarded.** A lock cannot span the gap between arming an
+  action and Action Scheduler dispatching it — a duplicate row that already
+  exists still arrives — so the handler refuses to open a second run for a prompt
+  that has one in flight, under the same per-prompt lock. That is the guard that
+  actually protects money, and it is verified by removal: take it out and the
+  test writes a second run row.
+
+I did not pass `$unique = true`, for the reason the finding gives: in the bundled
+3.9.3, database-store uniqueness is scoped by hook and group, and every prompt
+shares both. It would suppress other prompts' actions rather than duplicates of
+one.
+
+**On the shared lock primitive.** `Spend_Lock` was the right mechanism in the
+wrong place — it is now `Named_Lock` with a scope, and `Spend_Lock` is a
+one-line subclass so its callers do not have to know the name of what they take.
+
+## F1100-02 — Confirmed. Fixed.
+
+`Run::has_open_run()` returns `bool|null`, clears `$wpdb->last_error` at the
+query boundary, and reports unknown for a failed read. Both callers — the sweep
+and the new run-open guard — treat unknown as running.
+
+This is the third place the same lesson has had to be applied: capped accounting
+in 1.9.0, and now two scheduling checks. The rule is worth stating once, plainly,
+because it keeps recurring: *a read that failed is not evidence of absence, and
+any check whose false branch authorises spending must be three-valued.*
+
+## F1100-03 — Confirmed. Fixed.
+
+Both halves. The scan pages by prompt ID with a durable cursor and wraps at the
+end, so every enabled prompt gets a turn regardless of how many there are — the
+batch is a bound on work per pass, not on the site. And the two questions asked
+per prompt are now asked once per page: active prompt actions in bulk, sharing
+the reader the run-step lookup already had, and open runs in one statement over
+the page's IDs.
+
+My comment claiming a site could never have more than two hundred prompts was
+doing work no code did. It is gone.
+
+## F1100-04 — Confirmed. Fixed, and the earlier claim corrected.
+
+The finding is right on both counts: the race is real, and my 1.9.0 changelog
+called it fixed when my own response said "narrows rather than closes".
+
+It is closed now, by the first of the two designs offered — one synchronisation
+contract — with the scope narrowed so the cost is nil. Money arriving on a
+*closed* run takes the spend lock, which the budget check holds from its final
+stale-row check through the reservation, so a late charge cannot land inside that
+window. Money arriving on an *open* run takes no lock and never needed to: its
+cost is worked out when the run closes, and the reservation is what the cap sees
+until then.
+
+That distinction is what makes the lock affordable. The lock-free path stays
+lock-free for every ordinary paid call; only the recovery path — a charge landing
+on a run that has already finished — waits, and it waits behind a check that
+takes a handful of statements. The cost is one status read per paid call, on a
+path that has just spent up to two minutes talking to a provider.
+
+The 1.9.0 changelog entry now records the correction rather than being quietly
+rewritten.
+
+## The two smaller corrections
+
+- **Tab panels needed JavaScript to be visible.** Every panel was hidden by
+  stylesheet and the first revealed by script, so a blocked, failed, or late
+  script left the whole prompt configuration form blank with nothing saying why.
+  The hiding is scoped to a class the script adds; without it every panel is
+  visible, stacked, which is a usable form rather than an empty one.
+- **A prompt the queue refuses is now reported.** The sweep discarded that error,
+  and nothing else would have mentioned it — there is no run to fail and no row
+  to write it on. One notice an hour, matching the other operational alerts.
+- **The tag is still unsigned**, and still should not be signed by me: the key
+  has to be the maintainer's, and a signature from a key nobody has published
+  would be worth less than none.
+
+---
+
+## What is still not covered
+
+Unchanged: no test drives Action Scheduler's own dispatch; the concurrency tests
+interleave in one process rather than across two connections; CI runs against
+MySQL only; no test calls a live provider; Action Scheduler 4.1.0 is deferred;
+and the archive is built locally rather than by CI.
+
+The two-connection gap is worth naming specifically this round, because three of
+these four findings are concurrency defects that a two-connection harness would
+have found before a reviewer did. The locks are the reason the single-process
+tests are still meaningful — they make the interleavings unreachable rather than
+merely unlikely — but a harness that can actually run two workers is the next
+thing this suite needs.

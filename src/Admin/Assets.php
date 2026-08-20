@@ -141,8 +141,15 @@ final class Assets {
 	 * @return string
 	 */
 	private function css(): string {
-		return '.autoscribe-tab-panel{display:none}'
-			. '.autoscribe-tab-panel.is-active{display:block}'
+		/*
+		 * The hiding is scoped to a class the script adds, so the tabs only become
+		 * tabs once something is there to switch between them. Hiding every panel
+		 * by default and revealing the first from JavaScript reads as equivalent
+		 * and is not: with the script blocked, unavailable, or simply late, the
+		 * whole prompt configuration form was invisible and nothing said why.
+		 */
+		return '.autoscribe-tabs.is-tabbed .autoscribe-tab-panel{display:none}'
+			. '.autoscribe-tabs.is-tabbed .autoscribe-tab-panel.is-active{display:block}'
 			. '.autoscribe-tabs .nav-tab{cursor:pointer}';
 	}
 
@@ -168,6 +175,10 @@ final class Assets {
 
 	var tabs   = wrap.querySelectorAll( '[data-autoscribe-tab]' );
 	var panels = wrap.querySelectorAll( '.autoscribe-tab-panel' );
+
+	// Only now do the panels hide: without this class every one of them is
+	// visible, stacked, which is the correct fallback rather than a blank form.
+	wrap.classList.add( 'is-tabbed' );
 
 	function show( name ) {
 		panels.forEach( function ( panel ) {

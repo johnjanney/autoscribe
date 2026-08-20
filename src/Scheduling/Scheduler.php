@@ -7,6 +7,8 @@
 
 namespace AutoScribe\Scheduling;
 
+use AutoScribe\Concurrency\Named_Lock;
+
 use WP_Error;
 
 defined( 'ABSPATH' ) || exit;
@@ -104,23 +106,45 @@ final class Scheduler {
 			return $this->unavailable();
 		}
 
-		$existing = $this->next_scheduled( $prompt_id );
+		/*
+		 * Asking whether a prompt is queued and queueing it are two statements,
+		 * and three different callers make that pair: saving a prompt, concluding
+		 * a run, and the schedule sweep. Two of them running at once both read
+		 * "nothing queued" and both queue — and a single action is not unique by
+		 * default, so both rows survive, both dispatch, and one occurrence buys two
+		 * articles. The claims that stop two workers spending on a run are scoped
+		 * to a run row, so they cannot see two run rows for one occurrence either.
+		 *
+		 * The lock is per prompt, so arming one prompt never waits on another. A
+		 * database that will not give it degrades to the check alone, which is the
+		 * behaviour this had before and is weaker rather than equivalent — the
+		 * duplicate guard when a run opens is what catches the rest.
+		 */
+		$lock = new Named_Lock( 'prompt_' . $prompt_id );
 
-		if ( null !== $existing ) {
-			return $existing;
+		$lock->acquire();
+
+		try {
+			$existing = $this->next_scheduled( $prompt_id );
+
+			if ( null !== $existing ) {
+				return $existing;
+			}
+
+			$next = $this->calculator->next( $schedule );
+
+			if ( is_wp_error( $next ) ) {
+				return $next;
+			}
+
+			$timestamp = $next->getTimestamp();
+
+			$armed = as_schedule_single_action( $timestamp, self::HOOK_RUN_PROMPT, $this->args( $prompt_id ), self::GROUP );
+
+			return $this->armed( $armed ) ? $timestamp : $this->not_armed();
+		} finally {
+			$lock->release();
 		}
-
-		$next = $this->calculator->next( $schedule );
-
-		if ( is_wp_error( $next ) ) {
-			return $next;
-		}
-
-		$timestamp = $next->getTimestamp();
-
-		$armed = as_schedule_single_action( $timestamp, self::HOOK_RUN_PROMPT, $this->args( $prompt_id ), self::GROUP );
-
-		return $this->armed( $armed ) ? $timestamp : $this->not_armed();
 	}
 
 	/**
@@ -316,6 +340,94 @@ final class Scheduler {
 	}
 
 	/**
+	 * Returns every prompt with a queued or running run action, keyed by prompt ID.
+	 *
+	 * The schedule sweep asks about a page of prompts at a time, and asking one at
+	 * a time made that a queue lookup per prompt every five minutes — against the
+	 * queue the sweep exists to look after. The same reasoning, and the same
+	 * store check, as active_step_runs().
+	 *
+	 * @since 1.11.0
+	 *
+	 * @return array<int, true>|null Null when the answer cannot be had this way.
+	 */
+	public function active_prompt_actions(): ?array {
+		$rows = $this->active_action_args( self::HOOK_RUN_PROMPT );
+
+		if ( null === $rows ) {
+			return null;
+		}
+
+		$active = array();
+
+		foreach ( $rows as $args ) {
+			$decoded   = json_decode( (string) $args, true );
+			$prompt_id = is_array( $decoded ) ? (int) ( $decoded['prompt_id'] ?? 0 ) : 0;
+
+			if ( $prompt_id > 0 ) {
+				$active[ $prompt_id ] = true;
+			}
+		}
+
+		return $active;
+	}
+
+	/**
+	 * Returns the arguments of every pending or running action for one hook.
+	 *
+	 * @since 1.11.0
+	 *
+	 * @param string $hook Hook to read.
+	 * @return string[]|null Null when the active store is not the database one.
+	 */
+	private function active_action_args( string $hook ): ?array {
+		global $wpdb;
+
+		if ( ! $this->is_available() || ! $this->uses_database_store() ) {
+			return null;
+		}
+
+		$actions = $wpdb->prefix . 'actionscheduler_actions';
+		$groups  = $wpdb->prefix . 'actionscheduler_groups';
+
+		// The table can also be missing outright on a fresh or partial install.
+		if ( $actions !== $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $actions ) ) ) {
+			return null;
+		}
+
+		$wpdb->last_error = '';
+
+		$rows = $groups === $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $groups ) )
+			? $wpdb->get_col(
+				$wpdb->prepare(
+					'SELECT a.args FROM %i a INNER JOIN %i g ON a.group_id = g.group_id
+					WHERE a.hook = %s AND a.status IN ( %s, %s ) AND g.slug = %s',
+					$actions,
+					$groups,
+					$hook,
+					\ActionScheduler_Store::STATUS_PENDING,
+					\ActionScheduler_Store::STATUS_RUNNING,
+					self::GROUP
+				)
+			)
+			: $wpdb->get_col(
+				$wpdb->prepare(
+					'SELECT args FROM %i WHERE hook = %s AND status IN ( %s, %s )',
+					$actions,
+					$hook,
+					\ActionScheduler_Store::STATUS_PENDING,
+					\ActionScheduler_Store::STATUS_RUNNING
+				)
+			);
+
+		if ( '' !== $wpdb->last_error ) {
+			return null;
+		}
+
+		return array_map( 'strval', (array) $rows );
+	}
+
+	/**
 	 * Returns every run with a queued or running step action, keyed by run ID.
 	 *
 	 * One query for the whole queue rather than one per page of candidates. The
@@ -334,56 +446,15 @@ final class Scheduler {
 	 * @return array<int, true>|null
 	 */
 	public function active_step_runs(): ?array {
-		global $wpdb;
+		$rows = $this->active_action_args( self::HOOK_RUN_STEP );
 
-		if ( ! $this->is_available() ) {
+		if ( null === $rows ) {
 			return null;
 		}
-
-		if ( ! $this->uses_database_store() ) {
-			return null;
-		}
-
-		$actions = $wpdb->prefix . 'actionscheduler_actions';
-		$groups  = $wpdb->prefix . 'actionscheduler_groups';
-
-		// The table can also be missing outright on a fresh or partial install.
-		if ( $actions !== $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $actions ) ) ) {
-			return null;
-		}
-
-		/*
-		 * Joined to the group as well as matched on the hook. The hook name is
-		 * this plugin's own, so the group adds nothing today; it costs one join
-		 * and means a future hook name collision cannot make the sweeper believe
-		 * somebody else's action is advancing one of these runs.
-		 */
-		$rows = $groups === $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $groups ) )
-			? $wpdb->get_col(
-				$wpdb->prepare(
-					'SELECT a.args FROM %i a INNER JOIN %i g ON a.group_id = g.group_id
-					WHERE a.hook = %s AND a.status IN ( %s, %s ) AND g.slug = %s',
-					$actions,
-					$groups,
-					self::HOOK_RUN_STEP,
-					\ActionScheduler_Store::STATUS_PENDING,
-					\ActionScheduler_Store::STATUS_RUNNING,
-					self::GROUP
-				)
-			)
-			: $wpdb->get_col(
-				$wpdb->prepare(
-					'SELECT args FROM %i WHERE hook = %s AND status IN ( %s, %s )',
-					$actions,
-					self::HOOK_RUN_STEP,
-					\ActionScheduler_Store::STATUS_PENDING,
-					\ActionScheduler_Store::STATUS_RUNNING
-				)
-			);
 
 		$active = array();
 
-		foreach ( (array) $rows as $args ) {
+		foreach ( $rows as $args ) {
 			$decoded = json_decode( (string) $args, true );
 			$run_id  = is_array( $decoded ) ? (int) ( $decoded['run_id'] ?? 0 ) : 0;
 

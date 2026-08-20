@@ -208,4 +208,110 @@ final class Schedule_SweeperTest extends WP_UnitTestCase {
 
 		return $prompt_id;
 	}
+
+	/**
+	 * A read that fails is not evidence that no run is in flight.
+	 *
+	 * The accounting guard learned this in 1.9.0 and the scheduling code repeated
+	 * it: `get_var()` answers null both for "no such row" and for "the query did
+	 * not run", and arming a prompt on the second reading starts a second paid run
+	 * beside one that may well be working.
+	 *
+	 * @since 1.11.0
+	 *
+	 * @return void
+	 */
+	public function test_an_unreadable_open_run_check_does_not_arm(): void {
+		global $wpdb;
+
+		$scheduler = new Scheduler();
+		$prompt_id = $this->daily_prompt();
+
+		$scheduler->cancel( $prompt_id );
+
+		$break = static function ( $query ) {
+			$sql = (string) $query;
+
+			return str_contains( $sql, 'autoscribe_runs' ) && str_contains( $sql, "status = 'running'" )
+				? 'SELECT id FROM autoscribe_no_such_table'
+				: $query;
+		};
+
+		add_filter( 'query', $break );
+		$wpdb->suppress_errors( true );
+
+		$unknown = Run::has_open_run( $prompt_id );
+		$armed   = ( new Schedule_Sweeper( $scheduler ) )->rearm( $prompt_id );
+
+		$wpdb->suppress_errors( false );
+		remove_filter( 'query', $break );
+
+		$this->assertNull( $unknown, 'The check reports unknown rather than false.' );
+		$this->assertFalse( $armed, 'And unknown must not mean absent.' );
+		$this->assertNull( $scheduler->next_scheduled( $prompt_id ) );
+	}
+
+	/**
+	 * Every enabled prompt gets a turn, however many there are.
+	 *
+	 * The first version selected a fixed first page on every pass, so a prompt
+	 * beyond it was not delayed — it was excluded, permanently, until the post
+	 * ordering happened to change.
+	 *
+	 * @since 1.11.0
+	 *
+	 * @return void
+	 */
+	public function test_a_prompt_beyond_the_first_page_is_still_reached(): void {
+		$scheduler = new Scheduler();
+		$prompts   = array();
+
+		for ( $i = 0; $i < Schedule_Sweeper::BATCH + 3; $i++ ) {
+			$prompts[] = $this->daily_prompt();
+		}
+
+		foreach ( $prompts as $prompt_id ) {
+			$scheduler->cancel( $prompt_id );
+		}
+
+		$sweeper = new Schedule_Sweeper( $scheduler );
+		$last    = (int) end( $prompts );
+
+		// The first pass cannot reach the last prompt; a later one must.
+		$sweeper->handle();
+
+		$this->assertNull( $scheduler->next_scheduled( $last ), 'It is beyond the first page.' );
+
+		$sweeper->handle();
+
+		$this->assertIsInt(
+			$scheduler->next_scheduled( $last ),
+			'The cursor carries the scan on rather than starting it again.'
+		);
+	}
+
+	/**
+	 * The scan starts over once it reaches the end.
+	 *
+	 * @since 1.11.0
+	 *
+	 * @return void
+	 */
+	public function test_the_cursor_wraps_when_the_scan_reaches_the_end(): void {
+		$scheduler = new Scheduler();
+		$prompt_id = $this->daily_prompt();
+		$sweeper   = new Schedule_Sweeper( $scheduler );
+
+		$sweeper->handle();
+
+		update_option( Schedule_Sweeper::CURSOR_OPTION, $prompt_id + 1000 );
+		$scheduler->cancel( $prompt_id );
+
+		$this->assertSame(
+			1,
+			$sweeper->handle(),
+			'A cursor past the end wraps to the beginning rather than skipping a pass.'
+		);
+		$this->assertIsInt( $scheduler->next_scheduled( $prompt_id ) );
+	}
 }

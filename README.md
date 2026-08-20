@@ -13,7 +13,7 @@ everything, and inserts the post as a draft or publishes it.
 
 | | |
 |---|---|
-| **Version** | 1.10.0 |
+| **Version** | 1.11.0 |
 | **Requires WordPress** | 6.4 |
 | **Requires PHP** | 8.1 |
 | **License** | GPL-2.0-or-later |
@@ -192,9 +192,9 @@ way to tell it apart from the rest of the site.
 
 ## Status and known limitations
 
-Version 1.10.0. Eleven external audits have been run against this plugin, and all
-eleven found real defects; the findings, the fixes, and the findings rejected
-with evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 398 tests
+Version 1.11.0. Twelve external audits have been run against this plugin, and all
+twelve found real defects; the findings, the fixes, and the findings rejected
+with evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 403 tests
 run against PHP 8.1, 8.2, and 8.3 on every push.
 
 Six things this plugin does not do the way the brief describes, all of them
@@ -217,13 +217,15 @@ The first item is the one that matters most:
   plugin falls back to a weaker row-order re-check that narrows the race without
   closing it. Your provider's own spending limit is the only hard ceiling; treat
   this cap as a brake, not a wall.
-- **A prompt that falls out of the queue is put back within about five minutes.**
+- **A prompt that falls out of the queue is put back within a few sweeps.**
   A prompt is armed when it is saved and when one of its runs finishes, so an
   action killed part way could leave an enabled prompt with nothing queued and
   nothing to notice. The scheduled sweep now arms any enabled prompt that has
-  nothing queued and no run in flight. Until it does, the prompt editor says "Not
-  queued yet" rather than showing a next run nothing was going to perform — the
-  readout reports the queue, not the calendar.
+  nothing queued and no run in flight. It works through prompts in pages, so a
+  site with many of them gives each one a turn rather than recovering the same
+  first page every time. Until it reaches a prompt, the editor says "Not queued
+  yet" rather than showing a next run nothing was going to perform — the readout
+  reports the queue, not the calendar.
 - **A scheduled run is spread across several queued requests, so it takes
   minutes rather than seconds.** One step per request is what keeps a host with a
   short `max_execution_time` from killing a whole article, and the cost is

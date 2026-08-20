@@ -79,6 +79,12 @@
 		-->
 		<exclude-pattern>*/src/Cost/Spend_Lock.php</exclude-pattern>
 		<!--
+		Named_Lock is where that GET_LOCK now lives, and the reason is unchanged:
+		there is no wpdb wrapper for a named lock, and caching one would defeat
+		the point of taking it.
+		-->
+		<exclude-pattern>*/src/Concurrency/Named_Lock.php</exclude-pattern>
+		<!--
 		The stall sweep asks Action Scheduler's own table which runs have a queued
 		action. Its store exposes no bulk query, and asking one run at a time made
 		a bounded sweep into two thousand round trips against the queue it is
@@ -87,6 +93,12 @@
 		-->
 		<exclude-pattern>*/src/Scheduling/Scheduler.php</exclude-pattern>
 		<exclude-pattern>*/src/Content/Topic_Deduplicator.php</exclude-pattern>
+		<!--
+		The schedule sweep pages enabled prompts by ID so that every one of them
+		gets a turn. WP_Query cannot express "IDs above this one" without a global
+		posts_where filter, and caching a recovery scan would defeat its purpose.
+		-->
+		<exclude-pattern>*/src/Scheduling/Schedule_Sweeper.php</exclude-pattern>
 		<!--
 		The run log tests need rows with specific started_at values to exercise
 		month boundaries and the retention cutoff. Run::start() always stamps the
@@ -123,6 +135,13 @@
 		asserts on the settled cost column directly.
 		-->
 		<exclude-pattern>*/tests/Pipeline/Concurrent_StateTest.php</exclude-pattern>
+		<!--
+		The queued-run tests count a prompt's run rows directly, which is the
+		assertion: one occurrence opens one run. Run exposes no counter, and
+		adding one so a test can avoid a direct read would put production API in
+		the plugin to serve the suite.
+		-->
+		<exclude-pattern>*/tests/Pipeline/Queued_RunTest.php</exclude-pattern>
 		<!--
 		The migration test drops the column the migration adds and then asks the
 		database whether it came back. Both are schema statements about the

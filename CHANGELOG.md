@@ -87,6 +87,62 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-08-20
+
+A twelfth external review, against 1.10.0. Four findings and two smaller
+corrections, all confirmed and all fixed.
+
+The high finding is in code added the same day: recovering a prompt that had
+fallen out of the queue introduced a way for two callers to queue the same
+occurrence, which is a worse failure than the one it fixed. Two run rows for one
+occurrence means two reservations, two sets of provider calls, and two articles —
+and the claims that stop two workers spending on a run cannot see it, because
+they are scoped to a run row.
+
+### Fixed
+
+- **Two callers could queue the same occurrence, and two actions could open two
+  paid runs.** Three paths arm a prompt — saving it, concluding a run, and the
+  new sweep — and each asked "is anything queued?" and then queued, which is two
+  statements that both answer "no". Arming is now serialised per prompt by a
+  named lock, and the guard that matters is at the point that costs money: a
+  prompt with a run in flight does not open a second one, whatever dispatched the
+  action.
+
+- **A failed open-run query read as "no run in flight".** `get_var()` answers
+  null both for "no such row" and for "the query did not run". The accounting
+  guard learned this in 1.9.0; the scheduling code repeated it. The check is
+  three-valued now, and unknown counts as running, because the cost of being
+  wrong in that direction is a paid duplicate.
+
+- **The recovery scan could exclude prompts permanently.** It selected the first
+  two hundred enabled prompts on every pass, so a site with more than that had
+  the rest left out of recovery for ever rather than merely delayed. It pages by
+  prompt ID with a durable cursor, and wraps when it reaches the end.
+
+- **A late charge could still invalidate a budget total after the final check.**
+  1.9.0 narrowed this and its changelog entry overstated the result. Money
+  arriving on a *closed* run now takes the same spend lock the budget check holds
+  from its final check through the reservation, so it cannot land inside that
+  window. Money arriving on an open run takes no lock and never did: its cost is
+  worked out when the run closes, and the reservation is what the cap sees until
+  then.
+
+### Changed
+
+- **The recovery scan asks two questions per page instead of two per prompt.**
+  Active prompt actions and open runs are read in bulk, with the same
+  database-store check and public-API fallback the run-step lookup uses.
+
+- **A prompt that cannot be queued is reported.** The sweep discarded that error,
+  and nothing else would have mentioned it: there is no run to fail and no row to
+  write it on. One notice an hour, like the other operational alerts.
+
+- **The prompt editor no longer needs JavaScript to be visible.** Every tab panel
+  was hidden by stylesheet and revealed by script, so a blocked or late script
+  left the configuration form blank. The hiding is now scoped to a class the
+  script adds, and the fallback is every panel visible, stacked.
+
 ## [1.10.0] - 2026-08-20
 
 Reported from a live site: a daily prompt showed controls for weekdays, days of
@@ -164,6 +220,10 @@ Repair covered the rows a cap sums, but only until the moment the sum was taken.
   been taken while nothing was outstanding, checks that afterwards rather than
   assuming it, and repairs and sums again if something arrived in between.
   Refusal, not authorisation, is what happens if the two never agree.
+
+  *Corrected in 1.11.0:* this narrowed the race rather than closing it. A charge
+  arriving after the final check could still land before the reservation. See the
+  1.11.0 entry.
 
 - **The migration could make no progress and repeat for ever.** Its cursor was a
   local variable, so every request restarted at zero, and a request only records

@@ -7,6 +7,7 @@
 
 namespace AutoScribe\Pipeline;
 
+use AutoScribe\Concurrency\Named_Lock;
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Scheduling\Scheduler;
 use WP_Error;
@@ -104,7 +105,41 @@ final class Queued_Run_Handler {
 		}
 
 		$attempt = $this->attempt( $prompt_id );
-		$run     = $this->generator->open( $prompt_id, $attempt );
+
+		/*
+		 * One occurrence, one run. Arming is serialised per prompt, but a lock
+		 * cannot span the gap between arming an action and Action Scheduler
+		 * dispatching it — a duplicate action row that already exists, or one
+		 * armed while the queue was unlocked, still arrives here. So the second
+		 * guard is at the only point that costs money: a prompt that already has a
+		 * run in flight does not open another.
+		 *
+		 * Standing down silently is deliberate. The run in flight is doing the
+		 * work this action was armed for, and it will report its own outcome and
+		 * arm the next occurrence; announcing a second time would be the duplicate
+		 * this exists to prevent, arriving as a notification instead of a post.
+		 */
+		$lock = new Named_Lock( 'prompt_' . $prompt_id );
+
+		$lock->acquire();
+
+		try {
+			$open = Run::has_open_run( $prompt_id );
+
+			if ( false !== $open ) {
+				/*
+				 * True, or unknown. A read that failed cannot be evidence that
+				 * nothing is running, and opening a second paid run on the strength
+				 * of a question the database refused to answer is exactly the
+				 * fail-open reading the accounting guard had to have removed.
+				 */
+				return;
+			}
+
+			$run = $this->generator->open( $prompt_id, $attempt );
+		} finally {
+			$lock->release();
+		}
 
 		if ( is_wp_error( $run ) ) {
 			$this->conclude( $prompt, $attempt, $run );

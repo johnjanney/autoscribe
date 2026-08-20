@@ -1020,4 +1020,88 @@ final class Queued_RunTest extends WP_UnitTestCase {
 
 		$this->assertSame( '', get_post_meta( $prompt_id, Queued_Run_Handler::ATTEMPT_META, true ) );
 	}
+	/**
+	 * Two actions for one occurrence produce one run, not two.
+	 *
+	 * Arming is serialised per prompt, but a lock cannot span the gap between
+	 * arming an action and Action Scheduler dispatching it: a duplicate action row
+	 * that already exists still arrives at the handler. Two run rows for one
+	 * occurrence means two reservations, two sets of provider calls, and two
+	 * posts — the step claims cannot see it, because they are scoped to a run row.
+	 *
+	 * @since 1.11.0
+	 *
+	 * @return void
+	 */
+	public function test_a_duplicate_action_does_not_open_a_second_run(): void {
+		$this->mock_provider_success();
+
+		$prompt_id = $this->create_prompt();
+		$handler   = $this->handler();
+
+		$handler->handle( $prompt_id );
+
+		$first = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertIsArray( $first );
+		$this->assertSame( Run::STATUS_RUNNING, $first['status'] );
+
+		// The duplicate arrives while the first run is still in flight.
+		$handler->handle( $prompt_id );
+
+		$second = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame(
+			(int) $first['id'],
+			(int) $second['id'],
+			'One occurrence opens one run, however many actions carry it.'
+		);
+		$this->assertSame(
+			1,
+			(int) $this->count_runs( $prompt_id ),
+			'And no second row was written for the same prompt.'
+		);
+	}
+
+	/**
+	 * A duplicate action is refused even when the prompt has a retry pending.
+	 *
+	 * @since 1.11.0
+	 *
+	 * @return void
+	 */
+	public function test_a_second_run_is_refused_while_one_is_open(): void {
+		$prompt_id = $this->create_prompt();
+		$open      = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $open );
+
+		$this->handler()->handle( $prompt_id );
+
+		$this->assertSame(
+			1,
+			(int) $this->count_runs( $prompt_id ),
+			'A prompt with a run in flight does not open another.'
+		);
+	}
+
+	/**
+	 * Counts the run rows a prompt has.
+	 *
+	 * @since 1.11.0
+	 *
+	 * @param int $prompt_id Prompt to count for.
+	 * @return int
+	 */
+	private function count_runs( int $prompt_id ): int {
+		global $wpdb;
+
+		return (int) $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT COUNT(*) FROM %i WHERE prompt_id = %d',
+				\AutoScribe\Activation::table_name(),
+				$prompt_id
+			)
+		);
+	}
 }

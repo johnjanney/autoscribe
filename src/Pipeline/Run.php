@@ -9,6 +9,7 @@ namespace AutoScribe\Pipeline;
 
 use AutoScribe\Activation;
 use AutoScribe\Cost\Pricing_Table;
+use AutoScribe\Cost\Spend_Lock;
 use AutoScribe\Providers\Model_Resolver;
 use DateTimeImmutable;
 use DateTimeZone;
@@ -571,23 +572,25 @@ final class Run {
 		 * still books the money. Reporting success and carrying on would lose it:
 		 * the next queued action loads a fresh run and reads the row.
 		 */
-		$written = $wpdb->query(
-			$wpdb->prepare(
-				'UPDATE %i SET text_model = %s, input_tokens = input_tokens + %d, output_tokens = output_tokens + %d,
-				usage_revision = usage_revision + 1,
-				cost_stale = IF( status <> %s, 1, cost_stale ) WHERE id = %d',
-				Activation::table_name(),
-				$model,
-				$input,
-				$output,
-				self::STATUS_RUNNING,
-				$this->id
-			)
+		return $this->under_spend_lock_if_closed(
+			function () use ( $wpdb, $model, $input, $output ): bool {
+				$written = $wpdb->query(
+					$wpdb->prepare(
+						'UPDATE %i SET text_model = %s, input_tokens = input_tokens + %d, output_tokens = output_tokens + %d,
+						usage_revision = usage_revision + 1,
+						cost_stale = IF( status <> %s, 1, cost_stale ) WHERE id = %d',
+						Activation::table_name(),
+						$model,
+						$input,
+						$output,
+						self::STATUS_RUNNING,
+						$this->id
+					)
+				);
+
+				return false !== $written;
+			}
 		);
-
-		$this->reconcile_cost();
-
-		return false !== $written;
 	}
 
 	/**
@@ -629,21 +632,23 @@ final class Run {
 
 		// See record_text_usage(): a picture the provider billed for is billed
 		// for whether or not the row accepts the counter.
-		$written = $wpdb->query(
-			$wpdb->prepare(
-				'UPDATE %i SET image_model = %s, image_count = image_count + 1,
-				usage_revision = usage_revision + 1,
-				cost_stale = IF( status <> %s, 1, cost_stale ) WHERE id = %d',
-				Activation::table_name(),
-				$model,
-				self::STATUS_RUNNING,
-				$this->id
-			)
+		return $this->under_spend_lock_if_closed(
+			function () use ( $wpdb, $model ): bool {
+				$written = $wpdb->query(
+					$wpdb->prepare(
+						'UPDATE %i SET image_model = %s, image_count = image_count + 1,
+						usage_revision = usage_revision + 1,
+						cost_stale = IF( status <> %s, 1, cost_stale ) WHERE id = %d',
+						Activation::table_name(),
+						$model,
+						self::STATUS_RUNNING,
+						$this->id
+					)
+				);
+
+				return false !== $written;
+			}
 		);
-
-		$this->reconcile_cost();
-
-		return false !== $written;
 	}
 
 	/**
@@ -882,20 +887,22 @@ final class Run {
 
 		++$this->grounded_calls;
 
-		$written = $wpdb->query(
-			$wpdb->prepare(
-				'UPDATE %i SET grounded_calls = grounded_calls + 1,
-				usage_revision = usage_revision + 1,
-				cost_stale = IF( status <> %s, 1, cost_stale ) WHERE id = %d',
-				Activation::table_name(),
-				self::STATUS_RUNNING,
-				$this->id
-			)
+		return $this->under_spend_lock_if_closed(
+			function () use ( $wpdb ): bool {
+				$written = $wpdb->query(
+					$wpdb->prepare(
+						'UPDATE %i SET grounded_calls = grounded_calls + 1,
+						usage_revision = usage_revision + 1,
+						cost_stale = IF( status <> %s, 1, cost_stale ) WHERE id = %d',
+						Activation::table_name(),
+						self::STATUS_RUNNING,
+						$this->id
+					)
+				);
+
+				return false !== $written;
+			}
 		);
-
-		$this->reconcile_cost();
-
-		return false !== $written;
 	}
 
 	/**
@@ -1632,10 +1639,13 @@ final class Run {
 	 * @since 1.10.0
 	 *
 	 * @param int $prompt_id Prompt to ask about.
-	 * @return bool
+	 * @return bool|null Null when the question could not be answered.
 	 */
-	public static function has_open_run( int $prompt_id ): bool {
+	public static function has_open_run( int $prompt_id ): ?bool {
 		global $wpdb;
+
+		// Cleared first, so what is read afterwards is this statement's answer.
+		$wpdb->last_error = '';
 
 		$found = $wpdb->get_var(
 			$wpdb->prepare(
@@ -1646,7 +1656,63 @@ final class Run {
 			)
 		);
 
+		/*
+		 * Null for a failed read rather than false, because `get_var()` answers
+		 * null both for "no such row" and for "the query did not run", and those
+		 * are opposite answers to the question a caller is asking. The accounting
+		 * guard had to learn this in 1.9.0; this is the same lesson arriving in
+		 * the scheduling code, and the same three-valued answer.
+		 */
+		if ( '' !== $wpdb->last_error ) {
+			return null;
+		}
+
 		return null !== $found;
+	}
+
+	/**
+	 * Returns which of these prompts have a run in flight.
+	 *
+	 * One statement for a page of prompts rather than one per prompt, for the
+	 * reason the queue lookup is batched: a recovery pass that asks the database
+	 * a question per prompt every five minutes is a cost that grows with the
+	 * thing it is protecting.
+	 *
+	 * @since 1.11.0
+	 *
+	 * @param int[] $prompt_ids Prompts to ask about.
+	 * @return array<int, true>|null Null when the question could not be answered.
+	 */
+	public static function prompts_with_open_runs( array $prompt_ids ): ?array {
+		global $wpdb;
+
+		$prompt_ids = array_values( array_filter( array_map( 'intval', $prompt_ids ) ) );
+
+		if ( array() === $prompt_ids ) {
+			return array();
+		}
+
+		$wpdb->last_error = '';
+
+		$rows = $wpdb->get_col(
+			$wpdb->prepare(
+				'SELECT DISTINCT prompt_id FROM %i WHERE status = %s AND prompt_id IN ( '
+					. implode( ', ', array_fill( 0, count( $prompt_ids ), '%d' ) ) . ' )',
+				array_merge( array( Activation::table_name(), self::STATUS_RUNNING ), $prompt_ids )
+			)
+		);
+
+		if ( '' !== $wpdb->last_error ) {
+			return null;
+		}
+
+		$open = array();
+
+		foreach ( (array) $rows as $prompt_id ) {
+			$open[ (int) $prompt_id ] = true;
+		}
+
+		return $open;
 	}
 
 	/**
@@ -2044,6 +2110,53 @@ final class Run {
 				'cost_cents' => $this->measured_cents( $pricing ),
 			)
 		);
+	}
+
+	/**
+	 * Records money against this run, under the spend lock when the row is closed.
+	 *
+	 * A charge on an *open* run needs no coordination: its cost is worked out when
+	 * the run closes, and the reservation is what the monthly cap sees until then.
+	 * A charge on a *closed* run is different, and this is the residual the last
+	 * two rounds narrowed without closing. The budget guard repairs, sums, checks
+	 * that nothing is outstanding, and then authorises — and a charge landing
+	 * after that check makes the total it authorised on incomplete before the
+	 * reservation is even written.
+	 *
+	 * The guard holds the spend lock from its check through that reservation, so
+	 * a late closed-row charge that takes the same lock cannot land inside it.
+	 * Which makes the rule simple: money that arrives after a run has closed waits
+	 * for the books to be balanced, and money that arrives before it does not wait
+	 * at all. The cost is one status read per paid call, on a path that has just
+	 * spent up to two minutes talking to a provider.
+	 *
+	 * @since 1.11.0
+	 *
+	 * @param callable $write Performs the counter write and returns whether it landed.
+	 * @return bool Whatever the write reported.
+	 */
+	private function under_spend_lock_if_closed( callable $write ): bool {
+		if ( self::STATUS_RUNNING === $this->status() ) {
+			$written = (bool) $write();
+
+			$this->reconcile_cost();
+
+			return $written;
+		}
+
+		$lock = new Spend_Lock();
+
+		$lock->acquire();
+
+		try {
+			$written = (bool) $write();
+
+			$this->reconcile_cost();
+
+			return $written;
+		} finally {
+			$lock->release();
+		}
 	}
 
 	/**

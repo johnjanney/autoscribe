@@ -1,5 +1,388 @@
 # AutoScribe code quality and security audit
 
+## Fresh verification review — version 1.10.0
+
+**Review date:** 20 August 2026 (America/Chicago)
+
+**Reviewed revision:** `cfd09d0da1051d4d8f6fef1d961485dcca6d2874` on
+`main`, tag `v1.10.0`
+
+**Change ranges:** `e0a68e0..fb7fee1` for the eleventh-review fixes and
+`fb7fee1..cfd09d0` for the Schedule changes
+
+**Response reviewed:** “Response to the eleventh Codex review” in
+[`CODEX-REVIEW-RESPONSE.md`](CODEX-REVIEW-RESPONSE.md#L2550)
+
+**Release reviewed:** [AutoScribe 1.10.0 on GitHub](https://github.com/johnjanney/autoscribe/releases/tag/v1.10.0)
+
+**Current result:** **Conditional pass. Version 1.9.0 correctly fixes the
+cost-floor snapshot, failed accounting reads, and migration progress. Version
+1.10.0 improves the Schedule editor and repairs the ordinary lost-action case.
+However, the new recovery path is not atomic, one failed database read can make
+an active run look absent, and the fixed 200-prompt scan can starve later
+prompts. The late-charge budget race is narrowed but not closed. Keep a
+provider-side spending limit enabled.**
+
+**Current quality score:** **8.1/10**
+
+### Executive result
+
+The eleventh response is correct for F180-01, F180-02, and F180-04. The floor
+now comes from the usage snapshot. A claim release raises `usage_revision`.
+Both terminal paths also compare the current floor with the cost that they
+write. Failed stale-row reads and failed monthly sums now propagate an unknown
+result to every spending decision. The migration now keeps its cursor between
+requests and uses a more exact candidate pattern.
+
+The Schedule editor changes are also sound in their ordinary paths. The server
+marks each conditional field with its applicable schedule types. It hides fields
+that do not apply to the saved type. The script updates that set when the user
+changes “Repeats.” The time field gives a clear site-timezone label. The next-run
+readout asks Action Scheduler for the real queued time and states when no action
+exists.
+
+The queue repair solves the reported single-worker failure. An enabled prompt
+with no prompt action and no open run is armed by the five-minute sweep. The
+supplied tests cover this path, an already queued prompt, an open run, a disabled
+prompt, an invalid schedule, the batch selection, and the queue-aware readout.
+
+The repair is not an exact-once operation. `Schedule_Sweeper::rearm()` checks
+the queue, checks the runs table, and calls `Scheduler::arm()` as three separate
+operations. `Scheduler::arm()` performs another queue check and then schedules
+a non-unique single action. Two concurrent callers can both pass the final
+check and both insert an action. The two action callbacks then insert two
+different run rows. Run step claims do not help because those claims are scoped
+to one run row. This can buy and publish two articles for one occurrence. See
+F1100-01.
+
+The open-run check also converts a database read failure into “no open run.”
+The new schedule sweep can therefore arm a prompt when it cannot establish
+whether that prompt is already running. This repeats the fail-open pattern that
+version 1.9.0 correctly removed from capped accounting. See F1100-02.
+
+The sweep selects the same first 200 enabled prompts on every pass. It has no
+cursor and no paging. No code enforces the comment's assumption that a site can
+never have more than 200 prompts. A later prompt can therefore remain out of the
+queue for ever. The sweep also makes at least one queue lookup and one runs-table
+lookup for each selected prompt every five minutes. See F1100-03.
+
+F180-03 is improved, but the response itself correctly says that the bounded
+loop “narrows rather than closes” the race. A late charge can arrive after the
+final `has_unsettled()` query and before the new run's reservation. That writer
+does not take the spend lock. The current check can still authorize from a total
+that becomes incomplete before the authorization is used. The changelog and
+summary should not call this finding fully fixed. See F1100-04.
+
+I found no verified unauthenticated code execution, SQL injection, stored XSS,
+capability bypass, CSRF defect, secret disclosure, or provider-URL SSRF in this
+revision. The scheduling findings affect integrity, availability, and possible
+provider cost. They do not establish an attacker-controlled security path.
+
+### Verification results
+
+| Check | Result | Evidence |
+|---|---:|---|
+| Revision and worktree | Pass | `HEAD`, `main`, `origin/main`, and `v1.10.0^{}` resolve to `cfd09d0`. The worktree was clean before this review file changed. |
+| Eleventh response and changelog | Pass with one status correction | The response and the 1.9.0 and 1.10.0 entries are present ([response](CODEX-REVIEW-RESPONSE.md#L2550), [changelog](CHANGELOG.md#L90)). F180-03 is narrowed, not closed. |
+| Diff integrity | Pass | `git diff --check fb7fee1..cfd09d0` reports no whitespace error. |
+| Composer manifest | Pass | `composer validate --strict --no-check-publish` reports a valid manifest ([manifest](composer.json)). |
+| Dependency advisories | Pass | `composer audit --locked` reports no known advisory ([lock file](composer.lock)). |
+| WordPress coding standards | Pass | PHPCS checked all 127 PHP files and exited zero with no error or warning ([rules](phpcs.xml.dist)). |
+| Local PHPUnit | Pass | The unchanged release suite passed 398 tests and 1,880 assertions in the WordPress test environment ([configuration](phpunit.xml.dist), [bootstrap](tests/bootstrap.php)). |
+| Tagged release CI | Pass | PHP 8.1, 8.2, and 8.3 passed for `cfd09d0` in [CI run 32379732058](https://github.com/johnjanney/autoscribe/actions/runs/32379732058). |
+| Code scanning | Pass | CodeQL `Analyze (actions)` passed for `cfd09d0` in [run 32379731011](https://github.com/johnjanney/autoscribe/actions/runs/32379731011). |
+| Release state | Pass | GitHub reports a published release that is not a draft or prerelease. The release points to tag `v1.10.0`, which resolves to `cfd09d0` ([release](https://github.com/johnjanney/autoscribe/releases/tag/v1.10.0)). |
+| Release asset bytes | Pass | GitHub and the local `build/` archive report 514,212 bytes and SHA-256 `e74e9de288998f9f93f792508af51af6a8bc6aa8110af00aee0a9bfb3721682a` ([asset](https://github.com/johnjanney/autoscribe/releases/download/v1.10.0/autoscribe-1.10.0.zip)). `unzip -t` reports no error. |
+| Packaged source | Pass | Each checked non-vendor file in `build/autoscribe-1.10.0.zip` matches `cfd09d0`. No nested zip, tarball, 7z, or RAR file was found. |
+| Commit and tag identity | Partial | GitHub and local Git verify the commit's SSH signature. The annotated release tag has no cryptographic signature. |
+| Schedule field applicability | Pass | Server rendering and JavaScript both use the field definitions' `for` values ([fields](src/Prompts/Prompt_Fields.php#L155), [renderer](src/Admin/Prompt_Meta_Box.php#L145), [script](src/Admin/Assets.php#L175)). |
+| Queue-aware next run | Pass for ordinary queue state | The readout uses the queue timestamp and labels the unqueued state ([readout](src/Admin/Next_Run_Readout.php#L37)). |
+| Lost-action recovery | Pass for one sequential sweeper | The sweep arms an enabled, valid prompt with no action and no open run ([sweeper](src/Scheduling/Schedule_Sweeper.php#L105), [tests](tests/Scheduling/Schedule_SweeperTest.php#L44)). |
+| Concurrent schedule recovery | **Not covered** | **Not found in documents:** a test that runs two re-arm paths concurrently or proves one prompt action and one open run per occurrence. See F1100-01. |
+| Schedule read failure | **Not covered** | **Not found in documents:** a test that makes the open-run query fail. See F1100-02. |
+| More than 200 prompts | **Not covered** | **Not found in documents:** a test that puts an unqueued enabled prompt outside the first recovery batch. See F1100-03. |
+| Final late-charge boundary | **Not covered** | **Not found in documents:** a two-connection test that writes a late charge after the final stale-row check and before reservation. See F1100-04. |
+| Live provider call | Not run | No funded key was supplied. No prompt, site content, or secret was sent to a provider. |
+| Real Action Scheduler dispatch | Not covered | **Not found in documents:** an automated test that lets Action Scheduler dispatch a complete chain ([documented limit](README.md#L259)). |
+| Two-connection concurrency | Not covered | The supplied concurrency tests interleave work in one process. **Not found in documents:** a test that uses two independent database connections ([response](CODEX-REVIEW-RESPONSE.md#L2666)). |
+| Non-MySQL database behavior | Not covered | **Not found in documents:** CI coverage for MariaDB or another database engine ([documented limit](README.md#L262)). |
+| CI-built release asset | Not covered | The source files in this asset match the tag. **Not found in documents:** a workflow that builds, verifies, and publishes that asset ([response](CODEX-REVIEW-RESPONSE.md#L2671)). |
+
+### Eleventh-response verdict by prior finding
+
+| Prior finding | Verification verdict | Version 1.10.0 status |
+|---|---|---|
+| F180-01 — a cost-floor increase can escape the revision snapshot | **Fixed** | One snapshot supplies the floor and revision. Claim release raises the revision. Both terminal statement shapes mark a cost below the current floor. |
+| F180-02 — database read failures make capped accounting fail open | **Fixed in capped accounting; the pattern recurs in schedule recovery** | The stale selector and monthly sum are three-valued, and both spending paths refuse on unknown. `Run::has_open_run()` again uses null for both no row and failed read. See F1100-02. |
+| F180-03 — a charge can become stale after repair and before the sum | **The reproduced boundary is fixed; the general race is not closed** | The bounded loop catches a charge that appears before the final stale-row query. A charge after that query can still land before reservation. The response states this weaker result at lines 2631–2633. See F1100-04. |
+| F180-04 — migration cursor restarts before a later real key | **Fixed** | The cursor survives requests, advances only after successful pages, clears on completion, and the candidate match is more exact. |
+
+## Version 1.10.0 findings
+
+### F1100-01 — High — Concurrent re-arm paths can create two paid runs for one occurrence
+
+**Category:** Concurrency, scheduling integrity, cost, publication
+
+**Verified facts**
+
+- The schedule sweep first asks for a queued action, then asks for an open run,
+  then calls `Scheduler::arm()`. These are separate operations
+  ([re-arm sequence](src/Scheduling/Schedule_Sweeper.php#L105)).
+- `Scheduler::arm()` performs another queue read and then calls
+  `as_schedule_single_action()` ([arm](src/Scheduling/Scheduler.php#L102)).
+- The call does not pass Action Scheduler's `$unique` parameter. Its default is
+  `false`. The official API states that a single action is non-unique by default
+  ([Action Scheduler API](https://actionscheduler.org/api/#function-reference-as_schedule_single_action)).
+- A prompt can be armed by the sweep, the save path, and the run-conclusion path
+  ([sweep](src/Scheduling/Schedule_Sweeper.php#L137),
+  [save](src/Plugin.php#L198),
+  [conclusion](src/Pipeline/Queued_Run_Handler.php#L518)).
+- The queue callback calls `Generator::open()` without a per-prompt execution
+  claim ([handler](src/Pipeline/Queued_Run_Handler.php#L96)).
+- `Run::start()` always inserts a new running row. It does not test or enforce
+  that the prompt has no other running row ([insert](src/Pipeline/Run.php#L287)).
+- Step claims prevent two workers from spending on one run row. They do not
+  prevent two run rows for one prompt occurrence.
+- The new tests call the sweep sequentially. **Not found in documents:** a test
+  that interleaves the final queue check and the action insert.
+
+**Inference and impact**
+
+Two callers can both observe no action. They can both reach the non-unique
+insert before either sees the other's action. Action Scheduler can then dispatch
+both action rows. Each callback creates its own run. Each run has its own budget
+reservation and claims, so both can make provider calls and create or publish a
+post. This violates one occurrence, one article. It can also double provider
+cost and notification work.
+
+This race does not require an unauthenticated caller. It can occur between two
+normal background requests, or between recovery and a run conclusion. Action
+Scheduler supports concurrent workers, so concurrency is part of the expected
+environment.
+
+**Recommended fix**
+
+- Add one per-prompt atomic claim around the final “is queued or running?” check
+  and action creation. Use a database primitive that works across PHP processes.
+- Add a second atomic guard at run opening. A duplicate prompt action must not be
+  able to create a second open run. Do not rely only on the queue check.
+- Do not pass `$unique = true` with the current shared hook and group without
+  testing the bundled store. In Action Scheduler 3.9.3, database-store
+  uniqueness is based on pending/running status, hook, and group; using the one
+  shared group can suppress other prompts. Use a correctly scoped group or a
+  plugin-owned per-prompt claim.
+- Add a two-connection test. Pause two callers after their last queue read, let
+  both continue, dispatch the result, and assert one prompt action, one open run,
+  one reservation, and one post.
+
+### F1100-02 — Medium — A failed open-run query is treated as proof that no run exists
+
+**Category:** Database failure handling, scheduling integrity, availability
+
+**Verified facts**
+
+- `Run::has_open_run()` calls `wpdb::get_var()` and returns `null !== $found`
+  ([query](src/Pipeline/Run.php#L1637)).
+- `wpdb::get_var()` returns null both when no value exists and when the query
+  fails. The method does not clear or inspect `$wpdb->last_error`
+  ([WordPress `wpdb::get_var()` reference](https://developer.wordpress.org/reference/classes/wpdb/get_var/)).
+- `Schedule_Sweeper::rearm()` treats `false` as permission to continue and arm
+  the prompt ([decision](src/Scheduling/Schedule_Sweeper.php#L117)).
+- The 1.9.0 accounting fix introduced a three-valued result for this exact data
+  problem: yes, no, or unreadable
+  ([response](CODEX-REVIEW-RESPONSE.md#L2599)).
+- The schedule tests cover a valid open row and no open row. They do not cover a
+  failed query ([tests](tests/Scheduling/Schedule_SweeperTest.php#L84)).
+
+**Inference and impact**
+
+A temporary read failure can make an in-flight run appear absent. If Action
+Scheduler remains writable, the sweep can add another prompt action. The later
+callback can overlap the existing run. A missing or fully unavailable runs table
+usually makes the later insert fail, which limits that specific failure. A
+transient read error, a read-only query fault, or a test filter can affect only
+the check and leave the later write available.
+
+The release text says that recovery leaves a running prompt alone. That claim is
+not true when the check cannot be made. Unknown must not mean absent.
+
+**Recommended fix**
+
+- Change `has_open_run()` to return `bool|null`, or a typed result that includes
+  an error.
+- Clear or capture `$wpdb->last_error` at the query boundary. Return unknown on
+  a failed query.
+- Make `Schedule_Sweeper::rearm()` refuse to arm on unknown. Record an
+  operational error that identifies the prompt and runs table.
+- Add tests for a failed read, an error left by an unrelated query, and a valid
+  empty result.
+
+### F1100-03 — Medium — The recovery scan can starve prompts and makes an N+1 queue check
+
+**Category:** Performance, fairness, scheduling availability
+
+**Verified facts**
+
+- `Schedule_Sweeper::BATCH` is 200 ([limit](src/Scheduling/Schedule_Sweeper.php#L42)).
+- `enabled_prompts()` sets `posts_per_page` to that value, sets
+  `no_found_rows`, and has no page, offset, or durable cursor
+  ([query](src/Scheduling/Schedule_Sweeper.php#L155)).
+- The same query runs on every five-minute stall sweep
+  ([call](src/Pipeline/Stall_Sweeper.php#L284)).
+- No validator or post-type rule limits a site to 200 AutoScribe prompts.
+- Each selected prompt normally makes one Action Scheduler lookup and one runs
+  table lookup. An unqueued prompt makes another queue lookup inside `arm()`.
+  The upper bound is therefore hundreds of database operations per sweep.
+- The new test uses two prompts. **Not found in documents:** a test with 201 or
+  more enabled prompts, a durable cursor, or a bulk prompt-action lookup.
+
+**Inference and impact**
+
+If a site has more than 200 enabled prompts, a prompt outside the selected set
+can remain unqueued for ever. The scan is not a bounded-delay recovery for that
+prompt. It is a permanent exclusion until post ordering changes.
+
+For a normal small site, the query cost is acceptable. Near the stated bound,
+the sweep repeatedly asks the queue and the runs table about prompts that are
+healthy. This adds avoidable load to the same queue that it is meant to protect.
+
+**Recommended fix**
+
+- Page by prompt ID with a durable cursor. Reset the cursor only after the scan
+  reaches the end. This gives every enabled prompt a bounded turn.
+- Query active prompt actions in bulk when the active Action Scheduler store is
+  the database store. Keep a public-API fallback for other stores, as the stall
+  sweep already does for run-step actions.
+- Query open runs for the selected prompt IDs in one statement. Treat query
+  failure as unknown, not empty.
+- Add tests with more than one complete batch, prompt deletion around the
+  cursor, changed post ordering, and a non-database Action Scheduler store.
+
+### F1100-04 — Medium — A late charge can still invalidate the budget total after the final check
+
+**Category:** Accounting integrity, concurrency, documentation accuracy
+
+**Verified facts**
+
+- The budget guard now uses this sequence: repair, sum, then query for one stale
+  row ([loop](src/Cost/Budget_Guard.php#L323)).
+- The guard returns `true` immediately after the final stale-row query says no
+  row is pending ([authorization](src/Cost/Budget_Guard.php#L358)).
+- The caller writes the new run's reservation in a later statement
+  ([check and reserve](src/Pipeline/Step_Budget_Check.php#L88)).
+- The spend lock covers budget checks and reservations. Late token, image, and
+  grounded-call writers do not take that lock. The response confirms this design
+  ([response](CODEX-REVIEW-RESPONSE.md#L2616)).
+- A late writer marks a closed row stale before it attempts reconciliation. It
+  can do this after the guard's final stale-row query and before reservation.
+- The response says that the bounded loop “narrows rather than closes” the race
+  ([response](CODEX-REVIEW-RESPONSE.md#L2631)).
+- The same response summary and the 1.9.0 changelog call F180-03 fixed
+  ([summary](CODEX-REVIEW-RESPONSE.md#L2560),
+  [changelog](CHANGELOG.md#L160)).
+
+**Inference and impact**
+
+The bounded loop fixes the previously reproduced repair-to-sum order. It does
+not create a stable snapshot through authorization and reservation. A late
+charge in the final gap can make the total incomplete after the guard has
+accepted it. The current run can then reserve and proceed under a cap that the
+database now marks as needing repair.
+
+The next sweep or budget check can repair the old row. It cannot recall the run
+that was already authorized. The residual window is small, but the invariant
+“nothing spends until the total is complete” is stronger than the code.
+
+**Recommended fix**
+
+- Use one synchronization contract for the final accounting snapshot and every
+  late closed-row money write. The same installation-scoped lock is the clearest
+  contract if the performance cost is acceptable.
+- If late writers must remain lock-free, use a monotonic accounting revision for
+  the whole cap scope. Read it with the total and compare it in the same atomic
+  operation that writes the reservation. Retry or refuse when it changed.
+- Add a two-connection test for a charge after each stale-row check, during cap
+  comparison, and immediately before reservation.
+- Change the response summary and changelog to say that the reproduced boundary
+  is fixed and the general late-writer race is narrowed. Keep the provider-side
+  hard-limit warning.
+
+### Additional low-risk corrections
+
+- `Schedule_Sweeper::rearm()` discards the `WP_Error` from `Scheduler::arm()`
+  and the recurring action ignores the returned count
+  ([discarded error](src/Scheduling/Schedule_Sweeper.php#L137)). The next-run
+  readout reveals that no action exists, but a site owner who does not open the
+  prompt receives no new operational notice. Log or rate-limit a notice after
+  repeated recovery failure.
+- The admin stylesheet hides every tab panel by default. JavaScript activates
+  the first panel. If JavaScript does not run, the configuration form remains
+  hidden ([assets](src/Admin/Assets.php#L128)). Use a no-JavaScript fallback or
+  apply the hiding class only after the script starts.
+- The annotated `v1.10.0` tag is not signed. The commit that it names has a
+  verified SSH signature. This is better than version 1.8.0, but a signed tag
+  would bind the release label itself to the maintainer's key.
+
+### Version 1.10.0 category verdicts
+
+**Code quality:** Conditional pass. The new classes have clear responsibilities,
+small methods, strict output escaping, and useful comments. The main comments
+state the intended safety rules. F1100-01 and F1100-02 show that the implementation
+does not make those rules atomic or error-aware.
+
+**Performance:** Conditional pass. Normal generation remains split into bounded
+queue steps. The new recovery scan is bounded per pass, but it trades the bound
+for starvation and repeats per-prompt queue and run lookups. F1100-03 should be
+fixed before a large prompt set is supported.
+
+**Security:** Pass within the reviewed scope. Composer audit, PHPCS, CodeQL, and
+manual inspection found no verified injection, authorization, CSRF, XSS, secret,
+or provider-URL defect. The high scheduling finding is an integrity and cost
+defect in normal concurrent operation. No attacker-controlled trigger was
+verified.
+
+**Purpose:** Conditional pass. AutoScribe can schedule, generate, sanitize,
+record, and publish content. The Schedule tab now shows controls that apply and
+reports the queue more honestly. Recovery works for the reported ordinary gap.
+It does not yet provide exactly one run per occurrence, fail-closed open-run
+detection, or fair recovery beyond 200 prompts.
+
+**Release provenance:** Pass with one limitation. The published asset size and
+digest match the local release archive. Its checked source matches the tag. CI
+and CodeQL passed on the tagged commit. The commit is signed; the annotated tag
+is not. CI still does not build and publish the asset.
+
+### Version 1.10.0 remediation order
+
+1. Fix F1100-01. Make prompt action creation and run opening safe under two
+   concurrent workers.
+2. Fix F1100-02. A failed open-run read must refuse recovery and report the
+   operational fault.
+3. Fix F1100-04. Close the final accounting window or document it as a residual
+   limit instead of a completed fix.
+4. Fix F1100-03. Add fair paging and bulk queue/run lookups.
+5. Preserve the Schedule UI fixes and add recovery-error reporting.
+6. Add the two-connection concurrency, real Action Scheduler dispatch,
+   MariaDB, live-provider, and CI-built artifact checks already listed as open.
+
+### Version 1.10.0 conclusion
+
+Version 1.10.0 fixes the visible Schedule defects and the ordinary lost-action
+case. The editor now shows only applicable fields, gives useful timezone context,
+and reports queue state instead of only calendar intent. Version 1.9.0 also
+closes three of the four prior findings and materially improves the fourth.
+
+The new recovery path must not yet be described as exact or complete. Its
+check-then-insert sequence can create duplicate prompt actions. Its open-run
+query fails open. Its fixed first batch can exclude later prompts for ever. The
+accounting loop still has a final late-writer window that the response itself
+acknowledges.
+
+Ship a maintenance release for F1100-01 and F1100-02 before relying on unattended
+recovery for paid or auto-published prompts. Keep human review enabled where
+duplicate publication has material impact, and keep the provider-side spending
+limit as the hard financial control.
+
 ## Fresh verification review — version 1.8.0
 
 **Review date:** 20 August 2026 (America/Chicago)

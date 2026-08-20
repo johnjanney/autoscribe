@@ -7,10 +7,11 @@
 
 namespace AutoScribe\Scheduling;
 
+use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Run;
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Prompts\Prompt_Post_Type;
-use WP_Query;
+use WP_Error;
 
 defined( 'ABSPATH' ) || exit;
 
@@ -40,16 +41,40 @@ defined( 'ABSPATH' ) || exit;
 final class Schedule_Sweeper {
 
 	/**
-	 * Most prompts one pass will look at.
+	 * How many prompts one pass looks at.
 	 *
-	 * The row count here is small by design — section 3.2 chose a post type for
-	 * prompts precisely because there are never many — so this is a bound against
-	 * pathology rather than a paging scheme.
+	 * A bound on the work rather than on the site. The first version of this
+	 * selected the first two hundred enabled prompts every time and called that
+	 * enough, on the reasoning that section 3.2 keeps the prompt count small —
+	 * but nothing enforces that, and a site with more than two hundred would have
+	 * had the prompts beyond them excluded from recovery for ever rather than
+	 * merely delayed. The cursor below is what turns a bound into a queue.
 	 *
 	 * @since 1.10.0
 	 * @var int
 	 */
-	public const BATCH = 200;
+	public const BATCH = 50;
+
+	/**
+	 * Option holding where the last pass stopped reading.
+	 *
+	 * Zero means "start from the beginning", which is both the initial state and
+	 * what a pass that reached the end writes back. It is an optimisation for
+	 * finding unqueued prompts rather than a record of anything, so a lost value
+	 * costs a repeated scan rather than correctness.
+	 *
+	 * @since 1.11.0
+	 * @var string
+	 */
+	public const CURSOR_OPTION = 'autoscribe_schedule_cursor';
+
+	/**
+	 * Transient holding down the rate of unqueueable-prompt alerts.
+	 *
+	 * @since 1.11.0
+	 * @var string
+	 */
+	public const NOTICE_TRANSIENT = 'autoscribe_schedule_notice';
 
 	/**
 	 * Queue wrapper.
@@ -78,13 +103,46 @@ final class Schedule_Sweeper {
 	 * @return int How many prompts were armed.
 	 */
 	public function handle(): int {
-		$armed = 0;
+		$after   = max( 0, (int) get_option( self::CURSOR_OPTION, 0 ) );
+		$prompts = $this->enabled_prompts( $after );
+		$armed   = 0;
 
-		foreach ( $this->enabled_prompts() as $prompt_id ) {
+		if ( array() === $prompts ) {
+			// Nothing above the cursor, so the next pass starts over.
+			update_option( self::CURSOR_OPTION, 0, false );
+
+			return 0;
+		}
+
+		/*
+		 * Two questions asked once for the page rather than twice per prompt. A
+		 * recovery pass that runs every five minutes and costs a query per prompt
+		 * grows into a load on the very queue it is there to protect.
+		 */
+		$queued = $this->scheduler->active_prompt_actions();
+		$open   = Run::prompts_with_open_runs( $prompts );
+
+		foreach ( $prompts as $prompt_id ) {
+			$skip = null === $queued
+				? null !== $this->scheduler->next_scheduled( $prompt_id )
+				: isset( $queued[ $prompt_id ] );
+
+			if ( $skip ) {
+				continue;
+			}
+
+			// Unknown counts as running, so a failed read cannot authorise a
+			// second run: see rearm(), which repeats the check for one prompt.
+			if ( null === $open || isset( $open[ $prompt_id ] ) ) {
+				continue;
+			}
+
 			if ( $this->rearm( $prompt_id ) ) {
 				++$armed;
 			}
 		}
+
+		update_option( self::CURSOR_OPTION, (int) end( $prompts ), false );
 
 		return $armed;
 	}
@@ -114,11 +172,16 @@ final class Schedule_Sweeper {
 			return false;
 		}
 
-		if ( Run::has_open_run( $prompt_id ) ) {
+		if ( false !== Run::has_open_run( $prompt_id ) ) {
 			/*
-			 * A run is in flight. Its next occurrence is armed when it concludes,
-			 * and arming one now would put a second article beside the first — the
-			 * stall sweep is what recovers a run that never concludes.
+			 * A run is in flight, or the question could not be answered. Its next
+			 * occurrence is armed when it concludes, and arming one now would put a
+			 * second article beside the first — the stall sweep is what recovers a
+			 * run that never concludes.
+			 *
+			 * Unknown counts as running for the same reason it counts that way in
+			 * the accounting guard: a read that failed is not evidence of absence,
+			 * and the cost of being wrong in that direction is a paid duplicate.
 			 */
 			return false;
 		}
@@ -137,6 +200,15 @@ final class Schedule_Sweeper {
 		$timestamp = $this->scheduler->arm( $prompt_id, $schedule );
 
 		if ( is_wp_error( $timestamp ) ) {
+			/*
+			 * The prompt is enabled, valid, and not queued, and the queue would not
+			 * take it. Nothing else will notice: there is no run to fail, no row to
+			 * write an error on, and the editor only says so to somebody who opens
+			 * it. Rate-limited because the sweep meets the same refusal every five
+			 * minutes for as long as it lasts.
+			 */
+			$this->report( $prompt_id, $timestamp );
+
 			return false;
 		}
 
@@ -150,29 +222,73 @@ final class Schedule_Sweeper {
 	 *
 	 * @since 1.10.0
 	 *
+	 * @param int $after Only prompts with an ID above this one.
 	 * @return int[]
 	 */
-	private function enabled_prompts(): array {
-		$query = new WP_Query(
-			array(
-				'post_type'              => Prompt_Post_Type::POST_TYPE,
-				'post_status'            => array( 'publish', 'draft', 'pending', 'private' ),
-				'posts_per_page'         => self::BATCH,
-				'fields'                 => 'ids',
-				'no_found_rows'          => true,
-				'ignore_sticky_posts'    => true,
-				'update_post_meta_cache' => false,
-				'update_post_term_cache' => false,
-				'meta_query'             => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- One indexed meta_key over a table section 3.2 keeps small.
-					array(
-						'key'     => '_autoscribe_enabled',
-						'value'   => '1',
-						'compare' => '=',
-					),
-				),
+	private function enabled_prompts( int $after ): array {
+		$prompts = $this->page_of_prompts( $after );
+
+		if ( array() === $prompts && $after > 0 ) {
+			// Past the end. Start again rather than waiting five minutes to.
+			return $this->page_of_prompts( 0 );
+		}
+
+		return $prompts;
+	}
+
+	/**
+	 * Tells the notification address that a prompt cannot be queued, at most hourly.
+	 *
+	 * @since 1.11.0
+	 *
+	 * @param int      $prompt_id Prompt that could not be armed.
+	 * @param WP_Error $error     Why the queue refused it.
+	 * @return void
+	 */
+	private function report( int $prompt_id, WP_Error $error ): void {
+		if ( false !== get_transient( self::NOTICE_TRANSIENT ) ) {
+			return;
+		}
+
+		set_transient( self::NOTICE_TRANSIENT, time(), HOUR_IN_SECONDS );
+
+		Generator::send_failure_notice( $prompt_id, $error );
+	}
+
+	/**
+	 * Reads one page of enabled prompt IDs above a cursor.
+	 *
+	 * A direct statement rather than WP_Query, because the cursor is the point:
+	 * WP_Query cannot express "IDs above this one" without a posts_where filter,
+	 * and a global filter installed for one query in a background sweep is a
+	 * worse trade than a prepared statement over two tables. Enabled is stored as
+	 * WordPress stores a checkbox — '1' when on, an empty string when off.
+	 *
+	 * @since 1.11.0
+	 *
+	 * @param int $after Only prompts with an ID above this one.
+	 * @return int[]
+	 */
+	private function page_of_prompts( int $after ): array {
+		global $wpdb;
+
+		$ids = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT p.ID FROM {$wpdb->posts} p
+				INNER JOIN {$wpdb->postmeta} m ON m.post_id = p.ID AND m.meta_key = %s
+				WHERE p.post_type = %s
+					AND p.post_status NOT IN ( 'trash', 'auto-draft' )
+					AND p.ID > %d
+					AND m.meta_value NOT IN ( '', '0' )
+				ORDER BY p.ID ASC
+				LIMIT %d",
+				'_autoscribe_enabled',
+				Prompt_Post_Type::POST_TYPE,
+				max( 0, $after ),
+				self::BATCH
 			)
 		);
 
-		return array_map( 'intval', (array) $query->posts );
+		return array_map( 'intval', (array) $ids );
 	}
 }
