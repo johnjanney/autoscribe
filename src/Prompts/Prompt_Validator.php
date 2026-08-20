@@ -105,11 +105,20 @@ final class Prompt_Validator {
 		add_action( 'save_post_' . Prompt_Post_Type::POST_TYPE, array( $this, 'validate' ), 20 );
 		add_action( 'added_post_meta', array( $this, 'note_meta_write' ), 20, 3 );
 		add_action( 'updated_post_meta', array( $this, 'note_meta_write' ), 20, 3 );
+
+		/*
+		 * Deleting a key changes the configuration exactly as writing one does,
+		 * and it is the deletion that produces the state these rules exist to
+		 * prevent: remove the fallback image ID and fallback mode is left with
+		 * nothing to fall back to. The first argument is an array of meta IDs
+		 * here rather than a single ID, which is why it is ignored either way.
+		 */
+		add_action( 'deleted_post_meta', array( $this, 'note_meta_write' ), 20, 3 );
 		add_action( 'shutdown', array( $this, 'validate_pending' ), 20 );
 	}
 
 	/**
-	 * Notes a meta write worth re-checking, to be checked when the request ends.
+	 * Notes a meta write or deletion worth re-checking, for the end of the request.
 	 *
 	 * Deferred rather than immediate, and the reason is the order fields arrive
 	 * in. A writer setting image mode to fallback and then setting the fallback
@@ -126,9 +135,9 @@ final class Prompt_Validator {
 	 *
 	 * @since 1.3.0
 	 *
-	 * @param int    $meta_id  Meta row ID, unused.
-	 * @param int    $post_id  Post the meta belongs to.
-	 * @param string $meta_key Key that was written.
+	 * @param int|int[] $meta_id  Meta row ID, or IDs on a deletion. Unused.
+	 * @param int       $post_id  Post the meta belongs to.
+	 * @param string    $meta_key Key that was written or removed.
 	 * @return void
 	 */
 	public function note_meta_write( $meta_id, $post_id, $meta_key ): void {

@@ -278,6 +278,44 @@ final class Scheduler {
 	}
 
 	/**
+	 * Whether the queue's active store is the one these tables belong to.
+	 *
+	 * The table existing is not the same question. Action Scheduler picks its
+	 * store through the action_scheduler_store_class filter, so a site running
+	 * the legacy post store or one of its own can leave a perfectly good
+	 * actionscheduler_actions table behind that nothing writes to any more.
+	 * Reading it would then report an empty active set, and every open run would
+	 * look unattended.
+	 *
+	 * What that costs is not a wrong recovery — recover() re-asks the public API
+	 * about each run before it does anything — but the two thousand per-run reads
+	 * the bulk query exists to remove. Asking the store what it is costs one
+	 * method call.
+	 *
+	 * The hybrid store counts. It is not a different place to keep actions but a
+	 * migration wrapper whose destination is the database store, so every action
+	 * created while it is in place — which is every action this plugin schedules —
+	 * is in the table this reads. It is also the store a stock Action Scheduler
+	 * install runs while it migrates, which is to say the ordinary case rather
+	 * than an exotic one. An unmigrated legacy action would be missed, and the
+	 * per-run re-check is what makes that safe rather than merely unlikely.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return bool
+	 */
+	private function uses_database_store(): bool {
+		if ( ! class_exists( '\ActionScheduler' ) || ! class_exists( '\ActionScheduler_DBStore' ) ) {
+			return false;
+		}
+
+		$store = \ActionScheduler::store();
+
+		return $store instanceof \ActionScheduler_DBStore
+			|| ( class_exists( '\ActionScheduler_HybridStore' ) && $store instanceof \ActionScheduler_HybridStore );
+	}
+
+	/**
 	 * Returns every run with a queued or running step action, keyed by run ID.
 	 *
 	 * One query for the whole queue rather than one per page of candidates. The
@@ -302,10 +340,14 @@ final class Scheduler {
 			return null;
 		}
 
+		if ( ! $this->uses_database_store() ) {
+			return null;
+		}
+
 		$actions = $wpdb->prefix . 'actionscheduler_actions';
 		$groups  = $wpdb->prefix . 'actionscheduler_groups';
 
-		// The store may be the legacy post-based one, which has no such table.
+		// The table can also be missing outright on a fresh or partial install.
 		if ( $actions !== $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $actions ) ) ) {
 			return null;
 		}

@@ -233,6 +233,18 @@ final class Generator {
 		 * the failure is surfaced rather than swallowed.
 		 */
 		if ( 'draft' !== $status ) {
+			/*
+			 * Asked again immediately before the transition, because between the
+			 * claim above and this line a stall sweep can have closed the run at
+			 * the very claim this worker holds — its prompt removed, or its
+			 * restart limit reached. Publishing after that would put a post on the
+			 * site for a run the log has already reported as failed, which is the
+			 * one thing section 10's review boundary must not allow.
+			 */
+			if ( $run->lost_claim() ) {
+				return $this->close_race_lost();
+			}
+
 			$updated = wp_update_post(
 				array(
 					'ID'          => $post_id,

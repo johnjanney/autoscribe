@@ -87,6 +87,63 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-19
+
+A sixth external review, against 1.3.0. Four findings, all confirmed and all
+fixed. The reasoning for each is in `CODEX-REVIEW-RESPONSE.md`.
+
+The high finding is the same mistake as the two before it, and worth naming
+plainly: a guard that was correct as far as it was taken and was not taken far
+enough. Ownership of a step was defined as the row and the claim token, and the
+missing third of it — the run still being open — is what let a worker keep
+writing to a run that recovery had already closed.
+
+MINOR rather than PATCH: previews recover on their own threshold, prompt
+validation observes a new hook, and the queue's bulk read now depends on which
+store is active.
+
+### Fixed
+
+- **A worker whose run had been closed under it could still change the closed
+  row, and could still publish.** A terminal sweep closes a run *at* the claim it
+  observed and leaves the marker in place, so the worker it closed found its
+  token unchanged and believed it still owned the step. It could write the
+  article identity, the post link, the cost, the payload, and the completed step
+  to a row the run log had already reported as failed — and from finalisation it
+  could transition the post to published, putting an article on the site for a
+  run that had failed.
+
+  Ownership is now one predicate — the row, the run still running, and the claim
+  token — carried by every claimed write and by both claim questions, which ask
+  it in a single query so two reads cannot disagree. Finalisation re-asks it
+  immediately before the post's status transition. A worker that closed the run
+  itself is not treated as having lost it: ending a run is not losing it, and its
+  own error is still the run's real outcome.
+
+- **A preview could be reported as failed while the person was still waiting for
+  it.** A preview runs synchronously and never has a queued action, so age is its
+  only liveness signal — and the queued-run threshold, which a filter can lower
+  to two minutes, is well inside what one preview can legitimately take. Previews
+  now recover on their own threshold of thirty minutes, which a site can raise but
+  cannot lower below the queued-run threshold.
+
+- **Deleting a prompt's fallback image left fallback mode with nothing to fall
+  back to.** The validator watched added and updated meta and not deleted meta,
+  which is the write that produces the exact state the rule exists to prevent. It
+  observes `deleted_post_meta` now.
+
+- **The queue's bulk read checked that the standard table exists, not that the
+  active store uses it.** A site running the legacy post store, or one of its own,
+  can leave the table behind — and reading it would report an empty active set.
+  The store is asked what it is. The hybrid store counts, because it is a
+  migration wrapper whose destination is the database store and is what a stock
+  install runs while it migrates.
+
+### Added
+
+- `autoscribe_preview_stall_threshold`, filtering how long a preview may run
+  before the sweep treats it as abandoned.
+
 ## [1.3.0] - 2026-08-19
 
 A fifth external review, against 1.2.0. Six findings, all confirmed and all

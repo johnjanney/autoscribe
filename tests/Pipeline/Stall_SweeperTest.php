@@ -368,6 +368,53 @@ final class Stall_SweeperTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * The bulk queue read is not used when another store owns the queue.
+	 *
+	 * Action Scheduler picks its store through a filter, so a site part way
+	 * through a migration, or running the legacy post store, can leave a perfectly
+	 * good actionscheduler_actions table behind that nothing writes to any more.
+	 * Reading it would report an empty active set and make every open run look
+	 * unattended — and a healthy backlog would then fall back to one queue read
+	 * per run, which is the two thousand round trips the bulk query removed.
+	 *
+	 * The store is a cached singleton with no public setter, so the swap is made
+	 * through reflection and put back afterwards.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return void
+	 */
+	public function test_a_replaced_store_falls_back_to_the_public_api(): void {
+		$scheduler = new Scheduler();
+
+		$this->assertIsArray(
+			$scheduler->active_step_runs(),
+			'The database store is the ordinary case, and it does use the bulk read.'
+		);
+
+		$property = new \ReflectionProperty( \ActionScheduler_Store::class, 'store' );
+
+		$property->setAccessible( true );
+
+		$original = $property->getValue();
+
+		$property->setValue( null, new \ActionScheduler_wpPostStore() );
+
+		$active = $scheduler->active_step_runs();
+
+		$property->setValue( null, $original );
+
+		$this->assertNull(
+			$active,
+			'A store that is not the database store must fall back rather than read a table it does not use.'
+		);
+		$this->assertIsArray(
+			$scheduler->active_step_runs(),
+			'And the ordinary case still works once the store is back.'
+		);
+	}
+
+	/**
 	 * Builds the sweeper under test.
 	 *
 	 * @since 1.1.0

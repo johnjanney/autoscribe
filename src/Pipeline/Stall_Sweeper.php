@@ -84,6 +84,27 @@ final class Stall_Sweeper {
 	public const MAX_RESTARTS = 2;
 
 	/**
+	 * How old a preview must be before the sweeper will close it, in seconds.
+	 *
+	 * A preview has no queued action to look for, because it runs synchronously
+	 * inside the request that asked for it — so the liveness test every other run
+	 * gets does not apply to it, and age is all there is. That makes the age the
+	 * whole guard, and it has to exceed the longest a preview can legitimately
+	 * take: two topic proposals and a body call with its repair, each able to use
+	 * the full 120-second provider timeout, plus whatever the host adds.
+	 *
+	 * Half an hour is generous on every count. The queued-run threshold is
+	 * deliberately not used here, even when a site has raised it: that filter can
+	 * be lowered to two minutes, which is inside a normal preview, and a sweep
+	 * that closes a preview a person is still waiting for reports a failure for a
+	 * request that then succeeds.
+	 *
+	 * @since 1.4.0
+	 * @var int
+	 */
+	public const PREVIEW_THRESHOLD = 30 * MINUTE_IN_SECONDS;
+
+	/**
 	 * Most runs to recover in one sweep.
 	 *
 	 * A cap on what is acted on, not on what is looked at — see handle().
@@ -218,6 +239,30 @@ final class Stall_Sweeper {
 	}
 
 	/**
+	 * Returns the age a preview must reach before the sweeper closes it.
+	 *
+	 * The larger of the two thresholds, so a site that has raised the queued-run
+	 * threshold raises this with it and a site that has lowered it does not lower
+	 * this below the length of a preview.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return int Seconds.
+	 */
+	public static function preview_threshold(): int {
+		/**
+		 * Filters how long a preview may run before it is treated as abandoned.
+		 *
+		 * @since 1.4.0
+		 *
+		 * @param int $seconds Age in seconds.
+		 */
+		$seconds = (int) apply_filters( 'autoscribe_preview_stall_threshold', self::PREVIEW_THRESHOLD );
+
+		return max( self::threshold(), $seconds );
+	}
+
+	/**
 	 * Examines open runs and recovers the ones nothing is advancing.
 	 *
 	 * @since 1.1.0
@@ -336,6 +381,11 @@ final class Stall_Sweeper {
 		}
 
 		if ( $run->is_preview() ) {
+			if ( $run->age_seconds() < self::preview_threshold() ) {
+				// Young enough that the request making it may still be running.
+				return false;
+			}
+
 			/*
 			 * A preview is a run in every accounting sense and in no other: it
 			 * makes paid calls, holds a reservation, and creates no post. Sending

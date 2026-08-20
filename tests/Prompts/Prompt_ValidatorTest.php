@@ -139,10 +139,7 @@ final class Prompt_ValidatorTest extends WP_UnitTestCase {
 			(string) get_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'image_mode', true )
 		);
 
-		remove_action( 'added_post_meta', array( $validator, 'note_meta_write' ), 20 );
-		remove_action( 'updated_post_meta', array( $validator, 'note_meta_write' ), 20 );
-		remove_action( 'shutdown', array( $validator, 'validate_pending' ), 20 );
-		remove_action( 'save_post_' . Prompt_Post_Type::POST_TYPE, array( $validator, 'validate' ), 20 );
+		$this->unregister( $validator );
 	}
 
 	/**
@@ -181,10 +178,83 @@ final class Prompt_ValidatorTest extends WP_UnitTestCase {
 			'The rules judge the configuration a writer finished, not one it was half way through.'
 		);
 
-		remove_action( 'added_post_meta', array( $validator, 'note_meta_write' ), 20 );
-		remove_action( 'updated_post_meta', array( $validator, 'note_meta_write' ), 20 );
-		remove_action( 'shutdown', array( $validator, 'validate_pending' ), 20 );
-		remove_action( 'save_post_' . Prompt_Post_Type::POST_TYPE, array( $validator, 'validate' ), 20 );
+		$this->unregister( $validator );
+	}
+
+	/**
+	 * Deleting a watched key is a change like any other.
+	 *
+	 * Removing the fallback image ID is the one write that produces the exact
+	 * state these rules exist to prevent, and it was the one the validator did
+	 * not watch: it observed added and updated meta and not deleted meta.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return void
+	 */
+	public function test_deleting_the_fallback_image_corrects_the_mode(): void {
+		$validator = new Prompt_Validator();
+
+		$validator->register();
+
+		$attachment = self::factory()->attachment->create_object(
+			array(
+				'file'           => 'fallback.jpg',
+				'post_mime_type' => 'image/jpeg',
+			)
+		);
+
+		$prompt_id = $this->create_prompt(
+			array(
+				'image_mode'        => 'fallback',
+				'fallback_image_id' => $attachment,
+			)
+		);
+
+		// What `wp post meta delete` does, and nothing else.
+		delete_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'fallback_image_id' );
+
+		$validator->validate_pending();
+
+		$this->assertSame(
+			'required',
+			(string) get_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'image_mode', true ),
+			'A fallback mode whose image was deleted cannot keep its promise.'
+		);
+
+		$this->unregister( $validator );
+	}
+
+	/**
+	 * Deleting the provider a grounded prompt uses is noticed too.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return void
+	 */
+	public function test_deleting_a_watched_key_is_noticed(): void {
+		$validator = new Prompt_Validator();
+
+		$validator->register();
+
+		$prompt_id = $this->create_prompt(
+			array(
+				'text_provider'     => 'deepseek',
+				'grounding_enabled' => 1,
+			)
+		);
+
+		delete_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'text_provider' );
+		update_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'text_provider', 'deepseek' );
+
+		$validator->validate_pending();
+
+		$this->assertSame(
+			'',
+			(string) get_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'grounding_enabled', true )
+		);
+
+		$this->unregister( $validator );
 	}
 
 	/**
@@ -204,5 +274,20 @@ final class Prompt_ValidatorTest extends WP_UnitTestCase {
 			'fallback',
 			(string) get_post_meta( $post_id, Prompt_Fields::PREFIX . 'image_mode', true )
 		);
+	}
+	/**
+	 * Removes the hooks a test registered, so it cannot affect the next one.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param Prompt_Validator $validator Validator to unhook.
+	 * @return void
+	 */
+	private function unregister( Prompt_Validator $validator ): void {
+		remove_action( 'added_post_meta', array( $validator, 'note_meta_write' ), 20 );
+		remove_action( 'updated_post_meta', array( $validator, 'note_meta_write' ), 20 );
+		remove_action( 'deleted_post_meta', array( $validator, 'note_meta_write' ), 20 );
+		remove_action( 'shutdown', array( $validator, 'validate_pending' ), 20 );
+		remove_action( 'save_post_' . Prompt_Post_Type::POST_TYPE, array( $validator, 'validate' ), 20 );
 	}
 }

@@ -10,6 +10,7 @@ namespace AutoScribe\Tests\Pipeline;
 use AutoScribe\Content\Article_Validator;
 use AutoScribe\Content\Taxonomy_Applier;
 use AutoScribe\Pipeline\Close_Result;
+use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Run;
 use AutoScribe\Pipeline\Step_Assemble_Post;
 use AutoScribe\Pipeline\Step_Generate_Image;
@@ -182,6 +183,123 @@ final class Stale_WorkerTest extends WP_UnitTestCase {
 		$this->assertWPError( $result );
 		$this->assertSame( 'autoscribe_claim_lost', $result->get_error_code() );
 		$this->assertSame( 0, get_post_thumbnail_id( $post_id ) );
+	}
+
+	/**
+	 * A worker whose run was closed under it cannot change the closed row.
+	 *
+	 * This is the case the token alone did not cover. A terminal sweep closes a
+	 * run *at* the claim it observed and leaves the marker where it is, so the
+	 * worker it closed found its token unchanged and believed it still owned the
+	 * step. Ownership is the row, the token, and the run still being open.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return void
+	 */
+	public function test_a_worker_whose_run_was_closed_cannot_write_to_it(): void {
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+
+		$run_id = $run->id();
+
+		$this->assertTrue( $run->claim_step( '' ) );
+
+		// A sweep gives up on the run at exactly the position it observed.
+		$observed = Run::load( $run_id )->raw_step();
+
+		$this->assertTrue(
+			Run::load( $run_id )->fail( 'Given up on.', null, 0, $observed )->ended()
+		);
+
+		$this->assertTrue( $run->lost_claim(), 'A closed run is not this worker\'s to continue.' );
+		$this->assertFalse( $run->holds_claim() );
+		$this->assertFalse( $run->record_article( 'Stale title', 'stale-topic' ) );
+		$this->assertFalse( $run->record_post( 999 ) );
+		$this->assertFalse( $run->record_cost( 4242 ) );
+		$this->assertFalse( $run->record_step( 'propose_topic' ) );
+		$this->assertFalse( $run->merge_payload( array( 'topic' => array( 'title' => 'Stale' ) ) ) );
+
+		$row = Run::latest_for_prompt( $run->prompt_id() );
+
+		$this->assertSame( Run::STATUS_FAILED, $row['status'] );
+		$this->assertSame( 'Given up on.', (string) $row['error'] );
+		$this->assertNull( $row['title'] );
+		$this->assertNull( $row['post_id'] );
+		$this->assertSame( 0, (int) $row['cost_cents'] );
+		$this->assertSame( $observed, (string) $row['step'] );
+	}
+
+	/**
+	 * A worker whose run was closed under it does not publish its post.
+	 *
+	 * The worst version of the same defect: finalisation claims the row and then
+	 * changes the post's status, so a run reported as failed could still put an
+	 * article on the site.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return void
+	 */
+	public function test_a_worker_whose_run_was_closed_does_not_publish(): void {
+		$prompt_id = $this->create_prompt( array( 'post_status_mode' => 'auto' ) );
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+
+		$run_id  = $run->id();
+		$post_id = self::factory()->post->create( array( 'post_status' => 'draft' ) );
+
+		$this->assertTrue( $run->record_post( $post_id ) );
+		$this->assertTrue( $run->record_step( 'generate_image' ) );
+
+		$article = ( new Article_Validator() )->from_array( $this->article_payload() );
+
+		$this->assertNotWPError( $article );
+
+		$generator = new Generator( new Provider_Registry() );
+		$finalised = Run::load( $run_id );
+
+		// The worker claims finalisation, and a sweep closes the run underneath it
+		// before it reaches the status transition.
+		$this->assertTrue( $finalised->claim_step( 'generate_image' ) );
+		$this->assertTrue(
+			Run::load( $run_id )->fail( 'Given up on.', null, 0, Run::load( $run_id )->raw_step() )->ended()
+		);
+
+		$result = $generator->finalise( Prompt::load( $prompt_id ), $finalised, $article, null, null, 0 );
+
+		$this->assertWPError( $result );
+		$this->assertSame( Generator::CLOSE_RACE_LOST, $result->get_error_code() );
+		$this->assertSame( 'draft', get_post_status( $post_id ), 'A failed run must not publish afterwards.' );
+		$this->assertSame( Run::STATUS_FAILED, Run::latest_for_prompt( $prompt_id )['status'] );
+	}
+
+	/**
+	 * A worker that closed the run itself is not treated as having lost it.
+	 *
+	 * A budget skip and a duplicate topic are decisions a step makes and then
+	 * reports. Reading a self-close as a lost claim would turn every one of them
+	 * into "somebody else owns this run", and the run's real outcome would never
+	 * be reported.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return void
+	 */
+	public function test_a_worker_that_closed_the_run_itself_still_reports_it(): void {
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+		$this->assertTrue( $run->claim_step( '' ) );
+		$this->assertTrue( $run->skip( Run::STATUS_SKIPPED_BUDGET, 'Over the cap.' )->ended() );
+
+		$this->assertFalse( $run->lost_claim(), 'Ending a run is not losing it.' );
+		$this->assertFalse(
+			$run->record_cost( 99 ),
+			'The row is still finished, so it still refuses the write.'
+		);
 	}
 
 	/**

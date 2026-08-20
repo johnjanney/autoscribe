@@ -154,7 +154,7 @@ final class Preview_RunTest extends WP_UnitTestCase {
 
 		$wpdb->update(
 			Activation::table_name(),
-			array( 'started_at' => gmdate( 'Y-m-d H:i:s', time() - ( Stall_Sweeper::threshold() * 2 ) ) ),
+			array( 'started_at' => gmdate( 'Y-m-d H:i:s', time() - ( Stall_Sweeper::preview_threshold() * 2 ) ) ),
 			array( 'id' => $run_id ),
 			array( '%s' ),
 			array( '%d' )
@@ -191,6 +191,77 @@ final class Preview_RunTest extends WP_UnitTestCase {
 			Prompt::load( $prompt_id )->next_run_ts(),
 			'An abandoned preview must not arm the prompt\'s schedule.'
 		);
+	}
+
+	/**
+	 * A preview still running is not closed underneath the person waiting for it.
+	 *
+	 * A preview has no queued action to look for, because it runs inside the
+	 * request that asked for it, so age is the whole liveness test. The queued-run
+	 * threshold cannot serve: it is filterable down to two minutes, which is
+	 * inside a normal preview — two topic proposals and a body call with its
+	 * repair, each able to use the full 120-second provider timeout.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return void
+	 */
+	public function test_a_live_preview_is_not_closed_by_a_lowered_threshold(): void {
+		global $wpdb;
+
+		$lower = static fn (): int => 2 * MINUTE_IN_SECONDS;
+
+		add_filter( 'autoscribe_stall_threshold', $lower );
+
+		$run = ( new Generator( new Provider_Registry() ) )->open_preview( Prompt::load( $this->create_prompt() ) );
+
+		$this->assertNotWPError( $run );
+
+		$run_id = $run->id();
+
+		// Five minutes in: past the lowered queued threshold, and well inside
+		// what one preview request can legitimately take.
+		$wpdb->update(
+			Activation::table_name(),
+			array( 'started_at' => gmdate( 'Y-m-d H:i:s', time() - ( 5 * MINUTE_IN_SECONDS ) ) ),
+			array( 'id' => $run_id ),
+			array( '%s' ),
+			array( '%d' )
+		);
+
+		$acted = ( new Stall_Sweeper(
+			new Scheduler(),
+			new Queued_Run_Handler( new Generator( new Provider_Registry() ), new Scheduler(), new Retry_Policy() )
+		) )->recover( $run_id, Run::KIND_PREVIEW );
+
+		remove_filter( 'autoscribe_stall_threshold', $lower );
+
+		$this->assertFalse( $acted );
+		$this->assertSame(
+			Run::STATUS_RUNNING,
+			Run::load( $run_id )->status(),
+			'A preview the user is still waiting for must not be reported as failed.'
+		);
+	}
+
+	/**
+	 * Raising the queued threshold raises the preview threshold with it.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return void
+	 */
+	public function test_the_preview_threshold_is_never_below_the_queued_one(): void {
+		$raise = static fn (): int => 2 * HOUR_IN_SECONDS;
+
+		add_filter( 'autoscribe_stall_threshold', $raise );
+
+		$threshold = Stall_Sweeper::preview_threshold();
+
+		remove_filter( 'autoscribe_stall_threshold', $raise );
+
+		$this->assertSame( 2 * HOUR_IN_SECONDS, $threshold );
+		$this->assertGreaterThanOrEqual( Stall_Sweeper::PREVIEW_THRESHOLD, Stall_Sweeper::preview_threshold() );
 	}
 
 	/**

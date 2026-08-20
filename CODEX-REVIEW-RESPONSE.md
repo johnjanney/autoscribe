@@ -1919,3 +1919,136 @@ Scheduler's own dispatch; the concurrency tests run interleavings in one process
 rather than across two connections; CI runs against MySQL only; no test calls a
 live provider. Added to that list this round: the residual window in F120-02,
 which is a real limit rather than a missing test.
+
+---
+---
+
+# Response to the sixth Codex review
+
+**Responding to:** the fresh-verification section of
+[CODEX-REVIEW.md](CODEX-REVIEW.md), dated 19 August 2026 against `01f272a`
+(tag `v1.3.0`)
+**Response date:** 19 August 2026
+**Release under response:** 1.3.0 → 1.4.0
+
+---
+
+## Summary
+
+Four findings. **All four confirmed, all four fixed.**
+
+| Finding | Verdict | Status |
+|---|---|---|
+| F130-01 A terminally closed worker passes the claim fence | Confirmed | Fixed |
+| F130-02 Preview recovery cannot tell a live preview from an abandoned one | Confirmed | Fixed |
+| F130-03 Deleted prompt metadata bypasses the validator | Confirmed | Fixed |
+| F130-04 Bulk queue detection can query a table the active store does not use | Confirmed | Fixed, with one correction to the fix as specified |
+
+**Verification:** PHPCS passes with zero errors and zero warnings across 125
+files. PHPUnit passes 358 tests and 1,483 assertions, up from 350 and 1,441. No
+test contacts a live provider.
+
+---
+
+## F130-01 — Confirmed. Fixed.
+
+The reproduction is exactly right, and the defect is the third instance of one
+mistake: a guard taken as far as the example that prompted it and no further.
+Round four fenced two writes. Round five fenced the rest of the writes. Neither
+round asked what *ownership* means, and the answer had a third part nobody had
+written down — the run still being open.
+
+A terminal sweep closes a run at the claim it observed and leaves the marker
+alone, so the token stays equal to `runs.step` for ever. The worker it closed
+therefore read `lost_claim() === false`, and every claimed write matched.
+Finalisation was the worst of it: claim, then `wp_update_post()`, so a run the
+log reported as failed could still publish.
+
+**The fix.** Ownership is one predicate — `id`, `status = running`,
+`step = claim` — and it is now carried by `record_step()`, the payload write, the
+generic claimed update, and both claim questions. The questions ask it in a
+single query, per the required fix, so the position and the status cannot be read
+from two different moments. Finalisation re-asks it immediately before the post's
+status transition.
+
+**One thing the required fix did not mention, and the tests caught.** A step that
+ends the run itself — a budget skip, a duplicate topic — closes the row and then
+returns its error, and with status in the predicate that worker suddenly looked
+like it had lost the claim. Reading a self-close as a lost race would have turned
+every skip into "somebody else owns this run" and the real outcome would never
+have been reported. So `lost_claim()` is false for the object that performed the
+transition, while its *writes* are refused exactly as anyone else's are: ending a
+run is not losing it, and a closed row is finished either way.
+
+**Tests.** `Stale_WorkerTest` now closes a run at the worker's own live claim and
+asserts that the worker cannot write the row, the payload, or the position; that
+finalisation refuses to publish and the post stays a draft; and that a worker
+which closed the run itself still reports its outcome.
+
+## F130-02 — Confirmed. Fixed.
+
+Previews have no queued action to look for, so age is the whole liveness test,
+and the threshold it was borrowing is filterable down to two minutes — inside a
+normal preview, which can make two topic calls and a body call with its repair at
+up to 120 seconds each.
+
+Previews now recover on `PREVIEW_THRESHOLD`, thirty minutes, filterable through
+`autoscribe_preview_stall_threshold` and floored at the queued-run threshold so a
+site that raises one raises both and a site that lowers the queued threshold does
+not drag this down with it.
+
+I took the smaller of the two fixes offered. A lease the request clears in a
+`finally` block is the better mechanism, and it is better because it survives a
+preview that legitimately takes longer than any threshold — but it only helps if
+the request reaches its `finally`, and the case being recovered from is the
+request that did not. The gap between the two designs is a preview that runs for
+more than half an hour, which is longer than four provider timeouts.
+
+## F130-03 — Confirmed. Fixed.
+
+`deleted_post_meta` is registered alongside the added and updated hooks, with the
+first argument documented as an array of meta IDs there rather than one ID.
+Deleting the fallback image now corrects the mode at the end of the request, and
+there are tests for the deletion of a fallback ID and of a watched provider key.
+
+## F130-04 — Confirmed. Fixed, with one correction to the fix as specified.
+
+The finding is right: table existence is not store identity, and the contract in
+the method's own docblock promised the check it was not making.
+
+The required fix said to treat the hybrid store as a fallback case. I have not
+done that, and the reason is worth stating rather than quietly departing from:
+the hybrid store is what a stock Action Scheduler install runs *while it
+migrates*, and it is the store this project's own test environment runs. It is
+not another place to keep actions — it is a wrapper whose destination is the
+database store, so every action created while it is in place, which is every
+action this plugin schedules, is in the table the bulk query reads. Excluding it
+would turn the ordinary case into the fallback and reintroduce the per-run reads
+on a site that is merely mid-migration.
+
+So the check accepts the database store and the hybrid store, and rejects
+everything else. What that costs in the hybrid case is an action left unmigrated
+in the post store — necessarily an old one — being missed by the bulk read; the
+per-run re-check before recovery is what makes that safe, which is the same
+argument the finding makes for the ordinary case.
+
+I found this because the strict version of the check failed the suite: it
+disabled the bulk read in the test environment, which is running
+`ActionScheduler_HybridStore`. That is a better answer than the one I would have
+written from the specification alone.
+
+**Test.** The store singleton has no public setter, so the test swaps it through
+reflection, asserts the post store falls back to the public API, and puts the
+original back.
+
+---
+
+## What is still not covered
+
+Unchanged: no test drives Action Scheduler's own dispatch; the concurrency tests
+run interleavings in one process rather than across two connections; CI runs
+against MySQL only; no test calls a live provider. The residual window from
+F120-02 — a claim lost between the re-check and a WordPress write — is unchanged
+as well, and is narrower than it was: a run that has been *closed* can no longer
+be written to at all, so what remains is two live workers rather than one live
+worker and a finished run.

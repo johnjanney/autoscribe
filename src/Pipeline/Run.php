@@ -175,10 +175,34 @@ final class Run {
 	 * still return from its provider call afterwards and write its output over
 	 * whatever the replacement worker has since produced.
 	 *
+	 * Ownership is three things and not two: the row, the claim token, and the
+	 * run still being open. Requiring only the token was a real hole rather than
+	 * a tidiness point, because a terminal sweep closes a run *at* the claim it
+	 * observed and leaves the marker where it is. The worker it closed then found
+	 * the token unchanged, believed it still owned the step, and could go on
+	 * writing to a row the run log had already reported as finished — including,
+	 * from finalisation, publishing the post. Every claimed write and both claim
+	 * questions therefore carry the whole predicate.
+	 *
 	 * @since 1.2.0
 	 * @var string|null
 	 */
 	private ?string $claim = null;
+
+	/**
+	 * Whether this object is the one that closed the run.
+	 *
+	 * Ownership questions and write conditions want different answers once a run
+	 * has ended. A write must still be refused — a closed row is finished, and
+	 * that is the whole of F130-01 — but the worker that closed it has not "lost
+	 * its claim" in the sense the pipeline means: nobody took the step away from
+	 * it, it ended the run itself, and the error it is about to return is the
+	 * run's real outcome rather than a race it lost.
+	 *
+	 * @since 1.4.0
+	 * @var bool
+	 */
+	private bool $closed_here = false;
 
 	/**
 	 * Wraps an existing row ID.
@@ -347,11 +371,12 @@ final class Run {
 			Activation::table_name(),
 			array( 'step' => $step ),
 			array(
-				'id'   => $this->id,
-				'step' => $this->claim,
+				'id'     => $this->id,
+				'status' => self::STATUS_RUNNING,
+				'step'   => $this->claim,
 			),
 			array( '%s' ),
-			array( '%d', '%s' )
+			array( '%d', '%s', '%s' )
 		);
 
 		if ( ! is_numeric( $updated ) || (int) $updated < 1 ) {
@@ -376,7 +401,35 @@ final class Run {
 	 * @return bool
 	 */
 	public function holds_claim(): bool {
-		return null !== $this->claim && $this->raw_step() === $this->claim;
+		return null !== $this->claim && $this->owns_row();
+	}
+
+	/**
+	 * Whether the row still matches this object's complete ownership predicate.
+	 *
+	 * One query for the whole condition, because two reads can disagree: asking
+	 * for the position and the status separately leaves a window in which the
+	 * answer is assembled from two different moments, and the thing being guarded
+	 * against is precisely something changing in between.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return bool
+	 */
+	private function owns_row(): bool {
+		global $wpdb;
+
+		$found = $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT id FROM %i WHERE id = %d AND status = %s AND step = %s',
+				Activation::table_name(),
+				$this->id,
+				self::STATUS_RUNNING,
+				(string) $this->claim
+			)
+		);
+
+		return null !== $found;
 	}
 
 	/**
@@ -393,7 +446,7 @@ final class Run {
 	 * @return bool
 	 */
 	public function lost_claim(): bool {
-		return null !== $this->claim && $this->raw_step() !== $this->claim;
+		return null !== $this->claim && ! $this->closed_here && ! $this->owns_row();
 	}
 
 	/**
@@ -648,11 +701,12 @@ final class Run {
 			Activation::table_name(),
 			array( 'payload' => $document ),
 			array(
-				'id'   => $this->id,
-				'step' => $this->claim,
+				'id'     => $this->id,
+				'status' => self::STATUS_RUNNING,
+				'step'   => $this->claim,
 			),
 			array( '%s' ),
-			array( '%d', '%s' )
+			array( '%d', '%s', '%s' )
 		);
 
 		if ( false === $updated ) {
@@ -1499,6 +1553,23 @@ final class Run {
 	}
 
 	/**
+	 * Returns how long ago this run opened, in seconds.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return int Zero when the row has no usable start time.
+	 */
+	public function age_seconds(): int {
+		$started = (string) $this->column( 'started_at' );
+
+		if ( '' === $started || '0000-00-00 00:00:00' === $started ) {
+			return 0;
+		}
+
+		return max( 0, time() - (int) strtotime( $started . ' UTC' ) );
+	}
+
+	/**
 	 * Returns what kind of run this row records.
 	 *
 	 * Falls back to the step column for a row opened before 1.3.0 recorded a
@@ -1946,7 +2017,7 @@ final class Run {
 		}
 
 		if ( null !== $expected_step ) {
-			return $this->close_at( $data, $expected_step );
+			return $this->closed_by_me( $this->close_at( $data, $expected_step ) );
 		}
 
 		/*
@@ -1974,7 +2045,23 @@ final class Run {
 			return Close_Result::Write_Failed;
 		}
 
-		return (int) $updated > 0 ? Close_Result::Closed : Close_Result::Already_Closed;
+		return $this->closed_by_me( (int) $updated > 0 ? Close_Result::Closed : Close_Result::Already_Closed );
+	}
+
+	/**
+	 * Remembers a terminal transition this object performed.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @param Close_Result $result What the close attempt did.
+	 * @return Close_Result The same result.
+	 */
+	private function closed_by_me( Close_Result $result ): Close_Result {
+		if ( $result->ended() ) {
+			$this->closed_here = true;
+		}
+
+		return $result;
 	}
 
 	/**
@@ -2023,25 +2110,27 @@ final class Run {
 		global $wpdb;
 
 		/*
-		 * Under the claim, when this object holds one. Every write a claimed step
-		 * makes is a statement about work that step performed, so a worker whose
-		 * claim has been taken away has no business making any of them: its
-		 * replacement is doing the same step, and the loser's row ID is the same
-		 * row ID. Only the usage counters are exempt, and they do not come through
-		 * here — see record_text_usage() for why money is recorded whoever spent it.
+		 * Under the claim, when this object holds one, and only while the run is
+		 * still open. Every write a claimed step makes is a statement about work
+		 * that step performed, so a worker whose claim has been taken away — or
+		 * whose run has been closed under it — has no business making any of them.
+		 * Only the usage counters are exempt, and they do not come through here:
+		 * see record_text_usage() for why money is recorded whoever spent it and
+		 * whatever has happened to the row since.
 		 */
 		$where   = null === $this->claim
 			? array( 'id' => $this->id )
 			: array(
-				'id'   => $this->id,
-				'step' => $this->claim,
+				'id'     => $this->id,
+				'status' => self::STATUS_RUNNING,
+				'step'   => $this->claim,
 			);
 		$updated = $wpdb->update(
 			Activation::table_name(),
 			$data,
 			$where,
 			$formats,
-			null === $this->claim ? array( '%d' ) : array( '%d', '%s' )
+			null === $this->claim ? array( '%d' ) : array( '%d', '%s', '%s' )
 		);
 
 		/*

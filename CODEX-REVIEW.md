@@ -1,5 +1,273 @@
 # AutoScribe code quality and security audit
 
+## Fresh verification review — version 1.3.0
+
+**Review date:** 19 August 2026 (America/Chicago)
+
+**Reviewed revision:** `01f272a34a4232e52f90b45135f160d88d103580` on
+`main`, tag `v1.3.0`
+
+**Change range:** `cedb422..01f272a`
+
+**Response reviewed:** “Response to the fifth Codex review” in
+[`CODEX-REVIEW-RESPONSE.md`](CODEX-REVIEW-RESPONSE.md#L1715)
+
+**Release reviewed:** [AutoScribe 1.3.0 on GitHub](https://github.com/johnjanney/autoscribe/releases/tag/v1.3.0)
+
+**Current result:** **Conditional fail. Keep human review and a provider-side
+spending limit enabled. Do not rely on the plugin alone for unattended automatic
+publication until F130-01 is fixed.**
+
+**Current quality score:** **8.3/10**
+
+### Executive result
+
+Version 1.3.0 correctly fixes the cost floor across a successful restart, adds
+atomic usage counters, verifies taxonomy by reading it back, separates preview
+recovery from scheduled-run recovery, and removes the repeated queue read from
+the normal database-store sweep. The new tests cover the examples from the fifth
+review, and all 350 tests pass.
+
+The response is not fully correct when it says that all six findings are fixed.
+Two prior findings are only partly fixed:
+
+- F120-02 asked for every claimed write to require the current **status and
+  claim**. Version 1.3.0 requires only the claim marker. A terminal sweep leaves
+  that marker unchanged. The worker that the sweep closed can therefore still
+  write the payload, article, post link, cost, and completed step. It can also
+  pass the WordPress side-effect checks. See F130-01.
+- F120-06 asked for every prompt persistence path to enforce the cross-field
+  rules. The new validator observes added and updated metadata, but it does not
+  observe deleted metadata. A programmatic deletion can therefore leave
+  `fallback` mode with no fallback image. See F130-03.
+
+I also found two lower-risk boundary defects. Preview recovery has no liveness
+signal for the synchronous preview request, and the bulk queue query does not
+verify that the database table belongs to the active Action Scheduler store. See
+F130-02 and F130-04.
+
+The response is correct about F120-01, F120-03, and the normal database-store
+case of F120-05. The Action Scheduler 3.9.3 to 4.1.0 deferral is also reasonable:
+there is no known advisory for 3.9.3, and a queue major-version change needs its
+own dispatch and recovery tests.
+
+I found no verified unauthenticated code execution, SQL injection, stored XSS,
+capability bypass, CSRF defect, secret disclosure, or provider-URL SSRF in this
+revision. The main remaining risk is recovery integrity: a terminally closed
+worker is not fully fenced from later state changes or WordPress side effects.
+
+### Verification results
+
+| Check | Result | Evidence |
+|---|---:|---|
+| Revision and worktree | Pass | `HEAD`, `main`, `origin/main`, and `v1.3.0` resolve to `01f272a`. The worktree was clean before this review file changed. |
+| Fifth response and changelog | Pass | The stated files contain the fifth response and the 1.3.0 change record ([response](CODEX-REVIEW-RESPONSE.md#L1715), [changelog](CHANGELOG.md#L90)). |
+| Composer manifest | Pass | `composer validate --no-check-publish` reports a valid manifest ([manifest](composer.json)). |
+| Dependency advisories | Pass | `composer audit --locked` reports no known advisory ([lock file](composer.lock)). GitHub reports no [open Dependabot alert](https://github.com/johnjanney/autoscribe/security/dependabot?query=is%3Aopen). |
+| WordPress coding standards | Pass | PHPCS checked 125 PHP files with no error or warning ([rules](phpcs.xml.dist)). |
+| Local PHPUnit | Pass | 350 tests and 1,441 assertions passed in the WordPress test container ([configuration](phpunit.xml.dist), [bootstrap](tests/bootstrap.php)). |
+| Release CI | Pass | PHP 8.1, 8.2, and 8.3 passed in [CI run 32318769879](https://github.com/johnjanney/autoscribe/actions/runs/32318769879). |
+| Code scanning | Pass | [CodeQL run 32318770378](https://github.com/johnjanney/autoscribe/actions/runs/32318770378) passed, and GitHub reports no [open code-scanning alert](https://github.com/johnjanney/autoscribe/security/code-scanning?query=is%3Aopen). |
+| Release state | Pass | GitHub reports a published release that is not a draft or prerelease. Tag `v1.3.0` resolves to `01f272a` ([release](https://github.com/johnjanney/autoscribe/releases/tag/v1.3.0)). |
+| Release asset | Pass | The uploaded and local archives are both 490,115 bytes and are byte-identical. Both have SHA-256 `2643445d2e8098d5630b89bf4ddbc7786ce6f868fd09d5a164c9254a0ad31b2d`. `unzip -t` passed, and the packaged production code and documentation match the reviewed tree ([asset](https://github.com/johnjanney/autoscribe/releases/download/v1.3.0/autoscribe-1.3.0.zip), [build script](bin/build.sh)). |
+| Terminal-close fencing probe | Fail | A focused diagnostic closed a claimed run through `Run::fail(..., $expected_step)`. The original worker still reported `lost_claim() === false`, accepted `record_article()`, and changed the closed row. The temporary probe was removed after verification. See F130-01. |
+| Deleted-meta validation probe | Fail | A focused WP-CLI diagnostic deleted `_autoscribe_fallback_image_id`, ran pending validation, and read back `image_mode = fallback` with an empty fallback ID. The temporary probe and its test data were removed. See F130-03. |
+| Live provider call | Not run | No funded key was supplied. No prompt, site content, or secret was sent to a provider. |
+| Real Action Scheduler dispatch | Not covered | **Not found in documents:** an automated test that lets Action Scheduler dispatch a complete chain ([documented limit](README.md#L252)). |
+| Two-connection concurrency | Not covered | The concurrency tests simulate interleavings in one process. **Not found in documents:** a test that uses two independent database connections ([stale-worker test](tests/Pipeline/Stale_WorkerTest.php#L21)). |
+
+### Fifth-response verdict by prior finding
+
+| Prior finding | Verification verdict | Version 1.3.0 status |
+|---|---|---|
+| F120-01 — recovered paid step can settle below cost | **Fixed** | `release_claim()` raises `cost_floor` in the same conditional write, and all settlements apply it ([release](src/Pipeline/Run.php#L1046), [measurement](src/Pipeline/Run.php#L1824), [restart test](tests/Pipeline/Interrupted_ChargeTest.php#L105)). |
+| F120-02 — claim does not fence all state changes | **Partly fixed** | Atomic usage increments and the replacement-worker tests are correct. Claimed writes do not require the row to remain running, so a terminally closed worker still passes the fence. See F130-01. |
+| F120-03 — taxonomy success is not read back | **Fixed** | Categories are compared by ID and tags by slug after the write. Both refused relationships and deleted categories are covered ([implementation](src/Content/Taxonomy_Applier.php#L139), [tests](tests/Pipeline/Recorded_WritesTest.php#L152)). |
+| F120-04 — preview is outside snapshot and recovery contracts | **Fixed for the reported malfunction** | Preview uses the model/rate snapshot, records its kind, does not enter normal finalisation, and does not re-arm the prompt. The new liveness boundary is F130-02 ([open](src/Pipeline/Generator.php#L421), [recovery](src/Pipeline/Stall_Sweeper.php#L338)). |
+| F120-05 — every sweep page reads every active action | **Fixed for the active database store** | The normal path reads the active set once. Store detection is incomplete for a custom or hybrid store when the standard table still exists. See F130-04. |
+| F120-06 — programmatic prompt writes bypass validation | **Partly fixed** | Added and updated meta are corrected outside the editor. Deleted meta is not observed. See F130-03. |
+
+## Version 1.3.0 findings
+
+### F130-01 — High — A terminally closed worker still passes the claim fence
+
+**Category:** Concurrency, recovery, publication safety, accounting integrity
+
+**Verified facts**
+
+- A terminal sweep closes a run with `status = failed` and the position it
+  observed, but it does not replace the claim marker
+  ([terminal close](src/Pipeline/Stall_Sweeper.php#L514),
+  [conditional close](src/Pipeline/Run.php#L892)).
+- `holds_claim()` and `lost_claim()` compare only `runs.step` with the in-memory
+  claim. They do not inspect `runs.status`
+  ([claim state](src/Pipeline/Run.php#L378)).
+- `record_step()`, payload writes, and generic claimed updates require `id` and
+  `step`. They do not require `status = running`
+  ([position](src/Pipeline/Run.php#L339),
+  [payload](src/Pipeline/Run.php#L640),
+  [generic updates](src/Pipeline/Run.php#L2022)).
+- Finalisation claims the row and then changes the WordPress post status before
+  the terminal close is known
+  ([finalisation](src/Pipeline/Generator.php#L219)).
+- The 1.3.0 stale-worker tests release the old claim and let a replacement take a
+  new token. They do not close the run while the old token remains in `step`
+  ([fixture](tests/Pipeline/Stale_WorkerTest.php#L220)).
+- A focused database diagnostic reproduced the missing condition. After another
+  `Run` object closed the row at the observed claim, the original object reported
+  that it had not lost the claim, accepted `record_article()`, and changed the
+  failed row.
+
+**Confirmed failure sequence**
+
+1. A worker claims a step.
+2. Action Scheduler no longer reports its action as pending or running, but the
+   PHP worker continues. This is the stale-worker condition that the fencing
+   design already accepts as possible.
+3. The run reaches its recovery limit, or its prompt is removed or disabled.
+   The sweeper closes the run at the claim marker and concludes the failure.
+4. The worker returns. Its claim token still equals `runs.step`, so
+   `lost_claim()` returns false.
+5. Its claimed writes still match the row. If it is in assembly, image handling,
+   or finalisation, its WordPress side effects can also continue. In automatic
+   mode, the final status write can publish a post after the run was reported as
+   failed.
+
+**Impact**
+
+A run that recovery marked terminal can change afterwards. The run log can no
+longer be treated as an immutable outcome, and a post can be created, changed,
+or published after the failure path concluded. This breaks the purpose of the
+claim fence and the human-review safety boundary.
+
+**Required fix**
+
+- Define ownership as one atomic predicate: `id = run`, `status = running`, and
+  `step = claim`.
+- Add `status = running` to every claimed `UPDATE`, including `record_step()`,
+  payload writes, and the generic update path.
+- Make `holds_claim()` and `lost_claim()` test both status and token. Prefer one
+  query for the complete predicate so separate reads cannot disagree.
+- Re-check the complete predicate immediately before each WordPress side effect,
+  including the final post-status transition. Keep the documented compare-and-
+  swap or generation-token design as the complete fix for the remaining
+  check-to-write window.
+- Add regression tests for terminal close followed by each stale action: run-row
+  write, payload write, completed-step write, assembly, image attachment, cost
+  settlement, and final publication.
+
+### F130-02 — Low — Preview recovery cannot distinguish an abandoned preview from a live one
+
+**Category:** Recovery, observability, configuration boundary
+
+**Verified facts**
+
+- Preview runs execute synchronously and never have a step action in Action
+  Scheduler ([preview driver](src/Admin/Actions.php#L282)).
+- The sweeper uses the absence of a pending or running step action as its liveness
+  test for ordinary runs ([sweep](src/Pipeline/Stall_Sweeper.php#L227)).
+- Preview recovery bypasses that per-run action check and closes the preview when
+  its row is old enough ([preview branch](src/Pipeline/Stall_Sweeper.php#L330)).
+- The default threshold is 15 minutes, but the public filter can reduce it to two
+  minutes ([threshold](src/Pipeline/Stall_Sweeper.php#L205)).
+- One preview can make two topic calls and two body calls. Each generation call
+  can use the 120-second timeout ([topic loop](src/Pipeline/Step_Propose_Topic.php#L137),
+  [body repair](src/Pipeline/Step_Generate_Body.php#L217),
+  [timeout](src/Providers/Http.php#L34)).
+
+**Inference**
+
+With the threshold filter below the possible preview duration, a sweep cannot
+tell a live preview from an abandoned one. It can mark the live row failed while
+the request continues. The user can still receive the article, but the run log
+reports a failure and later unfenced preview writes can change its cost.
+
+**Recommended fix**
+
+- Give previews a durable lease or request marker that the synchronous request
+  clears in a `finally` block, and recover only an expired lease.
+- As a smaller fix, use a separate preview threshold that is higher than the
+  maximum complete preview duration. Do not apply the two-minute queued-step
+  minimum to previews.
+- Add a test for a live preview older than the configured queued-run threshold.
+
+### F130-03 — Low — Deleted prompt metadata bypasses the new validator
+
+**Category:** Configuration integrity, programmatic persistence paths
+
+**Verified facts**
+
+- `Prompt_Validator::register()` observes `added_post_meta` and
+  `updated_post_meta`, but it does not observe `deleted_post_meta`
+  ([registration](src/Prompts/Prompt_Validator.php#L104)).
+- WordPress fires `deleted_post_meta` after a successful post-meta deletion
+  ([WordPress `delete_metadata()` reference](https://developer.wordpress.org/reference/functions/delete_metadata/)).
+- A focused WP-CLI diagnostic set `image_mode = fallback`, deleted the fallback
+  ID, invoked pending validation, and read back `fallback` with an empty ID.
+- Runtime image handling still fails safely and leaves the post as a draft. This
+  is not an automatic-publication bypass
+  ([fallback runtime](src/Pipeline/Step_Generate_Image.php#L250)).
+
+**Impact**
+
+WP-CLI, an importer, or another plugin can delete a watched key and leave a
+stored prompt that the new save-time invariant says must not exist. Runtime
+safety prevents publication without the required image, but the prompt fails
+later instead of being corrected at persistence time.
+
+**Recommended fix**
+
+- Register `deleted_post_meta` with four accepted arguments and route its object
+  ID and meta key through `note_meta_write()`.
+- Add deletion tests for `fallback_image_id`, `image_mode`, `text_provider`, and
+  `grounding_enabled`. The fallback-ID case must prove the correction.
+
+### F130-04 — Low — Bulk queue detection can query a table that is not the active store
+
+**Category:** Performance, Action Scheduler compatibility
+
+**Verified facts**
+
+- `active_step_runs()` decides that it can use direct SQL only from the existence
+  of `actionscheduler_actions`. It does not inspect the active Action Scheduler
+  store ([store decision](src/Scheduling/Scheduler.php#L298)).
+- Its own documentation says that a replaced or legacy store must return `null`
+  and use the public API fallback ([contract](src/Scheduling/Scheduler.php#L280)).
+- Action Scheduler selects its store through `action_scheduler_store_class`, so
+  the standard table can exist while another store is active
+  ([locked 3.9.3 store factory](https://github.com/woocommerce/action-scheduler/blob/3.9.3/classes/abstracts/ActionScheduler_Store.php#L494-L507)).
+- An ordinary enabled-run candidate omitted from the direct result is re-checked
+  through the public API before recovery, so that path does not create a verified
+  false recovery
+  ([per-run check](src/Pipeline/Stall_Sweeper.php#L387),
+  [public API](https://actionscheduler.org/api/#as_get_scheduled_actions)).
+
+**Impact**
+
+With a custom or hybrid store and a leftover standard table, the bulk result can
+be incomplete. Correctness for an ordinary enabled run survives because
+`recover()` re-checks it, but a healthy backlog can cause up to the 2,000 per-run
+API reads that the bulk optimization was designed to remove. Preview and removed
+or disabled-prompt branches occur before that re-check; F130-01 is the control
+needed to stop their closed workers from continuing.
+
+**Recommended fix**
+
+- Use direct SQL only when `ActionScheduler::store()` is the compatible database
+  store class. Treat hybrid, legacy, and custom stores as fallback cases.
+- Add a test in which the standard table exists but the active store is not the
+  database store.
+
+### Version 1.3.0 conclusion
+
+The 1.3.0 changes improve accounting, taxonomy integrity, preview isolation, and
+normal sweep performance. The release artifact and release claims are verified,
+and the standard quality and security checks pass. The remaining high finding is
+not a theoretical extension of the stated residual: the database accepted a
+stale write after terminal close in a focused reproduction. Fix F130-01 before
+unattended automatic publication. F130-02 through F130-04 are smaller hardening
+and compatibility tasks.
+
 ## Fresh verification review — version 1.2.0
 
 **Review date:** 19 August 2026 (America/Chicago)
@@ -793,7 +1061,7 @@ as the automatic fallback.
   ([estimate](src/Cost/Budget_Guard.php#L312),
   [finalization](src/Pipeline/Queued_Run_Handler.php#L258)).
 - The original required fix asked for resolved models and relevant pricing
-  rates in the run snapshot ([original CR-03](CODEX-REVIEW.md#L1181)). The response
+  rates in the run snapshot ([original CR-03](CODEX-REVIEW.md#L1446)). The response
   discusses only site defaults and force review
   ([response](CODEX-REVIEW-RESPONSE.md#L1202)).
 
