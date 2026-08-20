@@ -13,7 +13,7 @@ everything, and inserts the post as a draft or publishes it.
 
 | | |
 |---|---|
-| **Version** | 1.11.0 |
+| **Version** | 1.12.0 |
 | **Requires WordPress** | 6.4 |
 | **Requires PHP** | 8.1 |
 | **License** | GPL-2.0-or-later |
@@ -194,7 +194,7 @@ way to tell it apart from the rest of the site.
 
 Version 1.11.0. Twelve external audits have been run against this plugin, and all
 twelve found real defects; the findings, the fixes, and the findings rejected
-with evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 403 tests
+with evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 411 tests
 run against PHP 8.1, 8.2, and 8.3 on every push.
 
 Six things this plugin does not do the way the brief describes, all of them
@@ -258,6 +258,12 @@ The first item is the one that matters most:
   or still placeholders, and refuses to *read* records stored that way by version
   1.0.0. That path has no automated coverage, because the salts are PHP constants
   and a test cannot un-define them.
+- Concurrency is tested on two real database connections
+  (`tests/Support/Two_Connection_Test_Case.php`), which is what makes the locks
+  and compare-and-swap guards testable at all. Those tests interleave two
+  sessions deterministically rather than running them in parallel: one PHP
+  process still executes one statement at a time, so a true wall-clock race is
+  still not exercised.
 - No test drives Action Scheduler itself. The queued handler is tested by
   advancing a run one action at a time with a fresh handler each pass, which is
   what the queue does, but the queue's own scheduling is not exercised.

@@ -87,6 +87,46 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-08-20
+
+A test harness rather than a fix: two database connections, so the guards this
+plugin depends on can be tested where they mean something.
+
+Every concurrency test until now interleaved two objects on one connection. That
+proves the ordering of statements and nothing about exclusion — a compare-and-swap
+only excludes a second session, and `GET_LOCK` is held by the connection, so
+taking the same lock twice on one connection succeeds twice. Three of the four
+findings in the twelfth review were concurrency defects a harness like this would
+have caught first.
+
+### Added
+
+- **A two-connection test harness.** `Two_Connection_Test_Case` leaves the
+  per-test transaction behind and cleans up by watermark instead, because an
+  uncommitted row is invisible to the other worker and a locked one blocks it.
+  `Worker` runs plugin code against a connection of its own by swapping the
+  `$wpdb` global, so the code under test behaves as it would in another request.
+  Eight tests cover lock exclusivity and scoping, one run per occurrence across
+  two workers, step claims, payload fencing after a claim is taken, and the
+  spend lock a late charge takes.
+
+  Two of them are verified by removal — take out the guard and they fail — and
+  the harness itself is verified by collapsing the two workers onto one
+  connection and watching the lock test fail, which is the shape of the mistake
+  it exists to prevent.
+
+- **`autoscribe_lock_wait_seconds`**, filtering how long a worker waits for a
+  lock another worker holds. A busy database may want longer; a test proving two
+  workers exclude each other wants far less than ten seconds to find out.
+
+### Fixed
+
+- **A second connection now inherits the table properties other code registers
+  on the global one.** Action Scheduler reads its table names off `$wpdb` rather
+  than building them, so without this a worker's queue call failed from inside
+  somebody else's store — which is exactly what the first run of the new tests
+  found.
+
 ## [1.11.0] - 2026-08-20
 
 A twelfth external review, against 1.10.0. Four findings and two smaller

@@ -165,6 +165,13 @@
 		execution", which is the whole of what the test does.
 		-->
 		<exclude-pattern>*/tests/Pipeline/Stale_WorkerTest.php</exclude-pattern>
+		<!--
+		The two-connection harness manages its own committed data rather than
+		relying on the per-test transaction, which means taking a watermark before
+		and deleting above it afterwards. Both are direct statements about the
+		plugin's own table and about posts, and neither has a wrapper.
+		-->
+		<exclude-pattern>*/tests/Support/Two_Connection_Test_Case.php</exclude-pattern>
 	</rule>
 
 	<!--

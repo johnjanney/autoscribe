@@ -88,7 +88,7 @@ class Named_Lock {
 		// A NULL result means the server refused or failed the request rather
 		// than that the lock is busy, so it is treated the same as a timeout.
 		$result = $wpdb->get_var(
-			$wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $this->name(), self::WAIT_SECONDS )
+			$wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $this->name(), self::wait_seconds() )
 		);
 
 		$this->held = '1' === (string) $result;
@@ -124,6 +124,32 @@ class Named_Lock {
 	 */
 	public function held(): bool {
 		return $this->held;
+	}
+
+	/**
+	 * Returns how long a caller waits for a lock somebody else holds.
+	 *
+	 * Filterable because the right answer depends on the database rather than on
+	 * this plugin: a busy shared host may want longer, and a test that wants to
+	 * prove two workers are really excluding each other wants a great deal less
+	 * than ten seconds of waiting to find out.
+	 *
+	 * Never negative, which in MySQL means "wait for ever" and would turn a
+	 * contended lock into a hung request.
+	 *
+	 * @since 1.12.0
+	 *
+	 * @return int Seconds.
+	 */
+	public static function wait_seconds(): int {
+		/**
+		 * Filters how long a worker waits for a lock another worker is holding.
+		 *
+		 * @since 1.12.0
+		 *
+		 * @param int $seconds Seconds to wait.
+		 */
+		return max( 0, (int) apply_filters( 'autoscribe_lock_wait_seconds', self::WAIT_SECONDS ) );
 	}
 
 	/**

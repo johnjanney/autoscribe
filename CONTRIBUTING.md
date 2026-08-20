@@ -62,6 +62,57 @@ Tests must not depend on constants the development environment happens to
 define. `.wp-env.json` supplies mock API keys, but CI has no `wp-config.php` — a
 test needing a key should set one through `Key_Store::set()`.
 
+## Concurrency tests
+
+Most of this plugin's hard defects have been concurrency defects, and most of
+them were found by a reviewer rather than by the suite. The reason is worth
+understanding before writing another one.
+
+A test that interleaves two objects on one connection proves the *ordering* of
+statements and nothing about exclusion. A compare-and-swap only excludes a second
+session, and on one connection there is no second session — the statement matches
+and the test passes whether or not the condition is doing any work. `GET_LOCK` is
+worse: it is held by the connection, so taking the same lock twice on one
+connection succeeds twice, and a test written that way proves the opposite of
+what it claims.
+
+`tests/Support/Two_Connection_Test_Case.php` is for the cases where that matters.
+Extend it and call `$this->worker()` for each session:
+
+```php
+$first  = $this->worker();
+$second = $this->worker();
+
+$this->assertTrue( $first->run( fn() => $lock->acquire() ) );
+$this->assertFalse( $second->run( fn() => $other->acquire() ) );
+```
+
+`Worker::run()` swaps the `$wpdb` global for that worker's own connection and
+flushes the object cache, so plugin code inside the callable behaves exactly as
+it would in another request.
+
+Three things to know:
+
+- **These tests commit.** The base class leaves the per-test transaction behind,
+  because an uncommitted row is invisible to the other worker and a locked one
+  blocks it for as long as the lock waits. It takes a watermark before the test
+  and deletes everything above it afterwards. Anything a test creates outside
+  runs and posts — an option, a transient — it must clean up itself.
+- **They interleave; they do not run in parallel.** One PHP process still runs
+  one statement at a time. What two connections buy is real session semantics —
+  locks, visibility, compare-and-swap — not wall-clock simultaneity. A test that
+  needs a specific order can use the `query` filter as a rendezvous, as
+  `Stale_WorkerTest` does.
+- **Prove the test can fail.** Every one of these should be checked by removal:
+  take out the guard and confirm the test fails, and fail for the right reason.
+  Two of the existing ones are documented that way, and the collapsing check —
+  point both workers at one connection and watch the lock test fail — is how to
+  confirm a new test is really using two sessions.
+
+Keep them here rather than spreading them through the suite. They are an order of
+magnitude slower than a rolled-back test, and the ordinary tests still describe
+intent better than these do.
+
 ## Adding a dependency
 
 Ask first. Every production dependency ships to every install; every dev
