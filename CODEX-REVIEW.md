@@ -1,5 +1,239 @@
 # AutoScribe code quality and security audit
 
+## Fresh verification review — version 1.5.0
+
+**Review date:** 19 August 2026 (America/Chicago)
+
+**Reviewed revision:** `2e542f7e302e61ef9453e951c7e391d681cbb73a` on
+`main`, tag `v1.5.0`
+
+**Change range:** `26bb7ee..2e542f7`
+
+**Response reviewed:** “Response to the seventh Codex review” in
+[`CODEX-REVIEW-RESPONSE.md`](CODEX-REVIEW-RESPONSE.md#L2059)
+
+**Release reviewed:** [AutoScribe 1.5.0 on GitHub](https://github.com/johnjanney/autoscribe/releases/tag/v1.5.0)
+
+**Current result:** **Conditional pass. The normal late-usage path now raises
+terminal cost. Keep a provider-side spending limit enabled because the
+reconciliation is not durable across a database error or an interruption between
+its two writes.**
+
+**Current quality score:** **8.7/10**
+
+### Executive result
+
+Version 1.5.0 fixes the normal F140-01 path. Late token, image, and grounded-call
+counters are accepted after a run closes. A successful reconciliation reads the
+latest counters and raises `cost_cents` with `GREATEST`. The new publication
+interleaving test reaches the pre-publication ownership check, and the preview
+threshold comment now matches the implementation.
+
+The response is correct about F140-02 and F140-03. It is correct about F140-01
+when every database statement succeeds and the worker reaches the end of the
+method. It is not correct that the money side is now “fully accounted for.” The
+counter increment and terminal reconciliation are separate statements. The
+second result is discarded. A database error, process exit, or request timeout
+after the first statement can leave the raw usage on a closed row without
+raising the value that the monthly cap sums. See F150-01.
+
+I also found an upgrade boundary in the new grounded-call column. Version 1.4
+stores the old count in the payload. Version 1.5 starts the new column at zero
+and takes the maximum of the two values. If an in-flight upgraded run has one
+legacy call and adds one new call, `max(1, 1)` is one, not two. A focused test
+reproduced this result. See F150-02.
+
+The README correction still has a contradiction and a repeated sentence. See
+F150-03.
+
+I found no verified unauthenticated code execution, SQL injection, stored XSS,
+capability bypass, CSRF defect, secret disclosure, or provider-URL SSRF in this
+revision. I found no new publication-safety defect. The primary remaining risk
+is the durability of late financial reconciliation.
+
+### Verification results
+
+| Check | Result | Evidence |
+|---|---:|---|
+| Revision and worktree | Pass | `HEAD`, `main`, `origin/main`, and `v1.5.0^{}` resolve to `2e542f7`. The worktree was clean before this review file changed. |
+| Seventh response and changelog | Pass | The response and 1.5.0 change record are present ([response](CODEX-REVIEW-RESPONSE.md#L2059), [changelog](CHANGELOG.md#L90)). |
+| Diff integrity | Pass | `git diff --check 26bb7ee..2e542f7` reports no whitespace error. The changed production PHP files pass `php -l`. |
+| Composer manifest | Pass | `composer validate --strict` reports a valid manifest ([manifest](composer.json)). |
+| Dependency advisories | Pass | `composer audit --locked` reports no known advisory ([lock file](composer.lock)). Packagist reports zero advisories for Action Scheduler ([package record](https://packagist.org/packages/woocommerce/action-scheduler)). |
+| WordPress coding standards | Pass | PHPCS checked 125 PHP files with no error or warning ([rules](phpcs.xml.dist)). |
+| Local PHPUnit | Pass | 363 tests and 1,521 assertions passed in the WordPress test container ([configuration](phpunit.xml.dist), [bootstrap](tests/bootstrap.php)). |
+| Release CI | Pass | PHP 8.1, 8.2, and 8.3 passed in [CI run 32323434092](https://github.com/johnjanney/autoscribe/actions/runs/32323434092). |
+| Code scanning | Pass | The CodeQL `Analyze (actions)` job passed in [run 32323433767](https://github.com/johnjanney/autoscribe/actions/runs/32323433767). |
+| Release state | Pass | GitHub reports a published release that is not a draft or prerelease. Tag `v1.5.0` resolves to signed commit `2e542f7` ([release](https://github.com/johnjanney/autoscribe/releases/tag/v1.5.0)). |
+| Release asset | Pass | The uploaded and local archives are both 495,044 bytes and are byte-identical. Both have SHA-256 `e690f84aff6a5642e3c1e8953d9a8889d5595230501fbfbf1970ada5bf941b8a`. `unzip -t` passed. The packaged production source and documentation match the reviewed tree ([asset](https://github.com/johnjanney/autoscribe/releases/download/v1.5.0/autoscribe-1.5.0.zip), [build script](bin/build.sh)). |
+| Normal terminal reconciliation | Pass | Late text, image, grounded, and repeated image use raise a closed run's cost in the supplied tests ([implementation](src/Pipeline/Run.php#L1907), [tests](tests/Pipeline/Interrupted_ChargeTest.php#L225)). |
+| Publication-guard removal probe | Pass | I temporarily removed the immediate pre-publication ownership check. The focused test failed with expected `draft` and actual `publish`, at its publication assertion. I restored the guard and the test passed. |
+| Reconciliation-failure probe | **Fail** | A focused test made only the `GREATEST(cost_cents, measured)` statement fail. `record_image()` still returned true because it reports only the counter statement's result. The temporary probe was removed. See F150-01. |
+| Cross-upgrade grounded-call probe | **Fail** | A focused test created the version 1.4 state with `payload.grounded_calls = 1` and the new column at zero, then recorded one new grounded call. `grounded_calls()` returned one instead of two. The temporary probe was removed. See F150-02. |
+| Live provider call | Not run | No funded key was supplied. No prompt, site content, or secret was sent to a provider. |
+| Real Action Scheduler dispatch | Not covered | **Not found in documents:** an automated test that lets Action Scheduler dispatch a complete chain ([documented limit](README.md#L252)). |
+| Two-connection concurrency | Not covered | The concurrency tests simulate interleavings in one process. **Not found in documents:** a test that uses two independent database connections ([response](CODEX-REVIEW-RESPONSE.md#L2159)). |
+| Non-MySQL database behavior | Not covered | **Not found in documents:** CI coverage for MariaDB or another database engine ([documented limit](README.md#L255)). |
+
+The locked Action Scheduler version is still 3.9.3. Version 4.1.0 is available,
+and Packagist reports no advisory for the package
+([lock file](composer.lock), [Packagist](https://packagist.org/packages/woocommerce/action-scheduler)).
+The separate-upgrade decision remains reasonable. Dispatch and migration tests
+must accompany that change.
+
+### Seventh-response verdict by prior finding
+
+| Prior finding | Verification verdict | Version 1.5.0 status |
+|---|---|---|
+| F140-01 — late usage does not raise the monthly spend total | **Fixed on the successful path; not durable on failure** | Each usage increment calls terminal reconciliation, and successful reconciliation is monotonic. The two statements are not one durable operation, and reconciliation errors are ignored. See F150-01. The new grounded column also has the upgrade gap in F150-02 ([usage](src/Pipeline/Run.php#L494), [reconciliation](src/Pipeline/Run.php#L1935)). |
+| F140-02 — final-publication test stops at the first claim | **Fixed** | The new test closes the run immediately before the ownership read, asserts that the initial claim and interleaving occurred, and keeps the post in draft ([test](tests/Pipeline/Stale_WorkerTest.php#L280)). The same-connection design is suitable for this test transaction. I independently removed and restored the guard; the test failed on `draft` versus `publish` while it was absent. |
+| F140-03 — preview-threshold comment contradicts the code | **Fixed** | The comment now states that the queued threshold is a floor for the preview threshold ([comment](src/Pipeline/Stall_Sweeper.php#L87)). |
+
+## Version 1.5.0 findings
+
+### F150-01 — Medium — Terminal cost reconciliation is not durable
+
+**Category:** Accounting integrity, concurrency, recovery, error handling
+
+**Verified facts**
+
+- Each money recorder first commits an unconditional counter update and then
+  calls `reconcile_terminal_cost()` as a separate operation
+  ([text use](src/Pipeline/Run.php#L494),
+  [image use](src/Pipeline/Run.php#L559),
+  [grounded use](src/Pipeline/Run.php#L814)).
+- `reconcile_terminal_cost()` runs several reads and then a separate
+  `UPDATE ... GREATEST(...)` ([implementation](src/Pipeline/Run.php#L1935)).
+- The reconciliation method returns `void` and discards the result of
+  `$wpdb->query()`. WordPress returns `false` when that query fails
+  ([WordPress `wpdb::query()` contract](https://developer.wordpress.org/reference/classes/wpdb/query/)).
+- The public recorders return only whether the first counter update avoided an
+  explicit `false`. They can therefore report success when terminal cost did not
+  change.
+- A focused diagnostic replaced only the terminal cost statement with an update
+  to a nonexistent table. `record_image()` returned true even though the
+  reconciliation failed.
+- **Not found in documents:** a dirty flag, usage revision, scheduled repair, or
+  budget-preflight repair that will later reconcile a closed row after the
+  second statement fails.
+- The supplied repeated-increment test runs the two objects in sequence. It
+  proves monotonic successful updates, not interruption or database failure
+  between the counter and cost statements
+  ([test](tests/Pipeline/Interrupted_ChargeTest.php#L339)).
+
+**Inference and impact**
+
+A process can stop after the counter commits and before the cost update runs. A
+database error can produce the same stored state. The closed row then contains
+the billed tokens, image, or grounded call, but `cost_cents` can stay lower for
+ever. The monthly cap sums `cost_cents`, so it can miss that late spending.
+
+There is also a short successful-path race. A new budget check can sum the old
+cost between the counter update and reconciliation because reconciliation does
+not use the named spend lock. `GREATEST` prevents a later reconciliation from
+lowering cost, but it does not recall a reservation that passed in this window.
+
+**Recommended fix**
+
+- Make incomplete reconciliation durable. In the same statement that increments
+  a usage counter, also increment a `usage_revision` or set a
+  `cost_reconcile_pending` marker.
+- Reconcile against a specific usage revision. Clear the pending marker only if
+  that revision is still current. If another usage increment arrives during
+  measurement, leave the row pending and retry.
+- Before the budget guard sums and reserves spend, reconcile pending terminal
+  rows while holding the same spend lock. Add a bounded scheduled repair for
+  rows left pending after a database or process failure.
+- Inspect the reconciliation result. Do not return success for the complete
+  accounting operation when WordPress returns `false` for the cost update.
+- Add tests that fail only the reconciliation query, interrupt execution after
+  the counter update, and race a pending reconciliation with a new budget
+  reservation. Assert that a later preflight or repair restores the correct
+  terminal cost.
+
+### F150-02 — Low — The grounded-call column loses an additive legacy count
+
+**Category:** Schema migration, accounting, backward compatibility
+
+**Verified facts**
+
+- Version 1.4 stored `grounded_calls` in the payload. Version 1.5 adds a new
+  column with a default of zero, but the schema upgrade does not copy the legacy
+  value into that column ([schema](src/Activation.php#L218)).
+- `grounded_calls()` returns the maximum of the in-memory value, new column, and
+  legacy payload value ([read](src/Pipeline/Run.php#L782)).
+- A new grounded call increments only the new column
+  ([write](src/Pipeline/Run.php#L814)).
+- A focused upgrade diagnostic started with legacy payload count one and new
+  column count zero. After one new increment, both stored values were one and
+  `grounded_calls()` returned one. The expected total was two.
+- The schema-upgrade tests cover the old sweep counter. They do not cover the new
+  grounded column or this additive transition
+  ([tests](tests/Pipeline/Schema_UpgradeTest.php#L45)).
+
+**Impact**
+
+This affects a run that remains in flight across the 1.4-to-1.5 upgrade and then
+makes another grounded request, such as a restarted body step. One grounded
+surcharge can be omitted from its terminal cost. The scope is narrow, but it is
+the exact upgrade state for which the payload fallback exists.
+
+**Recommended fix**
+
+Use one of these consistent migration designs:
+
+- During the version-5 schema migration, copy each legacy payload count into the
+  new column before recording the new schema version. Keep `max(column,
+  payload)` as the read fallback.
+- Or define the column as post-1.5 increments and return `legacy payload + new
+  column`. Do not later backfill the column under that design, because that would
+  count the legacy value twice.
+
+Add an upgrade test with payload count one, column zero, and one new increment.
+Assert a total of two and a terminal cost that includes two surcharges.
+
+### F150-03 — Low — The README correction still contradicts and repeats itself
+
+**Category:** Documentation, operational guidance
+
+**Verified facts**
+
+- The stale-worker paragraph first says that everything the worker writes to the
+  run row is refused. It then says that token and image counters are the
+  deliberate exception ([README](README.md#L259)).
+- The paragraph says twice that the monthly cap sees the late spending
+  ([README](README.md#L270)).
+- The seventh response says that the README was corrected
+  ([response](CODEX-REVIEW-RESPONSE.md#L2110)). The added explanation is more
+  accurate, but the earlier absolute sentence and repeated conclusion remain.
+
+**Impact**
+
+The contradiction makes the central state-versus-money invariant harder to
+understand. The repetition is minor, but it shows that the old statement was
+extended instead of replaced.
+
+**Recommended fix**
+
+Change “Everything such a worker writes” to “Every state write from such a
+worker.” Keep one sentence that explains that money counters remain additive.
+Remove the repeated monthly-cap sentence. After F150-01 is fixed, state that a
+late charge is durably reconciled; until then, do not describe it as guaranteed.
+
+### Version 1.5.0 conclusion
+
+The 1.5.0 release fixes the ordinary late-accounting path, directly tests the
+publication guard, and corrects the preview comment. The code remains clear and
+purpose-aligned. The release metadata, package, tests, style checks, dependency
+audit, CI, and CodeQL are verified. No new security or publication-safety defect
+was found.
+
+F150-01 prevents an unconditional pass because terminal accounting still has an
+unrecoverable two-statement gap. F150-02 is a narrow upgrade undercount, and
+F150-03 is documentation drift. Keep the provider-side limit as the hard
+ceiling. Make reconciliation durable and repairable before saying that all late
+spending always reaches the monthly cap.
+
 ## Fresh verification review — version 1.4.0
 
 **Review date:** 19 August 2026 (America/Chicago)

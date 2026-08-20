@@ -2166,3 +2166,110 @@ was: a claim lost in the instant between the ownership check and a media or post
 write. What has changed since it was first stated is that the money side of it is
 now fully accounted for — whichever worker's article survives, both workers'
 spending reaches the cap.
+
+---
+---
+
+# Response to the eighth Codex review
+
+**Responding to:** the fresh-verification section of
+[CODEX-REVIEW.md](CODEX-REVIEW.md), dated 19 August 2026 against `2e542f7`
+(tag `v1.5.0`)
+**Response date:** 19 August 2026
+**Release under response:** 1.5.0 → 1.6.0
+
+---
+
+## Summary
+
+Three findings. **All three confirmed, all three fixed.**
+
+| Finding | Verdict | Status |
+|---|---|---|
+| F150-01 Terminal cost reconciliation is not durable | Confirmed | Fixed |
+| F150-02 The grounded column loses an additive legacy count | Confirmed | Fixed |
+| F150-03 The README correction contradicts and repeats itself | Confirmed | Fixed |
+
+**Verification:** PHPCS passes with zero errors and zero warnings across 125
+files. PHPUnit passes 368 tests and 1,549 assertions, up from 363 and 1,521.
+
+---
+
+## F150-01 — Confirmed. Fixed.
+
+The finding is right, and the phrase it takes issue with — "fully accounted
+for" — was mine and was too strong for the same reason the previous one was: it
+described the successful path and called it the property.
+
+Pricing a counter cannot be done in the statement that raises it without writing
+the rate table into SQL, which would be a second implementation of the money
+formula and the last place to want one. So the two writes stay separate and the
+gap is made recoverable instead.
+
+**The mechanism.** Every money write now also sets `cost_stale` on a closed row,
+in the same statement — so the flag cannot be lost separately from the money it
+refers to, which is what makes this durable rather than merely retried.
+Reconciliation clears the flag with a compare-and-swap on the counters it
+measured: an increment arriving mid-measurement means the condition matches
+nothing, the row stays flagged, and that increment's own reconciliation or a
+repair pass prices both. `GREATEST` still means the figure can only rise.
+
+**The two repair passes**, which is the part the finding asks for by name:
+
+- `Budget_Guard::check()` settles outstanding rows before it sums. The caller
+  holds the spend lock, so this closes the successful-path race the finding also
+  notes: a new run cannot pass a cap on a total that was known to be short.
+- The stall sweep settles a bounded batch every five minutes, because a site that
+  has stopped generating would otherwise never reach the budget guard and would
+  keep an unpriced row for ever.
+
+**On returning success from the recorders.** The finding says not to report
+success when the cost update failed. I have kept the recorders reporting on the
+counter write, and the reason is the flag: it is written by the same statement,
+so if the counters landed the flag landed, and the accounting operation really is
+complete — it is finished later rather than left undone. Returning false would
+fail a run whose money is recorded and scheduled for pricing, which is a worse
+answer than the one the flag makes possible. `reconcile_cost()` itself returns
+its result, so a caller that wants to know can ask.
+
+**Tests.** The reconciliation statement is refused while the counter write is
+allowed — the exact interruption — and the assertions are that the money is on
+the row, the price is not, the row says so, and a later pass fixes all three. A
+second test puts a cap between the unpriced and priced figures and proves the
+budget guard repairs before it sums. A third proves an open run is never flagged.
+
+## F150-02 — Confirmed. Fixed.
+
+Confirmed by reading it and by the test, which fails on the old code exactly as
+the finding describes: legacy one, column zero, one increment, total one.
+
+I took the first of the two suggested designs — copy the legacy value into the
+column during the migration and keep the payload as a read fallback — because it
+leaves one number in one place afterwards, and the alternative (`payload +
+column`) makes every future reader responsible for never backfilling.
+
+Only open runs are migrated. A closed run's money was already settled under the
+old reading, and raising its counter now would price a surcharge into a figure
+that had been accounted for; there is a test for that too.
+
+## F150-03 — Confirmed. Fixed.
+
+The paragraph was extended when it should have been replaced, which is exactly
+what the finding says the repetition shows. It is rewritten around the division
+it is trying to express — state writes refused, money writes accepted — and the
+duplicated conclusion is gone. It now also says what F150-01 makes true: a late
+charge is priced by the next repair pass, at most five minutes away and always
+before the next run is allowed to spend.
+
+---
+
+## What is still not covered
+
+Unchanged: no test drives Action Scheduler's own dispatch; the concurrency tests
+interleave in one process; CI runs against MySQL only; no test calls a live
+provider; Action Scheduler 4.1.0 is deferred to its own change.
+
+The check-to-WordPress-write window from F120-02 also remains, and is where it
+was: a claim lost in the instant between the ownership check and a media or post
+write. Its money side is settled either way — both workers' spending reaches the
+cap, now including when the process recording it dies part way.

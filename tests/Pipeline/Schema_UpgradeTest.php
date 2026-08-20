@@ -99,4 +99,82 @@ final class Schema_UpgradeTest extends WP_UnitTestCase {
 		$this->assertTrue( Run::load( $run->id() )->record_sweep( Stall_Sweeper::MAX_RESTARTS ) );
 		$this->assertSame( Stall_Sweeper::MAX_RESTARTS + 1, Run::load( $run->id() )->sweeps() );
 	}
+	/**
+	 * A grounded call recorded before the upgrade is added to, not compared with.
+	 *
+	 * Version 1.5.0 moved the count from the payload to a column and read the
+	 * larger of the two, which is wrong the moment a run that crossed the upgrade
+	 * makes another grounded request: the column goes from zero to one, the legacy
+	 * value is one, and the larger of one and one is one. Two searches billed, one
+	 * counted. The migration copies the legacy value into the column so that every
+	 * increment adds to a count that already includes what came before.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @return void
+	 */
+	public function test_a_grounded_call_from_the_previous_version_is_carried_over(): void {
+		global $wpdb;
+
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+
+		$run_id = $run->id();
+
+		// What 1.4.x wrote: the count in the payload, and no column to hold it.
+		$this->assertTrue( $run->merge_payload( array( 'grounded_calls' => 1 ) ) );
+
+		$wpdb->update(
+			Activation::table_name(),
+			array( 'grounded_calls' => 0 ),
+			array( 'id' => $run_id ),
+			array( '%d' ),
+			array( '%d' )
+		);
+
+		update_option( Activation::DB_VERSION_OPTION, '5' );
+
+		Activation::maybe_upgrade();
+
+		$this->assertSame(
+			1,
+			(int) Run::latest_for_prompt( $run->prompt_id() )['grounded_calls'],
+			'The legacy count belongs in the column the increments go to.'
+		);
+
+		// The same run makes another grounded request after the upgrade.
+		$this->assertTrue( Run::load( $run_id )->record_grounded_call() );
+		$this->assertSame(
+			2,
+			Run::load( $run_id )->grounded_calls(),
+			'Two searches billed is two searches counted.'
+		);
+	}
+
+	/**
+	 * A closed run is left exactly as it was settled.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @return void
+	 */
+	public function test_the_migration_leaves_settled_runs_alone(): void {
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+		$this->assertTrue( $run->merge_payload( array( 'grounded_calls' => 1 ) ) );
+		$this->assertTrue( $run->fail( 'Finished before the upgrade.' )->ended() );
+
+		update_option( Activation::DB_VERSION_OPTION, '5' );
+
+		Activation::maybe_upgrade();
+
+		$this->assertSame(
+			0,
+			(int) Run::latest_for_prompt( $run->prompt_id() )['grounded_calls'],
+			'A run whose money was already accounted for is not re-counted.'
+		);
+	}
+
 }

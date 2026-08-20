@@ -513,16 +513,18 @@ final class Run {
 		 */
 		$written = $wpdb->query(
 			$wpdb->prepare(
-				'UPDATE %i SET text_model = %s, input_tokens = input_tokens + %d, output_tokens = output_tokens + %d WHERE id = %d',
+				'UPDATE %i SET text_model = %s, input_tokens = input_tokens + %d, output_tokens = output_tokens + %d,
+				cost_stale = IF( status <> %s, 1, cost_stale ) WHERE id = %d',
 				Activation::table_name(),
 				$model,
 				$input,
 				$output,
+				self::STATUS_RUNNING,
 				$this->id
 			)
 		);
 
-		$this->reconcile_terminal_cost();
+		$this->reconcile_cost();
 
 		return false !== $written;
 	}
@@ -568,14 +570,16 @@ final class Run {
 		// for whether or not the row accepts the counter.
 		$written = $wpdb->query(
 			$wpdb->prepare(
-				'UPDATE %i SET image_model = %s, image_count = image_count + 1 WHERE id = %d',
+				'UPDATE %i SET image_model = %s, image_count = image_count + 1,
+				cost_stale = IF( status <> %s, 1, cost_stale ) WHERE id = %d',
 				Activation::table_name(),
 				$model,
+				self::STATUS_RUNNING,
 				$this->id
 			)
 		);
 
-		$this->reconcile_terminal_cost();
+		$this->reconcile_cost();
 
 		return false !== $written;
 	}
@@ -818,13 +822,15 @@ final class Run {
 
 		$written = $wpdb->query(
 			$wpdb->prepare(
-				'UPDATE %i SET grounded_calls = grounded_calls + 1 WHERE id = %d',
+				'UPDATE %i SET grounded_calls = grounded_calls + 1,
+				cost_stale = IF( status <> %s, 1, cost_stale ) WHERE id = %d',
 				Activation::table_name(),
+				self::STATUS_RUNNING,
 				$this->id
 			)
 		);
 
-		$this->reconcile_terminal_cost();
+		$this->reconcile_cost();
 
 		return false !== $written;
 	}
@@ -1916,38 +1922,112 @@ final class Run {
 	 * reached the cap. A duplicate image bought by a superseded worker is the
 	 * clearest case: two pictures billed, one counted.
 	 *
-	 * So every increment is followed by this. On an open run it matches nothing
-	 * and costs one comparison, because settlement has not happened yet and will
-	 * read the counters when it does. On a closed one it re-measures from the row
-	 * as it now stands, priced with the rates the run recorded, and raises the
-	 * settled figure.
+	 * Pricing what a counter records cannot be done in the statement that records
+	 * it without writing the rate table into SQL, so the two are separate writes
+	 * and a process can die between them. What makes that survivable is that the
+	 * *first* write says so: every money increment sets cost_stale on a closed
+	 * row, in the same statement, so a row whose cost has not caught up carries a
+	 * flag saying it has not. This method clears the flag; the budget guard and
+	 * the stall sweep clear it for rows nobody came back to. An interrupted
+	 * reconciliation is therefore late rather than lost.
 	 *
-	 * GREATEST rather than assignment, and in the statement rather than in PHP:
-	 * two late increments can reconcile concurrently, and the larger measurement
-	 * has to survive whichever lands second. It also means this can only ever move
-	 * the figure up, so a reconciliation racing a reservation floor cannot undo
-	 * it.
+	 * The write is a compare-and-swap on the counters this measurement was taken
+	 * from. If another increment lands while the price is being worked out, the
+	 * condition does not match, the row stays flagged, and that increment's own
+	 * reconciliation — or a repair pass — prices both. GREATEST on the cost means
+	 * a reconciliation can only ever raise the figure, so one racing a reservation
+	 * floor cannot undo it.
+	 *
+	 * On an open run this does nothing at all. Settlement has not happened yet and
+	 * will read the counters when it does.
 	 *
 	 * @since 1.5.0
 	 *
-	 * @return void
+	 * @return bool True when nothing is owed, or when this call settled what was.
 	 */
-	private function reconcile_terminal_cost(): void {
+	public function reconcile_cost(): bool {
 		global $wpdb;
 
-		if ( self::STATUS_RUNNING === $this->status() ) {
-			return;
+		$row = $wpdb->get_row(
+			$wpdb->prepare(
+				'SELECT status, input_tokens, output_tokens, image_count, grounded_calls FROM %i WHERE id = %d',
+				Activation::table_name(),
+				$this->id
+			),
+			ARRAY_A
+		);
+
+		if ( ! is_array( $row ) || self::STATUS_RUNNING === (string) $row['status'] ) {
+			return true;
 		}
 
-		$wpdb->query(
+		$updated = $wpdb->query(
 			$wpdb->prepare(
-				'UPDATE %i SET cost_cents = GREATEST( cost_cents, %d ) WHERE id = %d AND status <> %s',
+				'UPDATE %i SET cost_cents = GREATEST( cost_cents, %d ), cost_stale = 0
+				WHERE id = %d AND status <> %s
+					AND input_tokens = %d AND output_tokens = %d
+					AND image_count = %d AND grounded_calls = %d',
 				Activation::table_name(),
-				$this->measured_cents( null, $this->grounded_calls() ),
+				$this->measured_cents( null, (int) $row['grounded_calls'] ),
 				$this->id,
-				self::STATUS_RUNNING
+				self::STATUS_RUNNING,
+				(int) $row['input_tokens'],
+				(int) $row['output_tokens'],
+				(int) $row['image_count'],
+				(int) $row['grounded_calls']
 			)
 		);
+
+		return false !== $updated;
+	}
+
+	/**
+	 * Returns closed runs whose settled cost has not caught up with their usage.
+	 *
+	 * Bounded, because this is a repair rather than a scan: a site with a large
+	 * backlog of them has something wrong that a longer query will not fix, and
+	 * the next pass takes the next batch.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @param int $limit Most rows to return.
+	 * @return int[]
+	 */
+	public static function unsettled( int $limit = 25 ): array {
+		global $wpdb;
+
+		$ids = $wpdb->get_col(
+			$wpdb->prepare(
+				'SELECT id FROM %i WHERE cost_stale = 1 AND status <> %s ORDER BY id ASC LIMIT %d',
+				Activation::table_name(),
+				self::STATUS_RUNNING,
+				max( 1, $limit )
+			)
+		);
+
+		return array_map( 'intval', (array) $ids );
+	}
+
+	/**
+	 * Prices whatever late usage is outstanding, for a bounded batch of runs.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @param int $limit Most runs to settle.
+	 * @return int How many were settled.
+	 */
+	public static function settle_unsettled( int $limit = 25 ): int {
+		$settled = 0;
+
+		foreach ( self::unsettled( $limit ) as $id ) {
+			$run = self::load( $id );
+
+			if ( $run instanceof self && $run->reconcile_cost() ) {
+				++$settled;
+			}
+		}
+
+		return $settled;
 	}
 
 	/**

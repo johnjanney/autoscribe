@@ -7,6 +7,7 @@
 
 namespace AutoScribe;
 
+use AutoScribe\Pipeline\Run;
 use AutoScribe\Pipeline\Run_Retention;
 use AutoScribe\Pipeline\Stall_Sweeper;
 use AutoScribe\Scheduling\Scheduler;
@@ -37,7 +38,7 @@ final class Activation {
 	 * @since 0.1.0
 	 * @var string
 	 */
-	public const DB_VERSION = '5';
+	public const DB_VERSION = '6';
 
 	/**
 	 * Capability gating the settings screens.
@@ -181,6 +182,12 @@ final class Activation {
 	 * a shared JSON document cannot be updated by two writers without one of them
 	 * losing what the other stored.
 	 *
+	 * A sixth since 1.6.0: cost_stale, marking a closed run whose settled cost does
+	 * not yet include everything its counters do. It is written by the same
+	 * statement that raises a counter, which is what makes the accounting durable:
+	 * a process that dies between recording money and pricing it leaves a row that
+	 * says so, and something later fixes it. See Run::reconcile_cost().
+	 *
 	 * A fifth since 1.5.0: grounded_calls, the number of grounded requests a run
 	 * paid the search surcharge for. It moved out of the payload document for the
 	 * same reason sweeps did — a counter that costs money cannot live behind a
@@ -231,6 +238,7 @@ final class Activation {
 			cost_cents int(10) unsigned NOT NULL DEFAULT 0,
 			cost_floor int(10) unsigned NOT NULL DEFAULT 0,
 			grounded_calls smallint(5) unsigned NOT NULL DEFAULT 0,
+			cost_stale tinyint(1) unsigned NOT NULL DEFAULT 0,
 			attempt tinyint(3) unsigned NOT NULL DEFAULT 1,
 			sweeps smallint(5) unsigned NOT NULL DEFAULT 0,
 			error text DEFAULT NULL,
@@ -241,12 +249,70 @@ final class Activation {
 			KEY prompt_started (prompt_id, started_at),
 			KEY status_idx (status),
 			KEY topic_key_idx (topic_key),
-			KEY started_at_idx (started_at)
+			KEY started_at_idx (started_at),
+			KEY cost_stale_idx (cost_stale)
 		) {$charset_collate};";
 
 		dbDelta( $sql );
 
+		self::migrate_grounded_calls();
+
 		update_option( self::DB_VERSION_OPTION, self::DB_VERSION );
+	}
+
+	/**
+	 * Copies grounded-call counts out of the payload and into their column.
+	 *
+	 * Version 1.5.0 moved the count from the payload document to a column and read
+	 * the larger of the two. For a run that crossed the upgrade with one grounded
+	 * call already recorded, the first new call incremented the column from zero
+	 * to one — and the larger of one and one is one. The run had made two grounded
+	 * requests, been billed for two, and counted one.
+	 *
+	 * Copying the legacy value into the column makes the two consistent: from then
+	 * on every increment adds to a count that already includes what came before,
+	 * and the payload fallback in Run::grounded_calls() only ever matches or loses
+	 * to the column.
+	 *
+	 * Only open runs are touched. A closed run has already been settled, and
+	 * raising its counter now would price a surcharge into a figure whose money
+	 * was accounted for under the old reading. GREATEST rather than assignment for
+	 * the same reason the accounting elsewhere uses it: a migration must not lower
+	 * a number.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @return void
+	 */
+	private static function migrate_grounded_calls(): void {
+		global $wpdb;
+
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT id, grounded_calls, payload FROM %i WHERE status = %s AND payload LIKE %s LIMIT 500',
+				self::table_name(),
+				Run::STATUS_RUNNING,
+				'%grounded_calls%'
+			),
+			ARRAY_A
+		);
+
+		foreach ( (array) $rows as $row ) {
+			$decoded = json_decode( (string) $row['payload'], true );
+			$legacy  = is_array( $decoded ) ? (int) ( $decoded['grounded_calls'] ?? 0 ) : 0;
+
+			if ( $legacy <= (int) $row['grounded_calls'] ) {
+				continue;
+			}
+
+			$wpdb->update(
+				self::table_name(),
+				array( 'grounded_calls' => $legacy ),
+				array( 'id' => (int) $row['id'] ),
+				array( '%d' ),
+				array( '%d' )
+			);
+		}
 	}
 
 	/**

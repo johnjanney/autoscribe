@@ -87,6 +87,54 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-08-19
+
+An eighth external review, against 1.5.0. Three findings, all confirmed and all
+fixed.
+
+The theme is durability rather than correctness this time: 1.5.0 made late
+provider charges reach the monthly cap, and this makes them reach it even when
+the process recording them does not survive to the end.
+
+MINOR rather than PATCH: the runs table gains a column and an index, and the
+schema migration now moves data rather than only adding columns.
+
+### Fixed
+
+- **A charge recorded on a closed run could stay unpriced for ever.** Recording
+  money and pricing it are two statements — the rate table is PHP, not SQL — so a
+  process that died between them left the tokens on the row and the settled cost
+  behind them. The monthly cap sums the settled cost, so the spending was
+  invisible to it.
+
+  The statement that records money now also marks a closed row as owing a price,
+  which makes the gap recoverable rather than silent. Reconciliation clears the
+  mark as a compare-and-swap on the counters it measured, so an increment landing
+  mid-measurement leaves the row marked rather than half-priced. Two passes come
+  back for rows nobody else did: the budget guard, which repairs before it sums
+  and while it holds the spend lock, so a run cannot pass a cap on a total known
+  to be short; and the stall sweep, so a site that has stopped generating still
+  settles its books.
+
+- **A run that crossed the 1.5.0 upgrade could lose one search charge.** The
+  grounded-call count moved from the payload to a column, and the two were
+  compared rather than added: a run with one legacy call that made one more had
+  the column go from zero to one, and the larger of one and one is one. The
+  migration copies the legacy count into the column for runs still in flight, so
+  every later increment adds to a count that already includes it. Settled runs
+  are left alone, because their money was accounted for under the old reading.
+
+- **The README's stale-worker paragraph contradicted itself.** It said every
+  write from such a worker was refused and then that the money counters were the
+  exception, and it reached the same conclusion twice. It is now written once, as
+  the rule it describes: state writes are refused, money writes are accepted, and
+  a late charge is priced by the next repair pass.
+
+### Added
+
+- A `cost_stale` column and its index on the runs table, migrated by the existing
+  schema version check.
+
 ## [1.5.0] - 2026-08-19
 
 A seventh external review, against 1.4.0 — the first to come back a conditional

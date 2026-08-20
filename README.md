@@ -13,7 +13,7 @@ everything, and inserts the post as a draft or publishes it.
 
 | | |
 |---|---|
-| **Version** | 1.5.0 |
+| **Version** | 1.6.0 |
 | **Requires WordPress** | 6.4 |
 | **Requires PHP** | 8.1 |
 | **License** | GPL-2.0-or-later |
@@ -192,9 +192,9 @@ way to tell it apart from the rest of the site.
 
 ## Status and known limitations
 
-Version 1.5.0. Seven external audits have been run against this plugin, and all
-seven found real defects; the findings, the fixes, and the findings rejected with
-evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 363 tests run
+Version 1.6.0. Eight external audits have been run against this plugin, and all
+eight found real defects; the findings, the fixes, and the findings rejected with
+evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 368 tests run
 against PHP 8.1, 8.2, and 8.3 on every push.
 
 Six things this plugin does not do the way the brief describes, all of them
@@ -258,18 +258,26 @@ The first item is the one that matters most:
   pricing table you maintain. They are not billing data.
 - **A worker that has been restarted can still finish its provider call.** The
   stall sweep decides a worker is gone by whether anything is queued for its run,
-  which a slow worker inside a 120-second call looks exactly like. Everything
-  such a worker writes to the run row afterwards is refused, and the two places
-  that write to WordPress instead — the post and the featured image — re-check
-  before they start. What cannot be fenced is the instant between that check and
-  the write, so in a rare interleaving one run can pay for two articles' worth of
-  calls and keep one. Closing a run ends every claim over it, so a finished run's
-  article, post link, and settled state cannot be changed afterwards — with one
-  deliberate exception: what a provider charged for. Token and image counters are
-  additive and are accepted from any worker at any time, because a call that was
-  billed happened whoever made it, and a late one raises the closed run's cost so
-  the monthly cap sees it. The spending is counted either way, so the monthly cap sees
-  it; it is the duplication that is not fully prevented.
+  which a slow worker inside a 120-second call looks exactly like. The rule from
+  there divides state from money.
+
+  Every *state* write from such a worker is refused — its article, post link, and
+  step all require the run to be open and the claim to still be its own, so a
+  finished run cannot be changed afterwards. The two things it writes to
+  WordPress rather than to the run row, the post and the featured image, re-check
+  immediately before they start; the instant between that check and the write
+  cannot be fenced, so in a rare interleaving one run can pay for two articles'
+  worth of calls and keep one.
+
+  Every *money* write is accepted, from any worker, at any time, open or closed:
+  a call that was billed happened whoever made it. Token, image, and search
+  counters are additive rather than overwritten, and a charge that arrives after
+  the run closed raises what that run is recorded as having cost. That second
+  step is a separate statement from the first, so it can be interrupted — the row
+  is marked as owing it in the same write that records the money, and the next
+  budget check or stall sweep prices it. What the monthly cap reads is therefore
+  correct once a repair pass has run, which is at most five minutes and always
+  before the next run is allowed to spend.
 - **A run whose ending the database will not accept is left open on purpose.**
   Reporting a run as finished when the write that finishes it was refused is how
   one article becomes two emails and two schedules, so the queue says nothing and

@@ -19,7 +19,9 @@ use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Scheduling\Scheduler;
 use AutoScribe\Security\Key_Store;
 use AutoScribe\Tests\Support\Creates_Prompts;
+use AutoScribe\Prompts\Prompt;
 use AutoScribe\Tests\Support\Mocks_Provider;
+use AutoScribe\Tests\Support\Refuses_Writes;
 use WP_UnitTestCase;
 
 /**
@@ -38,6 +40,7 @@ final class Interrupted_ChargeTest extends WP_UnitTestCase {
 
 	use Creates_Prompts;
 	use Mocks_Provider;
+	use Refuses_Writes;
 
 	/**
 	 * Gives the providers keys so runs reach their paid calls.
@@ -374,4 +377,107 @@ final class Interrupted_ChargeTest extends WP_UnitTestCase {
 			'Two pictures billed is two pictures counted.'
 		);
 	}
+	/**
+	 * A reconciliation that never ran leaves the row saying so, and is repaired.
+	 *
+	 * Recording money and pricing it are two statements, and a process can die
+	 * between them. What makes that survivable is that the first statement flags
+	 * the row: the money is on the run either way, and something later prices it.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @return void
+	 */
+	public function test_an_interrupted_reconciliation_is_repaired_later(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+
+		$run->merge_payload( array( 'rates' => ( new Pricing_Table() )->snapshot( array( 'claude-opus-5' ) ) ) );
+
+		$this->assertTrue( $run->fail( 'Given up on.' )->ended() );
+
+		$closed = (int) Run::latest_for_prompt( $prompt_id )['cost_cents'];
+
+		// The counter lands and the pricing statement does not, which is what a
+		// process killed between the two leaves behind.
+		$this->with_refused(
+			'SET cost_cents = GREATEST',
+			fn() => $run->record_text_usage( 'claude-opus-5', 1000000, 1000000 )
+		);
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame( 1000000, (int) $row['input_tokens'], 'The money is recorded whatever happens next.' );
+		$this->assertSame( $closed, (int) $row['cost_cents'], 'And its price has not been worked out yet.' );
+		$this->assertSame( 1, (int) $row['cost_stale'], 'The row says it owes a reconciliation.' );
+		$this->assertSame( array( $run->id() ), Run::unsettled() );
+
+		// Any later pass — a budget check, a sweep — finishes the job.
+		$this->assertSame( 1, Run::settle_unsettled() );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame( 0, (int) $row['cost_stale'] );
+		$this->assertGreaterThan( $closed, (int) $row['cost_cents'] );
+		$this->assertSame(
+			(int) $row['cost_cents'],
+			( new Budget_Guard() )->month_to_date_cents( $prompt_id ),
+			'The cap reads the repaired figure.'
+		);
+	}
+
+	/**
+	 * The budget guard repairs before it sums, so a cap cannot be beaten by lag.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @return void
+	 */
+	public function test_the_budget_guard_prices_late_usage_before_summing(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+
+		$run->merge_payload( array( 'rates' => ( new Pricing_Table() )->snapshot( array( 'claude-opus-5' ) ) ) );
+
+		$this->assertTrue( $run->fail( 'Given up on.' )->ended() );
+
+		$this->with_refused(
+			'SET cost_cents = GREATEST',
+			fn() => $run->record_text_usage( 'claude-opus-5', 10000000, 10000000 )
+		);
+
+		// A cap the unpriced usage exceeds and the priced figure does not.
+		update_option( Budget_Guard::GLOBAL_CAP_OPTION, 100 );
+
+		$verdict = ( new Budget_Guard() )->check( Prompt::load( $prompt_id ), 1 );
+
+		delete_option( Budget_Guard::GLOBAL_CAP_OPTION );
+
+		$this->assertWPError( $verdict, 'The guard has to see what the run really spent.' );
+		$this->assertSame( 'autoscribe_budget_exceeded', $verdict->get_error_code() );
+		$this->assertSame( 0, (int) Run::latest_for_prompt( $prompt_id )['cost_stale'] );
+	}
+
+	/**
+	 * An open run is never flagged, because settlement has not happened yet.
+	 *
+	 * @since 1.6.0
+	 *
+	 * @return void
+	 */
+	public function test_usage_on_an_open_run_does_not_flag_it(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+		$this->assertTrue( $run->record_text_usage( 'claude-opus-5', 1000, 1000 ) );
+
+		$this->assertSame( 0, (int) Run::latest_for_prompt( $prompt_id )['cost_stale'] );
+		$this->assertSame( array(), Run::unsettled() );
+	}
+
 }

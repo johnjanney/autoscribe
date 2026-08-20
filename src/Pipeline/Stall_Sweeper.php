@@ -271,6 +271,16 @@ final class Stall_Sweeper {
 	 * @return int How many runs were acted on.
 	 */
 	public function handle(): int {
+		/*
+		 * Repair before recovery, and for the same reason recovery exists: a
+		 * process that stopped part way leaves work nothing else will finish. A
+		 * closed run whose late usage was recorded but never priced is flagged as
+		 * owing, and this is the pass that comes back for one whose worker did
+		 * not. The budget guard also repairs, but only when something is about to
+		 * spend — a site that has stopped generating would never clear the flag.
+		 */
+		Run::settle_unsettled();
+
 		$cutoff = gmdate( 'Y-m-d H:i:s', time() - self::threshold() );
 		$acted  = 0;
 		$after  = (int) get_option( self::CURSOR_OPTION, 0 );

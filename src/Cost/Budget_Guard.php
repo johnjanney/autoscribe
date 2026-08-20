@@ -242,6 +242,17 @@ final class Budget_Guard {
 	 * @return true|WP_Error True when the run may proceed.
 	 */
 	public function check( Prompt $prompt, int $projected_cents ): bool|WP_Error {
+		/*
+		 * Price anything a closed run recorded and did not get costed before
+		 * summing. Late usage is written by one statement and priced by another,
+		 * and a worker that died between the two leaves a row flagged as owing.
+		 * Repairing here means the flag is cleared by the thing that most needs it
+		 * cleared: the caller holds the spend lock, so the sum below sees the
+		 * repaired figures and a run cannot slip past the cap on a total that was
+		 * known to be short.
+		 */
+		Run::settle_unsettled();
+
 		$prompt_cap = $prompt->monthly_budget_cents();
 
 		if ( $prompt_cap > 0 ) {
