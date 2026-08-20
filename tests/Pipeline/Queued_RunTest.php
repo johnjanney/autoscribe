@@ -866,9 +866,15 @@ final class Queued_RunTest extends WP_UnitTestCase {
 		$this->handler()->handle_step( $run_id );
 		$this->handler()->handle_step( $run_id );
 
-		// Refuse only the write that records the grounded call.
+		/*
+		 * Refuse only the write that records the grounded call. Matching the column
+		 * name alone would also refuse the read that prices the run, which is a
+		 * different failure with a different expected outcome — and would make this
+		 * test pass or fail for reasons that have nothing to do with what it is
+		 * about.
+		 */
 		$break = static function ( $query ) {
-			return str_contains( (string) $query, 'grounded_calls' )
+			return str_contains( (string) $query, 'grounded_calls = grounded_calls +' )
 				? 'UPDATE autoscribe_no_such_table SET payload = 1 WHERE id = 1'
 				: $query;
 		};

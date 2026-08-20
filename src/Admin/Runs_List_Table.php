@@ -393,6 +393,24 @@ final class Runs_List_Table extends WP_List_Table {
 	 * @return string
 	 */
 	public function column_cost_cents( array $item ): string {
-		return esc_html( number_format_i18n( (int) ( $item['cost_cents'] ?? 0 ) / 100, 2 ) );
+		$spend = esc_html( number_format_i18n( (int) ( $item['cost_cents'] ?? 0 ) / 100, 2 ) );
+
+		if ( empty( $item['cost_stale'] ) ) {
+			return $spend;
+		}
+
+		/*
+		 * The run recorded a charge that has not been priced into this figure yet
+		 * — a worker that died between the two writes, or a database that refused
+		 * the second one. It is shown rather than hidden because the budget guard
+		 * refuses to authorise a run while any of these are outstanding, and an
+		 * operator told that generation has stopped for an accounting reason needs
+		 * somewhere to see which run it is.
+		 */
+		return sprintf(
+			'%1$s<br /><span class="description">%2$s</span>',
+			$spend,
+			esc_html__( 'Accounting pending', 'autoscribe' )
+		);
 	}
 }

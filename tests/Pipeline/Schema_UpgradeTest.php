@@ -285,4 +285,118 @@ final class Schema_UpgradeTest extends WP_UnitTestCase {
 		$this->assertSame( array( 'title' => 'Water' ), $payload['topic'] ?? null );
 		$this->assertArrayNotHasKey( 'grounded_calls', $payload, 'The key moves rather than being copied.' );
 	}
+	/**
+	 * A payload that merely mentions the key does not stall the migration.
+	 *
+	 * The candidate query matches a substring of the JSON, so a title or a source
+	 * URL containing those characters comes back as a candidate with nothing to
+	 * move. Re-reading from the start meant that row came back on every page and
+	 * on every later request — the schema version is only recorded when the
+	 * migration finishes, so one odd payload could put a table scan and a
+	 * dbDelta() pass on every request the site served.
+	 *
+	 * @since 1.8.0
+	 *
+	 * @return void
+	 */
+	public function test_a_payload_that_only_mentions_the_key_does_not_stall_it(): void {
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+		$this->assertTrue( $run->merge_payload( array( 'topic' => array( 'title' => 'grounded_calls' ) ) ) );
+
+		update_option( Activation::DB_VERSION_OPTION, '7' );
+
+		Activation::maybe_upgrade();
+
+		$this->assertSame(
+			Activation::DB_VERSION,
+			get_option( Activation::DB_VERSION_OPTION ),
+			'A row with nothing to move is a row dealt with, not a row left behind.'
+		);
+		$this->assertSame(
+			array( 'title' => 'grounded_calls' ),
+			Run::load( $run->id() )->payload()['topic'] ?? null,
+			'And it is left exactly as it was.'
+		);
+	}
+
+	/**
+	 * A failed read is not mistaken for a finished migration.
+	 *
+	 * An empty result and a failed query look identical, and they mean opposite
+	 * things. Recording the schema version on the second is how an install claims
+	 * a migration it never performed and never tries again.
+	 *
+	 * @since 1.8.0
+	 *
+	 * @return void
+	 */
+	public function test_a_failed_read_does_not_record_the_migration(): void {
+		global $wpdb;
+
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+		$this->assertTrue( $run->merge_payload( array( 'grounded_calls' => 1 ) ) );
+
+		update_option( Activation::DB_VERSION_OPTION, '7' );
+
+		$break = static function ( $query ) {
+			$sql = (string) $query;
+
+			return str_contains( $sql, 'payload LIKE' )
+				? 'SELECT id FROM autoscribe_no_such_table'
+				: $query;
+		};
+
+		add_filter( 'query', $break );
+		$wpdb->suppress_errors( true );
+
+		Activation::maybe_upgrade();
+
+		$wpdb->suppress_errors( false );
+		remove_filter( 'query', $break );
+
+		$this->assertSame(
+			'7',
+			get_option( Activation::DB_VERSION_OPTION ),
+			'A migration that could not read the table has not finished.'
+		);
+
+		// And the next attempt, with the table readable, completes it.
+		Activation::maybe_upgrade();
+
+		$this->assertSame( Activation::DB_VERSION, get_option( Activation::DB_VERSION_OPTION ) );
+		$this->assertSame( 1, Run::load( $run->id() )->grounded_calls() );
+	}
+
+	/**
+	 * Moving a count raises the revision, like any other change to money.
+	 *
+	 * A run being closed while the migration touches it would otherwise be priced
+	 * without the surcharge and closed as settled.
+	 *
+	 * @since 1.8.0
+	 *
+	 * @return void
+	 */
+	public function test_the_migration_raises_the_usage_revision(): void {
+		$run = Run::start( $this->create_prompt() );
+
+		$this->assertNotWPError( $run );
+		$this->assertTrue( $run->merge_payload( array( 'grounded_calls' => 1 ) ) );
+
+		$before = (int) Run::latest_for_prompt( $run->prompt_id() )['usage_revision'];
+
+		update_option( Activation::DB_VERSION_OPTION, '7' );
+
+		Activation::maybe_upgrade();
+
+		$this->assertGreaterThan(
+			$before,
+			(int) Run::latest_for_prompt( $run->prompt_id() )['usage_revision'],
+			'A counter that changed is a counter a close needs to notice.'
+		);
+	}
 }

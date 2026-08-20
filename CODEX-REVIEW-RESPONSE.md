@@ -2414,3 +2414,132 @@ interleave in one process; CI runs against MySQL only; no test calls a live
 provider; Action Scheduler 4.1.0 is deferred to its own change. The
 check-to-WordPress-write window from F120-02 remains, with its money side settled
 either way.
+
+---
+---
+
+# Response to the tenth Codex review
+
+**Responding to:** the fresh-verification section of
+[CODEX-REVIEW.md](CODEX-REVIEW.md), dated 20 August 2026 against `1ec6794`
+(tag `v1.7.0`)
+**Response date:** 20 August 2026
+**Release under response:** 1.7.0 → 1.8.0
+
+---
+
+## Summary
+
+Four findings. **All four confirmed, all four fixed.**
+
+| Finding | Verdict | Status |
+|---|---|---|
+| F170-01 A new revision can certify an old usage snapshot | Confirmed | Fixed |
+| F170-02 The migration can report false success and false failure | Confirmed | Fixed |
+| F170-03 One irrelevant stale row can stop all future runs | Confirmed | Fixed |
+| F170-04 The release archive and changelog do not match the tag | Confirmed | Fixed for future releases; 1.7.0 documented |
+
+**Verification:** PHPCS exits zero across 125 files. PHPUnit passes 382 tests and
+1,666 assertions, up from 375 and 1,637.
+
+---
+
+## F170-01 — Confirmed. Fixed.
+
+The invariant I described last round did not hold, and the code said so if
+anyone had read it carefully — including me, since I wrote the comment claiming
+the opposite. `load_usage()` read the counters and `measured_cents()` read the
+revision a statement later, so a charge landing between them produced a price
+computed without it and stamped with a revision that said the price was current.
+The close then compared equal revisions and left the row clean.
+
+Everything a price is made of — status, models, counters, grounded count, floor,
+and revision — now comes from one `SELECT`. `reconcile_cost()` uses that same
+read for the status it acts on, instead of taking status and grounded count in a
+query of their own.
+
+Three things came with it:
+
+- **A failed measurement no longer closes the books.** If the read fails, this
+  object cannot say what the run cost, so both terminal statements mark the row
+  instead of writing a figure nothing stands behind.
+- **The unclaimed close is one prepared statement**, like the claimed one. The
+  `wpdb::update()` plus follow-up marker pair is gone, and with it the window
+  where a process could stop between closing a run and recording that its price
+  was short.
+- **The grounded-call migration raises the revision**, because it changes a
+  counter that costs money and a close that cannot see that change prices without
+  it.
+
+Both new tests are verified by removal: neutralise the marking and they fail on
+the assertion that matters.
+
+## F170-02 — Confirmed. Fixed.
+
+Both directions were real, and the false-failure one was the worse of the two —
+a payload merely containing the text `grounded_calls` was re-read on every page
+and every subsequent request, because the schema version is only recorded when
+the migration finishes. One odd payload would have put a table scan and a
+`dbDelta()` pass on every request the site served.
+
+- It pages by ID cursor, advancing past every row it inspects, so a row with
+  nothing to move is a row dealt with rather than one that comes back for ever.
+- `$wpdb->last_error` is checked on both the page query and the completion query;
+  a failed read is a failure rather than an empty table.
+- Completion is decided by decoded keys and the cursor, not by whether the raw
+  JSON still contains a substring.
+- `dbDelta()` is not taken at its word: the new column is confirmed to exist
+  before the version is recorded.
+- The version is bumped again, so an install that recorded 7 after a failed read
+  retries.
+
+## F170-03 — Confirmed. Fixed.
+
+Failing closed is right when a cap cannot be computed, and I applied it to every
+run rather than to the runs a cap would have summed.
+
+The guard reads both caps first and returns early when neither is set — an
+uncapped site has no total to be wrong about, and the sweep still repairs in the
+background. When a cap is set, repair is scoped to exactly what that cap sums:
+one prompt's current month for a per-prompt cap, the site's current month for the
+global one. `Run::unsettled()` takes those bounds, so repair and summation cover
+the same rows by construction rather than by coincidence.
+
+The Run Log now shows "Accounting pending" against a run whose charge has not
+been priced, which is what the refusal message tells the operator to look for.
+The message said that before it was true; it now names the column that shows it.
+
+## F170-04 — Confirmed. Fixed for future releases, and 1.7.0 documented.
+
+The archive was built, the changelog was then edited, and the tag was made
+afterwards — so the published 1.7.0 asset contains every runtime file exactly as
+tagged and a `CHANGELOG.md` one bullet short. The date on that entry was wrong
+too: 19 August for a release made on the 20th.
+
+- The date is corrected.
+- `bin/build.sh` refuses to run against a working copy with uncommitted changes
+  to anything it packages. That is the actual cause — building from a tree that
+  was not the tree committed — and it is now impossible to do by accident.
+  `AUTOSCRIBE_ALLOW_DIRTY=1` exists for a throwaway local build.
+
+**I have not replaced the published 1.7.0 asset.** Rewriting a published artifact
+to correct a one-file documentation difference seemed worse than recording the
+difference: anyone who downloaded it has a valid build of the tagged runtime
+code, and a silently swapped asset with a different digest is a worse
+provenance story than an accurate note. The 1.8.0 entry records exactly what
+differs. If you would rather it were replaced, say so and I will.
+
+---
+
+## What is still not covered
+
+Unchanged: no test drives Action Scheduler's own dispatch; the concurrency tests
+interleave in one process; CI runs against MySQL only; no test calls a live
+provider; Action Scheduler 4.1.0 is deferred to its own change. The
+check-to-WordPress-write window from F120-02 remains, with its money side settled
+either way.
+
+The build guard is a check on the *inputs* to a release rather than on the
+artifact. CI building and publishing the archive itself — the review's stronger
+suggestion — is a better answer and a larger change to how this project releases;
+it is worth doing on its own rather than alongside four accounting fixes.

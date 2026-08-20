@@ -241,6 +241,30 @@ final class Run {
 	private ?int $measured_revision = null;
 
 	/**
+	 * Everything else the last usage read took from the row, in that same read.
+	 *
+	 * The status, the grounded count, the floor, and the revision all belong to
+	 * one moment or to none: a price assembled from several statements is a price
+	 * for a row that never existed. Null until something reads.
+	 *
+	 * @since 1.8.0
+	 * @var array<string, int|string>|null
+	 */
+	private ?array $snapshot = null;
+
+	/**
+	 * Whether the last attempt to read what this run cost failed outright.
+	 *
+	 * A price worked out from a read that did not happen is not a price. Closing
+	 * on one would write a figure nothing stands behind and clear the row of any
+	 * suggestion that it needs looking at, so the close marks it instead.
+	 *
+	 * @since 1.8.0
+	 * @var bool
+	 */
+	private bool $measurement_failed = false;
+
+	/**
 	 * Wraps an existing row ID.
 	 *
 	 * @since 0.3.0
@@ -1043,18 +1067,20 @@ final class Run {
 		 * neither. Both are static statements with bound values, per D-26.
 		 */
 		$revision = $this->measured_revision ?? -1;
+		$unpriced = $this->measurement_failed ? 1 : 0;
 
 		$updated = array_key_exists( 'cost_cents', $data )
 			? $wpdb->query(
 				$wpdb->prepare(
 					'UPDATE %i SET status = %s, error = %s, cost_cents = %d, finished_at = %s,
-					cost_stale = IF( %d >= 0 AND usage_revision <> %d, 1, cost_stale )
+					cost_stale = IF( %d = 1 OR ( %d >= 0 AND usage_revision <> %d ), 1, cost_stale )
 					WHERE id = %d AND status = %s AND COALESCE( step, %s ) = %s',
 					Activation::table_name(),
 					(string) $data['status'],
 					(string) ( $data['error'] ?? '' ),
 					(int) $data['cost_cents'],
 					(string) $data['finished_at'],
+					$unpriced,
 					$revision,
 					$revision,
 					$this->id,
@@ -1066,11 +1092,12 @@ final class Run {
 			: $wpdb->query(
 				$wpdb->prepare(
 					'UPDATE %i SET status = %s, finished_at = %s,
-					cost_stale = IF( %d >= 0 AND usage_revision <> %d, 1, cost_stale )
+					cost_stale = IF( %d = 1 OR ( %d >= 0 AND usage_revision <> %d ), 1, cost_stale )
 					WHERE id = %d AND status = %s AND COALESCE( step, %s ) = %s',
 					Activation::table_name(),
 					(string) $data['status'],
 					(string) $data['finished_at'],
+					$unpriced,
 					$revision,
 					$revision,
 					$this->id,
@@ -1297,9 +1324,19 @@ final class Run {
 
 		global $wpdb;
 
+		/*
+		 * One statement for everything a price is made of, and that is the whole
+		 * point of it. The counters used to be read here and the revision a query
+		 * later, which reversed the guarantee the revision exists to give: a
+		 * charge landing between the two reads produced a price computed from the
+		 * old counters and stamped with the new revision, so the close compared
+		 * equal revisions and left the row unmarked. The comment that used to sit
+		 * here argued the ordering made that safe. It made it certain.
+		 */
 		$row = $wpdb->get_row(
 			$wpdb->prepare(
-				'SELECT text_model, image_model, input_tokens, output_tokens, image_count FROM %i WHERE id = %d',
+				'SELECT status, text_model, image_model, input_tokens, output_tokens, image_count,
+				grounded_calls, cost_floor, usage_revision FROM %i WHERE id = %d',
 				Activation::table_name(),
 				$this->id
 			),
@@ -1307,8 +1344,26 @@ final class Run {
 		);
 
 		if ( ! is_array( $row ) ) {
+			/*
+			 * The read failed, so this object cannot say what the run cost — and a
+			 * price it cannot vouch for must not be allowed to close the books on
+			 * the row. The flag makes any terminal transition mark the run for
+			 * repair, which is the same answer an interrupted reconciliation gets.
+			 */
+			$this->snapshot           = null;
+			$this->measurement_failed = true;
+
 			return;
 		}
+
+		$this->measurement_failed = false;
+
+		$this->snapshot = array(
+			'status'         => (string) $row['status'],
+			'grounded_calls' => (int) $row['grounded_calls'],
+			'cost_floor'     => (int) $row['cost_floor'],
+			'usage_revision' => (int) $row['usage_revision'],
+		);
 
 		/*
 		 * The larger of the two on every counter, because both can be right and
@@ -1952,8 +2007,7 @@ final class Run {
 				'status'     => $status,
 				'error'      => $reason,
 				'cost_cents' => $this->measured_cents( $pricing ),
-			),
-			array( '%s', '%s', '%d', '%s' )
+			)
 		);
 	}
 
@@ -1995,27 +2049,23 @@ final class Run {
 	public function reconcile_cost(): bool {
 		global $wpdb;
 
-		$row = $wpdb->get_row(
-			$wpdb->prepare(
-				'SELECT status, grounded_calls, cost_stale FROM %i WHERE id = %d',
-				Activation::table_name(),
-				$this->id
-			),
-			ARRAY_A
-		);
+		/*
+		 * One read for the price, its revision, and the status it applies to. This
+		 * used to take the status and the grounded count in a query of their own
+		 * and the rest in another, which is three moments pretending to be one.
+		 */
+		$cents = $this->measured_cents( null );
 
-		if ( ! is_array( $row ) ) {
+		if ( null === $this->snapshot ) {
 			// The row could not be read. Nothing is known, so nothing is claimed.
 			return false;
 		}
 
-		if ( self::STATUS_RUNNING === (string) $row['status'] ) {
+		if ( self::STATUS_RUNNING === (string) $this->snapshot['status'] ) {
 			// Settlement has not happened yet and will read the counters when it
 			// does. Nothing is owed, which is a different answer from "settled".
 			return true;
 		}
-
-		$cents = $this->measured_cents( null, (int) $row['grounded_calls'] );
 
 		$updated = $wpdb->query(
 			$wpdb->prepare(
@@ -2048,17 +2098,38 @@ final class Run {
 	 *
 	 * @since 1.6.0
 	 *
-	 * @param int $limit Most rows to return.
+	 * @param int                  $limit Most rows to return.
+	 * @param array<string, mixed> $scope Optional prompt_id, start, and end bounds.
 	 * @return int[]
 	 */
-	public static function unsettled( int $limit = 25 ): array {
+	public static function unsettled( int $limit = 25, array $scope = array() ): array {
 		global $wpdb;
+
+		/*
+		 * The scope exists so that repair and summation can be made to cover the
+		 * same rows. A cap is computed from one prompt or one month; a repair that
+		 * ranges over the whole table can fail on a row from another prompt or
+		 * another year and stop a run the cap would have allowed. Each filter is
+		 * disabled by its own sentinel rather than by assembling a WHERE clause,
+		 * for the reason Run::query() gives.
+		 */
+		$prompt_id = max( 0, (int) ( $scope['prompt_id'] ?? 0 ) );
+		$start     = (string) ( $scope['start'] ?? '1000-01-01 00:00:00' );
+		$end       = (string) ( $scope['end'] ?? '9999-12-31 23:59:59' );
 
 		$ids = $wpdb->get_col(
 			$wpdb->prepare(
-				'SELECT id FROM %i WHERE cost_stale = 1 AND status <> %s ORDER BY id ASC LIMIT %d',
+				'SELECT id FROM %i
+				WHERE cost_stale = 1 AND status <> %s
+					AND ( %d = 0 OR prompt_id = %d )
+					AND started_at >= %s AND started_at < %s
+				ORDER BY id ASC LIMIT %d',
 				Activation::table_name(),
 				self::STATUS_RUNNING,
+				$prompt_id,
+				$prompt_id,
+				$start,
+				$end,
 				max( 1, $limit )
 			)
 		);
@@ -2103,14 +2174,15 @@ final class Run {
 	 *
 	 * @since 1.7.0
 	 *
-	 * @param int $pages Most pages to work through.
+	 * @param array<string, mixed> $scope Optional prompt_id, start, and end bounds.
+	 * @param int                  $pages Most pages to work through.
 	 * @return bool True when nothing is outstanding by the end.
 	 */
-	public static function settle_all_unsettled( int $pages = self::REPAIR_PAGES ): bool {
+	public static function settle_all_unsettled( array $scope = array(), int $pages = self::REPAIR_PAGES ): bool {
 		$allowed = max( 1, $pages );
 
 		for ( $page = 0; $page < $allowed; $page++ ) {
-			$outstanding = self::unsettled( self::REPAIR_BATCH );
+			$outstanding = self::unsettled( self::REPAIR_BATCH, $scope );
 
 			if ( array() === $outstanding ) {
 				return true;
@@ -2134,7 +2206,7 @@ final class Run {
 			}
 		}
 
-		return array() === self::unsettled( 1 );
+		return array() === self::unsettled( 1, $scope );
 	}
 
 	/**
@@ -2154,9 +2226,9 @@ final class Run {
 	private function measured_cents( ?Pricing_Table $pricing, int $grounded_calls = 0 ): int {
 		$this->load_usage( true );
 
-		// Read after the counters, so a charge landing between the two makes the
-		// revision newer than the figure rather than older.
-		$this->measured_revision = (int) $this->column( 'usage_revision' );
+		// From the same read as the counters, so the revision certifies the price
+		// rather than merely accompanying it.
+		$this->measured_revision = (int) ( $this->snapshot['usage_revision'] ?? 0 );
 
 		/*
 		 * The floor is applied to every ending, including the one that measures
@@ -2164,13 +2236,22 @@ final class Run {
 		 * measure and may still have been charged, which is precisely the case the
 		 * floor exists for — see release_claim().
 		 */
-		$floor = $this->cost_floor();
+		$floor = max( (int) ( $this->snapshot['cost_floor'] ?? 0 ), $this->cost_floor() );
 
 		if ( ! $this->has_usage() ) {
 			return $floor;
 		}
 
 		$table = $pricing instanceof Pricing_Table ? $pricing : $this->pricing_table();
+
+		/*
+		 * The larger of what the caller believes and what the row says, for the
+		 * same reason the counters take the larger of the row and this object: a
+		 * caller can know about a request whose write the row refused, and the row
+		 * can know about one this object never saw. Neither can be trusted to be
+		 * the whole of it, and only one of the two errors costs money.
+		 */
+		$grounded = max( $grounded_calls, (int) ( $this->snapshot['grounded_calls'] ?? 0 ), $this->grounded_calls );
 
 		return max(
 			$floor,
@@ -2180,7 +2261,7 @@ final class Run {
 				(int) $this->usage['output_tokens'],
 				(string) $this->usage['image_model'],
 				(int) $this->usage['image_count'],
-				$grounded_calls
+				$grounded
 			)
 		);
 	}
@@ -2224,10 +2305,7 @@ final class Run {
 	 * @return Close_Result What the attempt did.
 	 */
 	public function succeed(): Close_Result {
-		return $this->close(
-			array( 'status' => self::STATUS_SUCCESS ),
-			array( '%s', '%s' )
-		);
+		return $this->close( array( 'status' => self::STATUS_SUCCESS ) );
 	}
 
 	/**
@@ -2246,12 +2324,11 @@ final class Run {
 	 * @since 1.1.1
 	 *
 	 * @param array<string, mixed> $data          Columns to write, without finished_at.
-	 * @param string[]             $formats       Formats, including one for finished_at.
 	 * @param string|null          $expected_step Close only while the run is at
 	 *                                            this position, or null for any.
 	 * @return Close_Result What the attempt did.
 	 */
-	private function close( array $data, array $formats, ?string $expected_step = null ): Close_Result {
+	private function close( array $data, ?string $expected_step = null ): Close_Result {
 		global $wpdb;
 
 		$data['finished_at'] = current_time( 'mysql', true );
@@ -2284,67 +2361,60 @@ final class Run {
 		}
 
 		/*
-		 * A multi-column WHERE rather than hand-built SQL: wpdb::update() takes
-		 * one, and it gives the conditional transition without a string this file
-		 * would have to assemble and prepare itself.
-		 *
 		 * Zero affected rows is unambiguous here, in a way it is not for an
 		 * ordinary update. A status transition always changes the status, so a
 		 * row that matched would always have been written; nothing written means
 		 * nothing matched, which means the run is no longer open.
+		 *
+		 * Written out rather than passed to wpdb::update(), which cannot compare
+		 * two columns — and comparing two columns is the whole of what the stale
+		 * decision is. This used to close through wpdb::update() and then mark the
+		 * row in a second statement whose result nothing read, so a process that
+		 * stopped in between, or a database that refused the second write, closed
+		 * a run and lost the only record that its price was short.
 		 */
-		$updated = $wpdb->update(
-			Activation::table_name(),
-			$data,
-			array(
-				'id'     => $this->id,
-				'status' => self::STATUS_RUNNING,
-			),
-			$formats,
-			array( '%d', '%s' )
-		);
+		$revision = $this->measured_revision ?? -1;
+		$unpriced = $this->measurement_failed ? 1 : 0;
+
+		$updated = array_key_exists( 'cost_cents', $data )
+			? $wpdb->query(
+				$wpdb->prepare(
+					'UPDATE %i SET status = %s, error = %s, cost_cents = %d, finished_at = %s,
+					cost_stale = IF( %d = 1 OR ( %d >= 0 AND usage_revision <> %d ), 1, cost_stale )
+					WHERE id = %d AND status = %s',
+					Activation::table_name(),
+					(string) $data['status'],
+					(string) ( $data['error'] ?? '' ),
+					(int) $data['cost_cents'],
+					(string) $data['finished_at'],
+					$unpriced,
+					$revision,
+					$revision,
+					$this->id,
+					self::STATUS_RUNNING
+				)
+			)
+			: $wpdb->query(
+				$wpdb->prepare(
+					'UPDATE %i SET status = %s, finished_at = %s,
+					cost_stale = IF( %d = 1 OR ( %d >= 0 AND usage_revision <> %d ), 1, cost_stale )
+					WHERE id = %d AND status = %s',
+					Activation::table_name(),
+					(string) $data['status'],
+					(string) $data['finished_at'],
+					$unpriced,
+					$revision,
+					$revision,
+					$this->id,
+					self::STATUS_RUNNING
+				)
+			);
 
 		if ( false === $updated ) {
 			return Close_Result::Write_Failed;
 		}
 
-		if ( (int) $updated > 0 ) {
-			$this->mark_if_usage_moved();
-		}
-
 		return $this->closed_by_me( (int) $updated > 0 ? Close_Result::Closed : Close_Result::Already_Closed );
-	}
-
-	/**
-	 * Flags a run this object has just closed if its counters moved while it did.
-	 *
-	 * The conditional close writes this into its own statement, which is better —
-	 * one statement cannot be interrupted half way. `wpdb::update()` cannot
-	 * express a comparison between two columns, so the unconditional close checks
-	 * afterwards instead. The window that leaves is between two statements of the
-	 * same request, and the marker it writes is the same marker a repair pass
-	 * looks for.
-	 *
-	 * @since 1.7.0
-	 *
-	 * @return void
-	 */
-	private function mark_if_usage_moved(): void {
-		global $wpdb;
-
-		if ( null === $this->measured_revision ) {
-			return;
-		}
-
-		$wpdb->query(
-			$wpdb->prepare(
-				'UPDATE %i SET cost_stale = 1 WHERE id = %d AND status <> %s AND usage_revision <> %d',
-				Activation::table_name(),
-				$this->id,
-				self::STATUS_RUNNING,
-				$this->measured_revision
-			)
-		);
 	}
 
 	/**
@@ -2391,7 +2461,6 @@ final class Run {
 				'error'      => $message,
 				'cost_cents' => $keep_estimate ? max( $measured, (int) $this->column( 'cost_cents' ) ) : $measured,
 			),
-			array( '%s', '%s', '%d', '%s' ),
 			$expected_step
 		);
 	}

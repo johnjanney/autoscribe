@@ -711,4 +711,189 @@ final class Interrupted_ChargeTest extends WP_UnitTestCase {
 			'The charge that caused the miss priced itself, so the row is right anyway.'
 		);
 	}
+	/**
+	 * A charge landing while the price is being read does not certify itself.
+	 *
+	 * The gap the revision was supposed to close and did not. The counters were
+	 * read in one statement and the revision in another, so a charge landing
+	 * between them produced a price computed from the old counters and stamped
+	 * with the new revision — and the close then compared equal revisions and left
+	 * the row unmarked. Both come from one read now.
+	 *
+	 * @since 1.8.0
+	 *
+	 * @return void
+	 */
+	public function test_a_charge_landing_inside_the_measurement_is_not_lost(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+
+		$run->merge_payload( array( 'rates' => ( new Pricing_Table() )->snapshot( array( 'gpt-image-2' ) ) ) );
+
+		$late      = Run::load( $run->id() );
+		$arrived   = false;
+		$interpose = static function ( $query ) use ( &$arrived, $late ) {
+			$sql = (string) $query;
+
+			// The read that prices the run, and the instant before it happens.
+			if ( ! $arrived && str_contains( $sql, 'SELECT status, text_model' ) ) {
+				$arrived = true;
+
+				$late->record_image( 'gpt-image-2' );
+			}
+
+			return $query;
+		};
+
+		add_filter( 'query', $interpose );
+
+		$closed = $run->fail( 'Given up on.' );
+
+		remove_filter( 'query', $interpose );
+
+		$this->assertTrue( $arrived, 'The interleaving must have happened for this to test anything.' );
+		$this->assertTrue( $closed->ended() );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame( 1, (int) $row['image_count'], 'The image was bought and recorded.' );
+
+		// Either the price already includes it, or the row says it does not yet.
+		// What must not happen is a closed row with the charge and neither.
+		if ( 0 === (int) $row['cost_stale'] ) {
+			$this->assertGreaterThan(
+				0,
+				(int) $row['cost_cents'],
+				'A run closed as settled must have priced the charge it holds.'
+			);
+
+			return;
+		}
+
+		$this->assertTrue( Run::settle_all_unsettled() );
+
+		$row = Run::latest_for_prompt( $prompt_id );
+
+		$this->assertSame( 0, (int) $row['cost_stale'] );
+		$this->assertGreaterThan( 0, (int) $row['cost_cents'] );
+		$this->assertSame(
+			(int) $row['cost_cents'],
+			( new Budget_Guard() )->month_to_date_cents( $prompt_id ),
+			'The cap reads what the run really cost.'
+		);
+	}
+
+	/**
+	 * A price that could not be read does not close the books.
+	 *
+	 * A figure worked out from a read that failed is not a figure. Closing on one
+	 * would write something nothing stands behind and clear the row of any
+	 * suggestion that it needs looking at.
+	 *
+	 * @since 1.8.0
+	 *
+	 * @return void
+	 */
+	public function test_a_close_whose_measurement_failed_marks_the_run(): void {
+		$prompt_id = $this->create_prompt();
+		$run       = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $run );
+		$this->assertTrue( $run->record_image( 'gpt-image-2' ) );
+
+		global $wpdb;
+
+		$break = static function ( $query ) {
+			$sql = (string) $query;
+
+			return str_contains( $sql, 'SELECT status, text_model' )
+				? 'SELECT * FROM autoscribe_no_such_table'
+				: $query;
+		};
+
+		add_filter( 'query', $break );
+		$wpdb->suppress_errors( true );
+
+		$closed = $run->fail( 'Given up on.' );
+
+		$wpdb->suppress_errors( false );
+		remove_filter( 'query', $break );
+
+		$this->assertTrue( $closed->ended() );
+		$this->assertSame(
+			1,
+			(int) Run::latest_for_prompt( $prompt_id )['cost_stale'],
+			'A run closed on a price nothing could read says so.'
+		);
+	}
+
+	/**
+	 * An uncapped site is not stopped by a row no cap would have summed.
+	 *
+	 * Failing closed is right when a cap cannot be worked out. There is no cap
+	 * here, so there is no total to be wrong about — and one damaged historical
+	 * row must not stop a site that never asked for a limit.
+	 *
+	 * @since 1.8.0
+	 *
+	 * @return void
+	 */
+	public function test_an_uncapped_run_is_not_blocked_by_an_unpriced_row(): void {
+		$prompt_id = $this->create_prompt();
+		$stuck     = Run::start( $prompt_id );
+
+		$this->assertNotWPError( $stuck );
+		$this->assertTrue( $stuck->fail( 'Given up on.' )->ended() );
+
+		$this->with_refused(
+			'SET cost_cents = GREATEST',
+			fn() => $stuck->record_image( 'gpt-image-2' )
+		);
+
+		$this->assertNotSame( array(), Run::unsettled() );
+
+		delete_option( Budget_Guard::GLOBAL_CAP_OPTION );
+
+		$verdict = $this->with_refused(
+			'SET cost_cents = GREATEST',
+			fn() => ( new Budget_Guard() )->check( Prompt::load( $prompt_id ), 1 )
+		);
+
+		$this->assertTrue( $verdict, 'No cap means no reason to refuse.' );
+	}
+
+	/**
+	 * A per-prompt cap is not blocked by another prompt's unpriced row.
+	 *
+	 * @since 1.8.0
+	 *
+	 * @return void
+	 */
+	public function test_a_prompt_cap_is_not_blocked_by_another_prompt(): void {
+		$other  = $this->create_prompt();
+		$stuck  = Run::start( $other );
+		$capped = $this->create_prompt( array( 'monthly_budget_cents' => 100000 ) );
+
+		$this->assertNotWPError( $stuck );
+		$this->assertTrue( $stuck->fail( 'Given up on.' )->ended() );
+
+		$this->with_refused(
+			'SET cost_cents = GREATEST',
+			fn() => $stuck->record_image( 'gpt-image-2' )
+		);
+
+		$this->assertNotSame( array(), Run::unsettled(), 'The other prompt owes a price.' );
+
+		$verdict = $this->with_refused(
+			'SET cost_cents = GREATEST',
+			fn() => ( new Budget_Guard() )->check( Prompt::load( $capped ), 1 )
+		);
+
+		$this->assertTrue(
+			$verdict,
+			'A row this cap does not sum has no business answering for it.'
+		);
+	}
 }

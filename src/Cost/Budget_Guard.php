@@ -242,19 +242,44 @@ final class Budget_Guard {
 	 * @return true|WP_Error True when the run may proceed.
 	 */
 	public function check( Prompt $prompt, int $projected_cents ): bool|WP_Error {
+		$prompt_cap = $prompt->monthly_budget_cents();
+		$global_cap = $this->global_cap_cents();
+
+		if ( $prompt_cap <= 0 && $global_cap <= 0 ) {
+			/*
+			 * No cap is enabled, so there is no total to be wrong about and nothing
+			 * to refuse. Repair is not skipped so much as left to the sweep: making
+			 * generation conditional on it here would let one damaged row — from
+			 * another prompt, or another year — stop a site that has no cap at all.
+			 */
+			return true;
+		}
+
 		/*
-		 * Price everything a closed run recorded and did not get costed, before
-		 * summing anything. Late usage is written by one statement and priced by
-		 * another, and a run whose worker died between the two carries a flag
-		 * saying it owes a price. The caller holds the spend lock, so a total
-		 * taken after this is a total nothing is known to be missing from.
+		 * Price everything the cap about to be checked will sum, before summing
+		 * it. Late usage is written by one statement and priced by another, and a
+		 * run whose worker died between the two carries a flag saying it owes a
+		 * price. The caller holds the spend lock, so a total taken after this is a
+		 * total nothing is known to be missing from.
 		 *
 		 * "Everything" rather than a batch, and the difference is the whole point:
 		 * a single batch left the twenty-sixth of twenty-six unpriced rows out of
 		 * the sum, and the guard authorised a run against a figure the database
 		 * itself said was short.
+		 *
+		 * The scope is the cap's own scope, and that matters as much as the
+		 * draining does. A per-prompt cap sums one prompt's rows for one month, so
+		 * a stale row belonging to a different prompt is not part of that question
+		 * and must not be allowed to answer it.
 		 */
-		if ( ! Run::settle_all_unsettled() ) {
+		$month = $this->month_bounds_utc();
+		$scope = array(
+			'prompt_id' => $global_cap > 0 ? 0 : $prompt->id(),
+			'start'     => $month['start'],
+			'end'       => $month['end'],
+		);
+
+		if ( ! Run::settle_all_unsettled( $scope ) ) {
 			/*
 			 * The books cannot be closed, so the cap cannot be enforced, so nothing
 			 * may spend. Refusing is the only answer that keeps the cap meaning
@@ -264,11 +289,9 @@ final class Budget_Guard {
 			 */
 			return new WP_Error(
 				'autoscribe_accounting_unavailable',
-				__( 'The spend of one or more finished runs could not be worked out, so the monthly total cannot be trusted and this run was stopped before spending anything. Check that the AutoScribe runs table is writable; the run log lists what is outstanding.', 'autoscribe' )
+				__( 'The spend of one or more finished runs could not be worked out, so the monthly total cannot be trusted and this run was stopped before spending anything. Check that the AutoScribe runs table is writable. The Run Log marks the runs concerned as "Accounting pending".', 'autoscribe' )
 			);
 		}
-
-		$prompt_cap = $prompt->monthly_budget_cents();
 
 		if ( $prompt_cap > 0 ) {
 			$prompt_total = $this->month_to_date_cents( $prompt->id() );
@@ -277,8 +300,6 @@ final class Budget_Guard {
 				return $this->over_budget( $prompt_total, $prompt_cap, true );
 			}
 		}
-
-		$global_cap = $this->global_cap_cents();
 
 		if ( $global_cap > 0 ) {
 			$global_total = $this->month_to_date_cents();

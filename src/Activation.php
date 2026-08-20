@@ -38,7 +38,7 @@ final class Activation {
 	 * @since 0.1.0
 	 * @var string
 	 */
-	public const DB_VERSION = '7';
+	public const DB_VERSION = '8';
 
 	/**
 	 * How many rows one pass of a data migration reads at a time.
@@ -284,9 +284,36 @@ final class Activation {
 		 * could not make, leaves the version behind so the next request carries on
 		 * — repeating it is safe, because a migrated row no longer matches.
 		 */
-		if ( self::migrate_grounded_calls() ) {
+		if ( self::migrate_grounded_calls() && self::has_column( 'usage_revision' ) ) {
 			update_option( self::DB_VERSION_OPTION, self::DB_VERSION );
 		}
+	}
+
+	/**
+	 * Whether the runs table really has a column this build depends on.
+	 *
+	 * WordPress reports nothing useful about what dbDelta() did, and a schema
+	 * version recorded for a schema change that did not happen is a site that will
+	 * never try again. Asking the table is one query at upgrade time.
+	 *
+	 * @since 1.8.0
+	 *
+	 * @param string $column Column to look for.
+	 * @return bool
+	 */
+	private static function has_column( string $column ): bool {
+		global $wpdb;
+
+		$found = $wpdb->get_var(
+			$wpdb->prepare(
+				'SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+				WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s',
+				self::table_name(),
+				$column
+			)
+		);
+
+		return null !== $found;
 	}
 
 	/**
@@ -309,6 +336,10 @@ final class Activation {
 	 * omitted has to be added now; GREATEST means repricing a row that owes
 	 * nothing changes nothing.
 	 *
+	 * The write raises usage_revision like any other change to a cost-bearing
+	 * counter, so a run being closed while this migration touches it is marked
+	 * rather than quietly priced without the surcharge.
+	 *
 	 * @since 1.6.0
 	 *
 	 * @return bool True when nothing carrying the legacy key is left.
@@ -316,45 +347,67 @@ final class Activation {
 	private static function migrate_grounded_calls(): bool {
 		global $wpdb;
 
+		/*
+		 * An ID cursor rather than a repeated LIMIT over the same predicate. The
+		 * candidate query matches a substring of the JSON, so it also matches a row
+		 * whose payload merely contains those characters — a title, a source URL —
+		 * and such a row has nothing to move. Re-reading from the start meant the
+		 * same one came back on every page and on every later request, because the
+		 * schema version is only recorded when the migration finishes: one odd
+		 * payload could put a scan and a dbDelta() on every front-end request the
+		 * site served. The cursor moves past every row it has looked at, whether or
+		 * not there was anything in it.
+		 */
+		$after = 0;
+
 		for ( $page = 0; $page < self::MIGRATION_PAGES; $page++ ) {
 			$rows = $wpdb->get_results(
 				$wpdb->prepare(
-					'SELECT id, status, payload FROM %i WHERE payload LIKE %s LIMIT %d',
+					'SELECT id, status, payload FROM %i WHERE id > %d AND payload LIKE %s ORDER BY id ASC LIMIT %d',
 					self::table_name(),
+					$after,
 					'%grounded_calls%',
 					self::MIGRATION_BATCH
 				),
 				ARRAY_A
 			);
 
+			/*
+			 * An empty result and a failed query look identical here, and they mean
+			 * opposite things: one says the work is done and the other says nothing
+			 * is known. Reading the error is the only way to tell, and treating a
+			 * failure as completion is how an install records a migration it never
+			 * performed and never tries again.
+			 */
+			if ( '' !== $wpdb->last_error ) {
+				return false;
+			}
+
 			if ( ! is_array( $rows ) || array() === $rows ) {
 				return true;
 			}
 
-			$moved = 0;
-
 			foreach ( $rows as $row ) {
-				if ( self::move_grounded_calls( $row ) ) {
-					++$moved;
-				}
-			}
+				$after = max( $after, (int) $row['id'] );
 
-			if ( 0 === $moved ) {
-				// Nothing moved, so the next page would read the same rows and fail
-				// the same way. Leaving the schema version behind means the next
-				// request tries again rather than recording a migration that did
-				// not happen.
-				return false;
+				if ( ! self::move_grounded_calls( $row ) ) {
+					// A write that would not land. The next request starts again
+					// from the beginning and meets it, or not, as the case may be.
+					return false;
+				}
 			}
 		}
 
-		return array() === (array) $wpdb->get_col(
+		$remaining = $wpdb->get_col(
 			$wpdb->prepare(
-				'SELECT id FROM %i WHERE payload LIKE %s LIMIT 1',
+				'SELECT id FROM %i WHERE id > %d AND payload LIKE %s LIMIT 1',
 				self::table_name(),
+				$after,
 				'%grounded_calls%'
 			)
 		);
+
+		return '' === $wpdb->last_error && array() === (array) $remaining;
 	}
 
 	/**
@@ -372,8 +425,14 @@ final class Activation {
 		$decoded = json_decode( $payload, true );
 
 		if ( ! is_array( $decoded ) || ! array_key_exists( 'grounded_calls', $decoded ) ) {
-			// The match was on a substring of the JSON, so it can be something
-			// else entirely — a topic key, a source URL. Nothing to move.
+			/*
+			 * The match was on a substring of the JSON, so it can be something else
+			 * entirely — a topic key, a source URL — or the payload can be
+			 * unreadable. Either way there is no key to move, which is a row
+			 * successfully dealt with rather than a row left behind. Completion is
+			 * decided by the decoded keys and the cursor, not by whether the raw
+			 * document still contains those characters.
+			 */
 			return true;
 		}
 
@@ -384,6 +443,7 @@ final class Activation {
 		$updated = $wpdb->query(
 			$wpdb->prepare(
 				'UPDATE %i SET grounded_calls = grounded_calls + %d, payload = %s,
+				usage_revision = usage_revision + 1,
 				cost_stale = IF( status <> %s AND %d > 0, 1, cost_stale )
 				WHERE id = %d AND payload = %s',
 				self::table_name(),

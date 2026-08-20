@@ -87,7 +87,72 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-08-19
+## [1.8.0] - 2026-08-20
+
+A tenth external review, against 1.7.0. Four findings, all confirmed and all
+fixed.
+
+The first of them is the invariant from 1.7.0 not actually holding: a price and
+the revision that certifies it were read by two separate statements, so a charge
+landing between them got a price computed without it and a revision that said the
+price was current. The comment in that code argued the ordering made it safe. It
+made it certain.
+
+MINOR rather than PATCH: the runs table migration changes shape again, the budget
+guard's refusal is narrowed to the cap it protects, and the Run Log shows a new
+state.
+
+### Fixed
+
+- **A charge landing inside the measurement could certify itself.** The counters
+  were read in one query and `usage_revision` in another. Everything a price is
+  made of — status, counters, grounded count, floor, and revision — now comes
+  from a single read, so the revision belongs to the figure rather than merely
+  accompanying it.
+
+- **A close whose measurement failed reported a settled run.** A price worked out
+  from a read that did not happen is not a price. Both terminal statements now
+  mark the row when the measurement could not be taken, so a repair pass prices
+  it rather than the row being closed on a figure nothing stands behind.
+
+- **The unclaimed close marked the row in a second, unchecked statement.** It is
+  one prepared statement now, like the claimed close, so a process stopping
+  between the two can no longer close a run and lose the record that its price
+  was short.
+
+- **The grounded-call migration did not raise the revision.** It changes a
+  counter that costs money, so a run being closed while it ran could be priced
+  without the surcharge and closed as settled.
+
+- **The migration could report both false success and false failure.** A failed
+  read looked like an empty table, so an install could record a completed
+  migration it never performed; and a payload that merely contained the text
+  `grounded_calls` was re-read on every page and every later request, putting a
+  scan and a `dbDelta()` pass on every request the site served. It pages by ID
+  cursor now, treats a query error as a failure, decides completion from decoded
+  keys, and confirms the new column exists before recording the version.
+
+- **One irrelevant unpriced row could stop every future run.** The budget guard
+  repaired the whole table before reading whether any cap was enabled, so a
+  damaged row from another prompt or an earlier month could refuse a run that no
+  cap applied to. It now reads the caps first, returns early when none is set,
+  and scopes repair to exactly the rows the enabled cap sums.
+
+- **The Run Log shows "Accounting pending"** on a run whose recorded charge has
+  not been priced yet, which is what the refusal message says to look for.
+
+- **The 1.7.0 changelog entry was dated a day early**, and its published archive
+  was built before that entry's final edit. The runtime code in the published
+  1.7.0 archive matches its tag; only `CHANGELOG.md` differs. The build now
+  refuses to run against a working copy with uncommitted changes to packaged
+  files, so an archive cannot be built from a tree that is not the one committed.
+
+### Added
+
+- A `usage_revision` column on the runs table, migrated by the existing schema
+  version check.
+
+## [1.7.0] - 2026-08-20
 
 A ninth external review, against 1.6.0. Four findings, all confirmed and all
 fixed.

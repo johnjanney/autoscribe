@@ -1,5 +1,372 @@
 # AutoScribe code quality and security audit
 
+## Fresh verification review — version 1.7.0
+
+**Review date:** 20 August 2026 (America/Chicago)
+
+**Reviewed revision:** `1ec6794a5793bb5d8a476da87b158e964c1330b1` on
+`main`, tag `v1.7.0`
+
+**Change range:** `7fea053..1ec6794`
+
+**Response reviewed:** “Response to the ninth Codex review” in
+[`CODEX-REVIEW-RESPONSE.md`](CODEX-REVIEW-RESPONSE.md#L2280)
+
+**Release reviewed:** [AutoScribe 1.7.0 on GitHub](https://github.com/johnjanney/autoscribe/releases/tag/v1.7.0)
+
+**Current result:** **Conditional pass. Version 1.7.0 adds the correct revision
+concept, drains marked rows before a capped spend, and makes the normal grounded
+count move additive. However, the code does not read a price and its revision
+from one database snapshot. A concurrent charge can still receive a current
+revision and an old price, with `cost_stale = 0`. Keep a provider-side spending
+limit enabled.**
+
+**Current quality score:** **8.1/10**
+
+### Executive result
+
+The response is correct that every ordinary token, image, and grounded-call
+write now increments `usage_revision`. Claimed terminal transitions compare the
+stored revision in the same SQL statement. The budget check drains more than one
+repair batch and returns `autoscribe_accounting_unavailable` when a marked row
+cannot be repaired. The normal version-1.6 grounded count is added to the column
+and removed from the payload in one conditional write. The hard five-minute
+repair statement is gone.
+
+The central accounting claim is still not true. `measured_cents()` first reads
+the counters and then reads `usage_revision` in a second query. If another worker
+records a charge between those reads, the price uses the old counters but names
+the new revision. The terminal comparison then sees equal revisions and does not
+mark the row. A focused diagnostic reproduced a failed run with one recorded
+image, zero cost, and `cost_stale = 0`. See F170-01.
+
+The grounded-call migration has two completion errors. A database read error is
+handled as an empty result, so the code records schema version 7 although the
+legacy key remains. In the opposite direction, a payload that only contains the
+text `grounded_calls` is reported as moved without being changed. The next page
+reads the same row again. The migration then leaves the schema version at 6 and
+repeats its work on later `init` requests. Focused diagnostics reproduced both
+results. See F170-02.
+
+The new accounting refusal is also wider than the cap query it protects.
+`Budget_Guard::check()` repairs every stale row in the full table before it reads
+whether either cap is enabled. One unrelated or old row can therefore stop an
+uncapped prompt. The error tells the operator that the run log lists outstanding
+rows, but the run log does not display `cost_stale`. See F170-03.
+
+The clean published archive is byte-identical to the local archive and contains
+no nested release archive. However, it was not built from the final tagged tree:
+its `CHANGELOG.md` omits the packaging-fix entry that is in commit `1ec6794`.
+The changelog also dates 1.7.0 as 19 August, while the release commit, tag, and
+published release are dated 20 August in America/Chicago. See F170-04.
+
+I found no verified unauthenticated code execution, SQL injection, stored XSS,
+capability bypass, CSRF defect, secret disclosure, or provider-URL SSRF in this
+revision. The new findings concern accounting integrity, migration reliability,
+availability, performance, and release accuracy.
+
+### Verification results
+
+| Check | Result | Evidence |
+|---|---:|---|
+| Revision and worktree | Pass | `HEAD`, `main`, `origin/main`, and `v1.7.0^{}` resolve to `1ec6794`. The worktree was clean before this review file changed. |
+| Ninth response and changelog | Pass | The response and the 1.7.0 section are present ([response](CODEX-REVIEW-RESPONSE.md#L2280), [changelog](CHANGELOG.md#L90)). |
+| Diff integrity | Pass | `git diff --check 7fea053..1ec6794` reports no whitespace error. |
+| Composer manifest | Pass | `composer validate --strict --no-check-publish` reports a valid manifest ([manifest](composer.json)). |
+| Dependency advisories | Pass | `composer audit --locked` reports no known advisory ([lock file](composer.lock)). |
+| WordPress coding standards | Pass | PHPCS checked all 125 PHP files and exited zero with no error or warning ([rules](phpcs.xml.dist)). |
+| Local PHPUnit | Pass | The unchanged release suite passed 375 tests and 1,637 assertions in the WordPress test container ([configuration](phpunit.xml.dist), [bootstrap](tests/bootstrap.php)). |
+| Tagged release CI | Pass | PHP 8.1, 8.2, and 8.3 passed for `1ec6794` in [CI run 32364775704](https://github.com/johnjanney/autoscribe/actions/runs/32364775704). |
+| Code scanning | Pass | CodeQL `Analyze (actions)` passed for `1ec6794` in [run 32364774283](https://github.com/johnjanney/autoscribe/actions/runs/32364774283). |
+| Release state | Pass | GitHub reports a published release that is not a draft or prerelease. The annotated tag resolves to `1ec6794` ([release](https://github.com/johnjanney/autoscribe/releases/tag/v1.7.0)). |
+| Release asset bytes | Pass | The uploaded and local archives are both 501,581 bytes and byte-identical. Both have SHA-256 `51caf76a68d496fe3398588ec20a570a78e56381601045f329498ba1db738f13`. `unzip -t` reports no error ([asset](https://github.com/johnjanney/autoscribe/releases/download/v1.7.0/autoscribe-1.7.0.zip)). |
+| Packaged runtime files | Pass | The packaged `Run.php`, `Budget_Guard.php`, `Activation.php`, `README.md`, and `autoscribe.php` hashes match the reviewed tree. No nested zip, tarball, 7z, or RAR file was found. |
+| Packaged changelog | **Fail** | The archive's `CHANGELOG.md` hash is `4fdf7d2f…2f7`; the tagged file is `ea5224e…e4b8`. A direct diff shows that the archive omits the 1.7.0 packaging-fix entry at [CHANGELOG.md](CHANGELOG.md#L143). See F170-04. |
+| Counter/revision snapshot probe | **Fail** | A focused query interleaving recorded an image after the counter query and before the revision query. `fail()` stored a zero-cent price, closed the row, and left `cost_stale = 0`. The temporary diagnostic was removed. See F170-01. |
+| Migration false-positive probe | **Fail** | A focused upgrade test stored `grounded_calls` only as text inside `payload.topic.title`. After `maybe_upgrade()`, the schema option was still `6` instead of `7`. The temporary diagnostic was removed. See F170-02. |
+| Migration read-error probe | **Fail** | A focused test made the migration candidate `SELECT` fail while a real legacy key remained. `maybe_upgrade()` still changed the schema option from `6` to `7`. The temporary diagnostic was removed. See F170-02. |
+| Live provider call | Not run | No funded key was supplied. No prompt, site content, or secret was sent to a provider. |
+| Real Action Scheduler dispatch | Not covered | **Not found in documents:** an automated test that lets Action Scheduler dispatch a complete chain ([documented limit](README.md#L252)). |
+| Two-connection concurrency | Not covered | The concurrency tests simulate interleavings in one process. **Not found in documents:** a test that uses two independent database connections ([response](CODEX-REVIEW-RESPONSE.md#L2410)). |
+| Non-MySQL database behavior | Not covered | **Not found in documents:** CI coverage for MariaDB or another database engine ([documented limit](README.md#L255)). |
+
+### Ninth-response verdict by prior finding
+
+| Prior finding | Verification verdict | Version 1.7.0 status |
+|---|---|---|
+| F160-01 — usage escapes accounting during the terminal transition | **Partially fixed** | Ordinary money writes raise a revision, and claimed closes compare it atomically. The measurement does not read counters and revision atomically, the migration money write does not raise the revision, and the unclaimed close writes its marker in a later unchecked statement. See F170-01. |
+| F160-02 — budget preflight sums while known stale cost remains | **Fixed for rows that are marked and repairable; scope is too wide** | The guard drains more than one batch and refuses on repair failure. It repairs the full historical table even when no cap is enabled or only one prompt is relevant. It does not show the blocking marker to the operator. See F170-03. |
+| F160-03 — migration does not add existing version-1.5 grounded calls | **Normal row fixed; completion contract not fixed** | The move is additive, conditional, and repeatable for a valid candidate. A read error can record completion with data left behind, while a false-positive candidate can prevent completion for ever. See F170-02. |
+| F160-04 — README promises a deadline the queue cannot keep | **Fixed** | The README now describes the sweep as best effort and gives the correct Scheduled Actions and WP-CLI recovery route. |
+| Self-found nested archive defect | **The reported zip case is fixed; release verification is incomplete** | `.distignore` excludes `*.zip`, the staged-tree check rejects zip and tar.gz files, and the published archive contains no nested archive. The published changelog still differs from the tagged source. See F170-04. |
+
+## Version 1.7.0 findings
+
+### F170-01 — Medium — A new revision can certify an old usage snapshot
+
+**Category:** Accounting integrity, concurrency, recovery
+
+**Verified facts**
+
+- `load_usage( true )` reads the text model, image model, token counters, and
+  image counter in one query ([usage read](src/Pipeline/Run.php#L1290)).
+- `measured_cents()` reads `usage_revision` in a separate query after that usage
+  query ([measurement](src/Pipeline/Run.php#L2154)).
+- `reconcile_cost()` also reads `grounded_calls` before it calls
+  `measured_cents()`, so its price can combine values from three different
+  database statements ([reconciliation](src/Pipeline/Run.php#L1995)).
+- A charge that lands after the counter query but before the revision query makes
+  the revision newer than the counters in memory. The code then assigns that new
+  revision to the old price. The claimed close compares equal revisions and does
+  not set `cost_stale` ([claimed close](src/Pipeline/Run.php#L1045)).
+- A focused diagnostic put one image write at exactly this boundary. The image
+  counter and revision both became one. The price remained zero. `fail()` closed
+  the row with `cost_stale = 0`, so `Run::unsettled()` cannot find it.
+- The new supplied interleaving test puts the charge immediately before the
+  terminal statement, which is after the revision query. It does not test the
+  gap between the counter and revision queries
+  ([supplied test](tests/Pipeline/Interrupted_ChargeTest.php#L498)).
+- The grounded-call migration increases a cost-bearing counter without increasing
+  `usage_revision` ([migration write](src/Activation.php#L384)). A concurrent
+  close cannot detect that move through the new invariant.
+- The unclaimed close performs its revision check in a second SQL statement and
+  ignores that statement's result ([close](src/Pipeline/Run.php#L2296),
+  [post-close marker](src/Pipeline/Run.php#L2332)). A process stop or database
+  error after the close can therefore lose the marker. The response acknowledges
+  the two-statement window but calls the overall finding fixed
+  ([response](CODEX-REVIEW-RESPONSE.md#L2323)).
+
+**Inference and impact**
+
+Two workers on one run can produce the reproduced order. One worker measures the
+run while a slow worker records provider usage. The run can then become terminal
+with recorded usage that is absent from `cost_cents` and from the monthly total.
+No repair selects the row because the marker is clear. The provider-side spending
+limit remains the only hard ceiling.
+
+**Recommended fix**
+
+- Read every field used for pricing and `usage_revision` in one `SELECT`. This
+  includes `grounded_calls`. Return the cents and revision as one measurement
+  value. Do not read the revision after a separate counter snapshot.
+- Increment `usage_revision` in every statement that changes a cost-bearing
+  counter, including the grounded-call data migration.
+- Put the revision comparison in every terminal SQL statement. Replace the
+  unclaimed `wpdb::update()` plus `mark_if_usage_moved()` pair with one prepared
+  terminal statement, as the claimed path already does.
+- Check every database result. Do not report a durable close if its required
+  stale-state decision failed.
+- Add focused tests for a token, image, and grounded call immediately before the
+  snapshot, between any separate snapshot reads, and after the snapshot. Cover
+  claimed and unclaimed closes. Also make the stale-marker write fail and assert
+  that the method does not report a durable unmarked close.
+
+### F170-02 — Medium — The migration can report both false success and false failure
+
+**Category:** Schema migration, accounting, reliability, performance
+
+**Verified facts**
+
+- The migration candidate query uses `payload LIKE '%grounded_calls%'`. It can
+  match a title, source URL, or other JSON value that contains those characters
+  without containing the legacy key ([candidate query](src/Activation.php#L319)).
+- `move_grounded_calls()` returns true for such a false positive but does not
+  change the row ([decoder branch](src/Activation.php#L368)). The caller increments
+  `$moved`, reads the same unchanged candidate on the next loop, and can repeat
+  this for all 50 pages.
+- After the page limit, the final `LIKE` query finds the same false positive and
+  returns false. `create_tables()` then leaves the schema option behind
+  ([completion check](src/Activation.php#L351), [version write](src/Activation.php#L281)).
+- `maybe_upgrade()` runs on every `init` until that option reaches version 7
+  ([registration](src/Plugin.php#L146), [gate](src/Activation.php#L176)). Each
+  request can therefore run `dbDelta()` and the migration loop again.
+- A focused diagnostic with `payload.topic.title = "grounded_calls"` left the
+  schema version at 6. The row contained no legacy count to move.
+- The candidate read treats both a database error and an empty result as success
+  ([read branch](src/Activation.php#L330)). WordPress exposes the query error
+  through `wpdb`; callers must inspect it because an empty result alone does not
+  prove success ([official `wpdb::get_results()` reference](https://developer.wordpress.org/reference/classes/wpdb/get_results/)).
+- The final `get_col()` result is cast to an array. A query error can also become
+  an empty array and be reported as completion ([final check](src/Activation.php#L351)).
+- A focused diagnostic made the candidate `SELECT` fail while a real legacy key
+  remained. The code still changed the schema option from 6 to 7. That install
+  will not retry the lost count.
+- The supplied tests cover a normal additive move, a closed row, one repeated
+  successful move, and preservation of other payload keys. **Not found in
+  documents:** a read-error test, a false-positive substring test, a page-limit
+  test, or a failed `dbDelta()` test
+  ([migration tests](tests/Pipeline/Schema_UpgradeTest.php#L155)).
+
+**Inference and impact**
+
+The false-success path can leave an old grounded surcharge out of accounting for
+ever. The false-failure path can add up to 50 repeated candidate reads and a
+`dbDelta()` pass to later requests. A single unusual payload can keep that cost
+on every front-end and admin request because the upgrade hook runs on `init`.
+
+**Recommended fix**
+
+- Treat `$wpdb->last_error !== ''` as a failed read. Return false and do not
+  advance the schema version. Apply this rule to the page query and the final
+  completion query.
+- Page with a monotonic ID cursor. Advance the cursor for every inspected row,
+  including a false-positive `LIKE` match. Count only a successful conditional
+  update as a moved row.
+- Determine completion from decoded top-level keys, not from whether the raw JSON
+  contains a substring. A compatible alternative is a database JSON predicate,
+  but it must be tested on every supported MySQL and MariaDB version.
+- Verify that `dbDelta()` created `usage_revision` before recording schema version
+  7 or its successor.
+- Bump the internal database version again when this fix ships. An install that
+  already recorded version 7 after a read error otherwise has no reason to retry.
+- Add tests for a false-positive value, invalid JSON, a failed read, a failed
+  conditional update, more than one page, the page limit, and concurrent upgrade
+  requests.
+
+### F170-03 — Medium — One irrelevant stale row can stop all future runs
+
+**Category:** Availability, performance, operability, purpose
+
+**Verified facts**
+
+- `Budget_Guard::check()` calls `Run::settle_all_unsettled()` before it reads the
+  prompt cap or the global cap ([guard](src/Cost/Budget_Guard.php#L244)).
+- `Run::unsettled()` has no prompt or month filter. It reads the oldest marked
+  rows from the complete table ([selection](src/Pipeline/Run.php#L2054)).
+- One failed page makes `settle_all_unsettled()` return false, and the guard
+  returns `autoscribe_accounting_unavailable` before it can learn that both caps
+  are zero ([drain](src/Pipeline/Run.php#L2109), [refusal](src/Cost/Budget_Guard.php#L257)).
+- The same global repair runs when only a per-prompt cap is enabled. A stale row
+  from another prompt or an earlier month is not part of that cap query but can
+  still block it.
+- The error says that “the run log lists what is outstanding”
+  ([message](src/Cost/Budget_Guard.php#L265)). The run-log columns include status,
+  cost, and error, but no `cost_stale` or accounting state
+  ([columns](src/Admin/Runs_List_Table.php#L73)). No other admin code displays
+  `cost_stale`.
+- The supplied refusal test enables a global cap before it makes repair fail. It
+  does not cover the uncapped or unrelated-prompt case
+  ([test](tests/Pipeline/Interrupted_ChargeTest.php#L617)).
+
+**Inference and impact**
+
+Failing closed is correct when a relevant enabled cap cannot be calculated. It is
+not necessary when no cap is enabled. The current global scope turns one damaged
+historical row into a site-wide generation outage. The operator receives no UI
+field that identifies the blocking row, despite the recovery message saying that
+the run log does so.
+
+**Recommended fix**
+
+- Read both cap values first. If both are zero, do not make accounting repair a
+  condition for generation. The background sweep can still repair marked rows.
+- Scope mandatory repair to the data used by the enabled cap: current prompt and
+  current site month for a prompt cap, and current site month for a global cap.
+- Add prompt, start-time, and maximum-ID filters to the stale-row query so repair
+  and summation use the same set.
+- Show an “Accounting pending” state in the run log, with the run ID and a retry
+  action or precise WP-CLI command. Correct the error message until that UI exists.
+- Add tests for no caps, prompt-only cap with an unrelated stale row, an old-month
+  stale row, a global cap, and a relevant repair failure.
+
+### F170-04 — Low — The release archive and changelog do not match the tag
+
+**Category:** Release integrity, documentation, quality control
+
+**Verified facts**
+
+- The published asset and local archive are byte-identical, have the reported
+  size of 501,581 bytes, and have the full SHA-256
+  `51caf76a68d496fe3398588ec20a570a78e56381601045f329498ba1db738f13`
+  ([release asset](https://github.com/johnjanney/autoscribe/releases/download/v1.7.0/autoscribe-1.7.0.zip)).
+- The archive is structurally valid and contains no nested release archive. The
+  new `*.zip` exclusion fixed the exact packaging defect described in the
+  response ([distribution exclusions](.distignore#L22), [staging check](bin/build.sh#L57)).
+- The archive's changed runtime files and README match tag `v1.7.0` by SHA-256.
+  Its changelog does not. The archive omits the final bullet that says the nested
+  archive defect was fixed ([tagged changelog](CHANGELOG.md#L143)).
+- The changelog dates 1.7.0 as 19 August 2026
+  ([entry](CHANGELOG.md#L90)). Git records the release commit at 20 August 2026,
+  06:37:44 CDT. GitHub records the tag at 11:42:59 UTC and the published release
+  at 11:43:02 UTC, which is 06:43 CDT
+  ([published release](https://github.com/johnjanney/autoscribe/releases/tag/v1.7.0)).
+- The build script checks only the staged tree. It does not compare the completed
+  archive with the tagged source or require a clean committed revision
+  ([build](bin/build.sh#L41)).
+
+**Impact**
+
+The runtime code in the asset is the reviewed code, so this is not a runtime
+security defect. It is a release-provenance defect. The asset was rebuilt after
+the nested zip was removed but before the final changelog edit. A size check and
+a clean archive check cannot detect this type of drift.
+
+**Recommended fix**
+
+- Correct the 1.7.0 date to 20 August 2026.
+- Build from the exact tagged commit in a clean checkout. Compare every packaged
+  first-party file with that commit before upload.
+- Make CI build the archive and publish that immutable artifact after all checks
+  pass. Record its SHA-256 in the release notes.
+- Add a package verification command that compares the archive manifest and
+  hashes with a fresh distribution staging tree. Fail on a dirty worktree and on
+  any mismatch, not only on an archive extension.
+- Replace the 1.7.0 asset with a build from `v1.7.0`, or document the one-file
+  difference. Verify and publish the new full digest if the asset changes.
+
+### Version 1.7.0 security, quality, performance, and purpose assessment
+
+**Security:** No new direct application-security defect was verified. The main
+security-adjacent risk remains financial control: F170-01 can leave recorded
+provider usage outside the cap total. The provider-side spending limit remains
+necessary.
+
+**Code quality:** The code is well documented, PHPCS is clean, normal failure
+results are explicit, and the added tests are focused. The main quality problem
+is that the revision is described as an invariant but is assembled from multiple
+queries. F170-02 also shows that migration completion has no single reliable
+definition.
+
+**Performance:** Bounded repair pages are appropriate for request safety.
+F170-02 defeats that protection across requests because one false-positive row
+can cause the whole upgrade pass to repeat on every `init`. F170-03 also repairs
+rows outside the month and prompt that a cap query uses.
+
+**Purpose:** The release improves recovery and makes normal grounded-call upgrades
+additive. F170-01 still permits a monthly-cap undercount. F170-03 can stop an
+uncapped site for a row that has no effect on a cap. The run log does not provide
+the recovery information promised by the error message.
+
+### Version 1.7.0 remediation order
+
+1. Fix F170-01. Make the priced fields and revision one database snapshot, raise
+   the revision in the migration, and make every close decide stale state in its
+   terminal statement.
+2. Fix F170-02. Distinguish query failure from completion, page past false
+   positives, verify the schema, and bump the internal database version so failed
+   version-7 migrations retry.
+3. Fix F170-03. Limit mandatory repair to enabled-cap scope and expose blocking
+   rows to the operator.
+4. Fix F170-04. Correct the documents and make the release archive reproducible
+   from the tag.
+5. Add the two-connection concurrency, Action Scheduler dispatch, MariaDB, and
+   live-provider tests already listed as open.
+
+### Version 1.7.0 conclusion
+
+Version 1.7.0 is materially better than version 1.6.0. The multi-page repair,
+fail-closed cap behavior for relevant rows, additive legacy move, README recovery
+route, archive exclusion, test suite, CI, and CodeQL checks are real improvements.
+
+The ninth round is not fully closed. The revision is not taken from the same
+snapshot as the counters it claims to price, so the main accounting race remains
+at a narrower query boundary. The migration can both skip required work after an
+error and repeat unnecessary work after a false-positive match. Repair refusal is
+not scoped to enabled caps, and the released archive does not fully match the
+tagged documents. Fix F170-01 and F170-02 before stating that every recorded
+charge is guaranteed to reach the monthly cap. Keep the provider-side spending
+limit as the hard ceiling.
+
 ## Fresh verification review — version 1.6.0
 
 **Review date:** 19 August 2026 (America/Chicago)

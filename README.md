@@ -13,7 +13,7 @@ everything, and inserts the post as a draft or publishes it.
 
 | | |
 |---|---|
-| **Version** | 1.7.0 |
+| **Version** | 1.8.0 |
 | **Requires WordPress** | 6.4 |
 | **Requires PHP** | 8.1 |
 | **License** | GPL-2.0-or-later |
@@ -192,9 +192,9 @@ way to tell it apart from the rest of the site.
 
 ## Status and known limitations
 
-Version 1.7.0. Nine external audits have been run against this plugin, and all
-nine found real defects; the findings, the fixes, and the findings rejected with
-evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 375 tests run
+Version 1.8.0. Ten external audits have been run against this plugin, and all
+ten found real defects; the findings, the fixes, and the findings rejected with
+evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 382 tests run
 against PHP 8.1, 8.2, and 8.3 on every push.
 
 Six things this plugin does not do the way the brief describes, all of them
@@ -279,7 +279,10 @@ The first item is the one that matters most:
 
   Two things clear that mark. **The budget check clears all of it before it sums**,
   while it holds the spend lock, and refuses to authorise the run if it cannot:
-  a cap that cannot be worked out stops spending rather than passing it. **The
+  a cap that cannot be worked out stops spending rather than passing it. That
+  refusal is scoped to what the enabled cap actually sums — one prompt's month,
+  or the site's month — and a site with no cap set is never held up by it. A run
+  waiting to be priced shows as "Accounting pending" in the Run Log. **The
   stall sweep clears a batch in the background**, which is what settles the books
   on a site that has stopped generating. That sweep is *scheduled* every five
   minutes; when it actually runs is up to Action Scheduler and your cron setup,
