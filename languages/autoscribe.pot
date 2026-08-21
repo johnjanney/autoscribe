@@ -150,6 +150,24 @@ msgstr ""
 msgid "Prompt configuration"
 msgstr ""
 
+#: src/Admin/Prompt_Meta_Box.php:337
+msgid "Use this image"
+msgstr ""
+
+#: src/Admin/Prompt_Meta_Box.php:338
+#: src/Admin/Prompt_Meta_Box.php:359
+msgid "Set fallback image"
+msgstr ""
+
+#: src/Admin/Prompt_Meta_Box.php:339
+#: src/Admin/Prompt_Meta_Box.php:359
+msgid "Change fallback image"
+msgstr ""
+
+#: src/Admin/Prompt_Meta_Box.php:361
+msgid "Remove fallback image"
+msgstr ""
+
 #. translators: %s: UTC offset, such as +00:00.
 #: src/Admin/Prompt_Meta_Box.php:321
 #, php-format
@@ -1077,12 +1095,13 @@ msgstr ""
 msgid "Appended to every image prompt, so every article shares a look without editing each prompt."
 msgstr ""
 
+#: src/Admin/Prompt_Meta_Box.php:336
 #: src/Prompts/Prompt_Fields.php:288
-msgid "Fallback image ID"
+msgid "Fallback image"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:292
-msgid "Attachment ID used when the mode is \"fallback\" and generation fails."
+#: src/Prompts/Prompt_Fields.php:291
+msgid "Attached when the mode is \"fallback\" and generation fails. Chosen from the media library."
 msgstr ""
 
 #: src/Prompts/Prompt_Fields.php:308
@@ -1317,7 +1336,7 @@ msgid "Web search grounding was switched off, because %s does not provide a sear
 msgstr ""
 
 #: src/Prompts/Prompt_Validator.php:258
-msgid "The featured image mode was changed from \"fallback\" to \"required\", because the fallback image ID does not name an image in this site's media library. Set a valid attachment ID and choose fallback again."
+msgid "The featured image mode was changed from \"fallback\" to \"required\", because no image in this site's media library is set as the fallback. Choose one on the Image tab and select fallback again."
 msgstr ""
 
 #. translators: %s: underlying transport error message.

@@ -130,6 +130,15 @@ final class Prompt_Meta_BoxTest extends WP_UnitTestCase {
 					$values[ $key ] = (string) $this->admin_id;
 					break;
 
+				case 'attachment':
+					$values[ $key ] = (string) self::factory()->attachment->create_object(
+						array(
+							'file'           => 'fallback.jpg',
+							'post_mime_type' => 'image/jpeg',
+						)
+					);
+					break;
+
 				default:
 					$values[ $key ] = 'value-for-' . $key;
 					break;
@@ -624,6 +633,124 @@ final class Prompt_Meta_BoxTest extends WP_UnitTestCase {
 			0,
 			(int) get_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'author_id', true ),
 			'A post credited to a user who is not there is worse than one credited to nobody.'
+		);
+	}
+
+	/**
+	 * The fallback image is chosen from the media library, not typed as an ID.
+	 *
+	 * It was a number box until 1.15.0, which asked whoever configures a prompt
+	 * to know an attachment ID — a value that appears nowhere on this screen, and
+	 * that every wrong answer looks exactly like. The failure surfaced at the last
+	 * step of a run, as a post that could not be published for want of the picture
+	 * the prompt promised.
+	 *
+	 * The number box is still what is rendered; the script hides it once it has
+	 * attached the picker. That is deliberate, and asserted here: with the script
+	 * blocked or late, the field is the control it has always been rather than a
+	 * button that does nothing.
+	 *
+	 * @since 1.15.0
+	 *
+	 * @return void
+	 */
+	public function test_the_fallback_image_is_a_media_picker(): void {
+		$attachment = self::factory()->attachment->create_object(
+			array(
+				'file'           => 'fallback.jpg',
+				'post_mime_type' => 'image/jpeg',
+			)
+		);
+
+		$markup = $this->render( $this->create_prompt( array( 'fallback_image_id' => $attachment ) ) );
+
+		$this->assertStringContainsString(
+			'data-autoscribe-media',
+			$markup,
+			'The field carries the hook the picker attaches to.'
+		);
+		$this->assertStringContainsString(
+			'name="' . Prompt_Fields::INPUT_NAME . '[fallback_image_id]"',
+			$markup,
+			'The value still posts under the same name, so the save path is unchanged.'
+		);
+		$this->assertStringContainsString(
+			'data-autoscribe-media-input',
+			$markup,
+			'And it is still a real input, so the field works without JavaScript.'
+		);
+		$this->assertStringContainsString(
+			'data-autoscribe-media-select',
+			$markup,
+			'The control that opens the media frame is rendered.'
+		);
+		$this->assertMatchesRegularExpression(
+			'#<div class="autoscribe-media-preview"[^>]*><img[^>]+fallback\.jpg#',
+			$markup,
+			'The chosen image is shown, rather than the number naming it.'
+		);
+		$this->assertStringContainsString(
+			'value="' . $attachment . '"',
+			$markup,
+			'And the attachment it names is the one the prompt holds.'
+		);
+	}
+
+	/**
+	 * Nothing is previewed, and nothing can be removed, until an image is chosen.
+	 *
+	 * @since 1.15.0
+	 *
+	 * @return void
+	 */
+	public function test_the_fallback_image_field_is_empty_until_one_is_chosen(): void {
+		$markup = $this->render( $this->create_prompt( array( 'fallback_image_id' => 0 ) ) );
+
+		$this->assertStringContainsString(
+			'<div class="autoscribe-media-preview" data-autoscribe-media-preview></div>',
+			$markup,
+			'An unset fallback previews nothing.'
+		);
+		$this->assertStringContainsString(
+			'data-autoscribe-media-remove hidden',
+			$markup,
+			'And there is nothing to remove, so the control that removes it is not offered.'
+		);
+	}
+
+	/**
+	 * An attachment that is not a usable image is stored as no image at all.
+	 *
+	 * The media frame only offers images, so a value that is not one arrived some
+	 * other way — an ID typed in before the picker enhanced the field, a save
+	 * through WP-CLI, or an attachment deleted since it was chosen. Keeping it
+	 * would leave a prompt promising a fallback that cannot be attached, which is
+	 * the one thing fallback mode exists to rule out.
+	 *
+	 * @since 1.15.0
+	 *
+	 * @return void
+	 */
+	public function test_an_unusable_fallback_image_is_not_stored(): void {
+		$prompt_id = $this->create_prompt();
+		$pdf       = self::factory()->attachment->create_object(
+			array(
+				'file'           => 'brochure.pdf',
+				'post_mime_type' => 'application/pdf',
+			)
+		);
+
+		$_POST = array(
+			Prompt_Meta_Box::NONCE_NAME => wp_create_nonce( 'autoscribe_save_prompt_' . $prompt_id ),
+			Prompt_Fields::INPUT_NAME   => array( 'fallback_image_id' => (string) $pdf ),
+		);
+
+		( new Prompt_Meta_Box() )->save( $prompt_id );
+
+		$this->assertSame(
+			'0',
+			(string) get_post_meta( $prompt_id, Prompt_Fields::PREFIX . 'fallback_image_id', true ),
+			'A PDF is not an image this site can set as a featured image.'
 		);
 	}
 

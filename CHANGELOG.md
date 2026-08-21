@@ -87,6 +87,35 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+### Changed
+
+- **The prompt's fallback image is chosen from the media library.** It was a
+  number box asking for an attachment ID — a value that appears nowhere on the
+  prompt editor, so answering it meant leaving the screen, opening the media
+  library in another tab, and reading the ID out of a URL. Every integer looks
+  like a plausible answer, and nothing on the way in could tell a right one from
+  a wrong one. The failure arrived much later, at the last step of a scheduled
+  run: a post that could not be published for want of the picture the prompt
+  promised it would always have.
+
+  The field now opens the same media frame the post editor uses to set a featured
+  image, and it shows the image that is chosen rather than the number naming it,
+  with controls to change or remove it. Where a prompt already names an image,
+  reopening the frame starts from that image rather than from an empty library.
+
+  A submitted attachment that is not an image this site can attach is stored as
+  no image at all, the way an author who does not exist is stored as nobody.
+  Prompt_Validator then reads that as fallback mode with nothing to fall back to
+  and corrects the mode to required, which is visible on the screen — a stale ID
+  sitting in a field is not. That correction's message no longer talks about
+  attachment IDs either.
+
+  Existing prompts are unaffected: the value is the same attachment ID in the
+  same meta key, and the pipeline reads it exactly as before. The number input is
+  still what the server renders, and the script replaces it only once the picker
+  is attached, so with JavaScript unavailable the field degrades to the control
+  it has always been rather than to a button that does nothing.
+
 ## [1.14.0] - 2026-08-20
 
 ### Changed

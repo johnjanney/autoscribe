@@ -255,7 +255,7 @@ final class Prompt_Validator {
 
 		update_post_meta( $post_id, Prompt_Fields::PREFIX . 'image_mode', 'required' );
 
-		return __( 'The featured image mode was changed from "fallback" to "required", because the fallback image ID does not name an image in this site\'s media library. Set a valid attachment ID and choose fallback again.', 'autoscribe' );
+		return __( 'The featured image mode was changed from "fallback" to "required", because no image in this site\'s media library is set as the fallback. Choose one on the Image tab and select fallback again.', 'autoscribe' );
 	}
 
 	/**

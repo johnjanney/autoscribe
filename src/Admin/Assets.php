@@ -75,11 +75,20 @@ final class Assets {
 			return;
 		}
 
+		/*
+		 * The fallback image field is a media picker, and the frame it opens is
+		 * core's. Enqueuing it here rather than depending on it being present is
+		 * the difference between a button that opens the library and a button
+		 * that throws in the console: nothing else on the prompt editor loads
+		 * the media scripts.
+		 */
+		wp_enqueue_media();
+
 		wp_register_style( self::HANDLE, false, array(), VERSION );
 		wp_enqueue_style( self::HANDLE );
 		wp_add_inline_style( self::HANDLE, $this->css() );
 
-		wp_register_script( self::HANDLE, '', array(), VERSION, true );
+		wp_register_script( self::HANDLE, '', array( 'media-editor' ), VERSION, true );
 		wp_enqueue_script( self::HANDLE );
 		wp_add_inline_script( self::HANDLE, $this->data(), 'before' );
 		wp_add_inline_script( self::HANDLE, $this->js() );
@@ -150,7 +159,10 @@ final class Assets {
 		 */
 		return '.autoscribe-tabs.is-tabbed .autoscribe-tab-panel{display:none}'
 			. '.autoscribe-tabs.is-tabbed .autoscribe-tab-panel.is-active{display:block}'
-			. '.autoscribe-tabs .nav-tab{cursor:pointer}';
+			. '.autoscribe-tabs .nav-tab{cursor:pointer}'
+			. '.autoscribe-media-preview img{display:block;max-width:200px;height:auto;margin-bottom:.5em}'
+			. '.autoscribe-media-buttons{margin:.5em 0 0}'
+			. '.autoscribe-media-remove{color:#b32d2e;margin-left:.5em}';
 	}
 
 	/**
@@ -228,6 +240,116 @@ final class Assets {
 		repeats.addEventListener( 'change', syncSchedule );
 		syncSchedule();
 	}
+
+	/*
+	 * The fallback image was a box asking for an attachment ID — a number that
+	 * exists nowhere on this screen, and that every wrong answer looks exactly
+	 * like. This attaches the media frame the post editor uses for a featured
+	 * image, and only then hides the number box behind it: if this script never
+	 * runs, the field is still the control it always was rather than a button
+	 * that does nothing. The stored value is unchanged either way.
+	 */
+	wrap.querySelectorAll( '[data-autoscribe-media]' ).forEach( function ( field ) {
+		var input   = field.querySelector( '[data-autoscribe-media-input]' );
+		var preview = field.querySelector( '[data-autoscribe-media-preview]' );
+		var buttons = field.querySelector( '[data-autoscribe-media-buttons]' );
+		var choose  = field.querySelector( '[data-autoscribe-media-select]' );
+		var drop    = field.querySelector( '[data-autoscribe-media-remove]' );
+		var frame;
+
+		if ( ! input || ! preview || ! buttons || ! choose || ! drop ) {
+			return;
+		}
+
+		if ( ! window.wp || ! window.wp.media ) {
+			return;
+		}
+
+		input.type = 'hidden';
+		buttons.hidden = false;
+
+		// The row's label pointed at the number box, which is now hidden state.
+		// It points at the control that replaced it instead, so clicking the
+		// label still reaches something.
+		if ( input.id ) {
+			choose.id = input.id;
+			input.removeAttribute( 'id' );
+		}
+
+		function show( url ) {
+			preview.textContent = '';
+
+			if ( url ) {
+				var img = document.createElement( 'img' );
+
+				img.src = url;
+				img.alt = '';
+				preview.appendChild( img );
+			}
+
+			choose.textContent = url ? field.dataset.autoscribeChange : field.dataset.autoscribeSet;
+			drop.hidden        = ! url;
+		}
+
+		choose.addEventListener( 'click', function ( event ) {
+			event.preventDefault();
+
+			if ( ! frame ) {
+				frame = wp.media( {
+					title: field.dataset.autoscribeTitle,
+					button: { text: field.dataset.autoscribeChoose },
+					library: { type: 'image' },
+					multiple: false
+				} );
+
+				// Reopening shows the image the prompt already holds as the
+				// selected one, so "change" starts from what is set rather than
+				// from an empty library.
+				frame.on( 'open', function () {
+					var selection = frame.state().get( 'selection' );
+					var current   = parseInt( input.value, 10 );
+
+					// The frame is kept between openings, and so is whatever was
+					// selected in it last time. Reopening after a removal would
+					// otherwise show the removed image as still chosen.
+					selection.reset();
+
+					if ( ! current ) {
+						return;
+					}
+
+					var existing = wp.media.attachment( current );
+
+					existing.fetch();
+					selection.add( existing );
+				} );
+
+				frame.on( 'select', function () {
+					var chosen = frame.state().get( 'selection' ).first();
+
+					if ( ! chosen ) {
+						return;
+					}
+
+					var image = chosen.toJSON();
+					var sizes = image.sizes || {};
+					var size  = sizes.medium || sizes.thumbnail || sizes.full;
+
+					input.value = image.id;
+					show( size ? size.url : image.url );
+				} );
+			}
+
+			frame.open();
+		} );
+
+		drop.addEventListener( 'click', function ( event ) {
+			event.preventDefault();
+
+			input.value = '0';
+			show( '' );
+		} );
+	} );
 
 	var caps      = window.autoscribeCapabilities || { webSearch: {}, noSearch: '' };
 	var provider  = document.getElementById( 'autoscribe-field-text_provider' );

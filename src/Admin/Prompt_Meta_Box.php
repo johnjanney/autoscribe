@@ -269,6 +269,10 @@ final class Prompt_Meta_Box {
 				$this->render_select( $name, $id, Prompt_Fields::author_choices( (int) $value ), (string) (int) $value );
 				break;
 
+			case 'attachment':
+				$this->render_attachment( $name, $id, (int) $value );
+				break;
+
 			case 'terms':
 				$this->render_terms( $name, $id, is_array( $value ) ? $value : array() );
 				break;
@@ -296,6 +300,68 @@ final class Prompt_Meta_Box {
 				);
 				break;
 		}
+	}
+
+	/**
+	 * Renders an image chooser backed by the media library.
+	 *
+	 * This was a number box asking for an attachment ID, which is a question
+	 * nobody can answer from this screen: finding the ID means leaving the prompt
+	 * half-configured, opening the media library in another tab, and reading it
+	 * out of a URL. Every integer looks like a plausible answer, so a wrong one
+	 * came back as a run that failed at the last step for want of the picture it
+	 * promised.
+	 *
+	 * It is now the same media frame the post editor uses to set a featured
+	 * image, showing the image that is chosen rather than the number naming it.
+	 *
+	 * The number box is still what is rendered, and the script turns it into
+	 * hidden state once it has attached the picker to it. That ordering is the
+	 * point: with JavaScript unavailable — blocked, broken, or simply late — the
+	 * field degrades to exactly the control it has always been rather than to a
+	 * button that does nothing.
+	 *
+	 * @since 1.15.0
+	 *
+	 * @param string $name  Field name.
+	 * @param string $id    Element ID.
+	 * @param int    $value Currently chosen attachment ID.
+	 * @return void
+	 */
+	private function render_attachment( string $name, string $id, int $value ): void {
+		$chosen = Prompt_Validator::is_usable_fallback( $value );
+
+		printf(
+			'<div class="autoscribe-media" data-autoscribe-media data-autoscribe-title="%1$s" data-autoscribe-choose="%2$s" data-autoscribe-set="%3$s" data-autoscribe-change="%4$s">',
+			esc_attr__( 'Fallback image', 'autoscribe' ),
+			esc_attr__( 'Use this image', 'autoscribe' ),
+			esc_attr__( 'Set fallback image', 'autoscribe' ),
+			esc_attr__( 'Change fallback image', 'autoscribe' )
+		);
+
+		printf(
+			'<div class="autoscribe-media-preview" data-autoscribe-media-preview>%s</div>',
+			$chosen ? wp_get_attachment_image( $value, 'medium', false, array( 'alt' => '' ) ) : ''
+		);
+
+		printf(
+			'<input type="number" class="small-text" id="%1$s" name="%2$s" value="%3$s" min="0" data-autoscribe-media-input />',
+			esc_attr( $id ),
+			esc_attr( $name ),
+			esc_attr( (string) $value )
+		);
+
+		printf(
+			'<p class="autoscribe-media-buttons" data-autoscribe-media-buttons hidden>'
+			. '<button type="button" class="button" data-autoscribe-media-select>%1$s</button> '
+			. '<button type="button" class="button-link autoscribe-media-remove" data-autoscribe-media-remove%2$s>%3$s</button>'
+			. '</p>',
+			$chosen ? esc_html__( 'Change fallback image', 'autoscribe' ) : esc_html__( 'Set fallback image', 'autoscribe' ),
+			$chosen ? '' : ' hidden',
+			esc_html__( 'Remove fallback image', 'autoscribe' )
+		);
+
+		echo '</div>';
 	}
 
 	/**

@@ -285,11 +285,10 @@ final class Prompt_Fields {
 			),
 			'fallback_image_id'  => array(
 				'tab'         => 'image',
-				'label'       => __( 'Fallback image ID', 'autoscribe' ),
-				'type'        => 'int',
+				'label'       => __( 'Fallback image', 'autoscribe' ),
+				'type'        => 'attachment',
 				'default'     => 0,
-				'min'         => 0,
-				'description' => __( 'Attachment ID used when the mode is "fallback" and generation fails.', 'autoscribe' ),
+				'description' => __( 'Attached when the mode is "fallback" and generation fails. Chosen from the media library.', 'autoscribe' ),
 			),
 		);
 	}
@@ -442,6 +441,9 @@ final class Prompt_Fields {
 			case 'user':
 				return self::sanitize_user( (int) $raw );
 
+			case 'attachment':
+				return self::sanitize_attachment( (int) $raw );
+
 			case 'terms':
 				return self::sanitize_terms( $raw );
 
@@ -459,6 +461,29 @@ final class Prompt_Fields {
 			default:
 				return sanitize_text_field( (string) $raw );
 		}
+	}
+
+	/**
+	 * Reduces a submitted attachment to an image this site can actually attach.
+	 *
+	 * The media frame only ever offers images, so a value that is not one arrived
+	 * some other way: an ID typed into the field before the picker enhanced it, a
+	 * prompt saved through the REST API or WP-CLI, or an attachment somebody has
+	 * deleted since. Storing it anyway would leave a prompt promising a fallback
+	 * that cannot be attached, and section 6 makes that promise load-bearing —
+	 * fallback mode is what stops a post publishing with no picture at all.
+	 *
+	 * So an unusable ID is stored as nothing, which Prompt_Validator then reads
+	 * as a fallback mode with nothing to fall back to and corrects to required.
+	 * The correction is visible; a stale ID sitting in the field is not.
+	 *
+	 * @since 1.15.0
+	 *
+	 * @param int $attachment_id Submitted attachment ID.
+	 * @return int The attachment ID, or 0 for no image.
+	 */
+	private static function sanitize_attachment( int $attachment_id ): int {
+		return Prompt_Validator::is_usable_fallback( $attachment_id ) ? $attachment_id : 0;
 	}
 
 	/**
