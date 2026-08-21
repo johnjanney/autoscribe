@@ -176,6 +176,50 @@ final class Content_SanitizerTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A topic key is cut to the width of the column that has to hold it.
+	 *
+	 * The other limits come from section 5.1 and are about presentation: a meta
+	 * description longer than 155 characters is merely truncated by a search
+	 * engine. This one is structural. wpdb refuses an over-long value outright
+	 * rather than storing a shortened one, and it refuses the whole write, so an
+	 * uncapped key cost the run log both the topic and the title, and failed the
+	 * run at its final step with the article and the image already paid for.
+	 *
+	 * @since 1.15.1
+	 *
+	 * @return void
+	 */
+	public function test_a_long_topic_key_is_cut_to_the_column_width(): void {
+		$key = $this->sanitizer->sanitize_topic_key( str_repeat( 'a-very-long-topic-key-', 20 ) );
+
+		$this->assertLessThanOrEqual(
+			Content_Sanitizer::TOPIC_KEY_MAX,
+			mb_strlen( $key ),
+			'A key wider than the runs table column cannot be recorded at all.'
+		);
+		$this->assertStringEndsNotWith(
+			'-',
+			$key,
+			'A key cut mid-word must not keep the hyphen that was joining it to the rest.'
+		);
+	}
+
+	/**
+	 * A key that already fits is left exactly as it was.
+	 *
+	 * @since 1.15.1
+	 *
+	 * @return void
+	 */
+	public function test_a_short_topic_key_is_untouched(): void {
+		$this->assertSame(
+			'how-to-pull-a-good-espresso-shot',
+			$this->sanitizer->sanitize_topic_key( 'How to Pull a Good Espresso Shot' ),
+			'Slugification is all that a key within the limit needs.'
+		);
+	}
+
+	/**
 	 * The dangerous-URI check reports clean output as clean.
 	 *
 	 * @since 0.3.0

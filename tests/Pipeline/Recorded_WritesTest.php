@@ -14,6 +14,7 @@ use AutoScribe\Pipeline\Run;
 use AutoScribe\Pipeline\Step_Assemble_Post;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Scheduling\Scheduler;
+use AutoScribe\Security\Content_Sanitizer;
 use AutoScribe\Security\Key_Store;
 use AutoScribe\Tests\Support\Creates_Prompts;
 use AutoScribe\Tests\Support\Mocks_Provider;
@@ -273,15 +274,64 @@ final class Recorded_WritesTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * A topic key too wide for its column is cut rather than failing the run.
+	 *
+	 * The model is asked for a slug and usually returns a short one, so nothing
+	 * capped the key it returned. `wpdb` refuses a value wider than the column
+	 * outright rather than storing a shortened one — and refuses the whole write,
+	 * not the offending field — so the run log lost the title as well as the
+	 * topic, and the guard above turned that into a failed run at the final step,
+	 * with the article and the image already paid for. Every retry failed
+	 * identically, because nothing about it was intermittent.
+	 *
+	 * @since 1.15.1
+	 *
+	 * @return void
+	 */
+	public function test_a_long_topic_key_is_cut_rather_than_failing_the_run(): void {
+		$prompt_id = $this->create_prompt();
+		$row       = $this->run_prompt(
+			$prompt_id,
+			$this->article_payload( array( 'topic_key' => str_repeat( 'a-very-long-topic-key-', 20 ) ) )
+		);
+
+		$this->assertSame(
+			Run::STATUS_SUCCESS,
+			$row['status'],
+			'A verbose topic key is the model being verbose, not the run being broken: ' . (string) $row['error']
+		);
+
+		$recorded = (string) $row['topic_key'];
+
+		$this->assertLessThanOrEqual(
+			Content_Sanitizer::TOPIC_KEY_MAX,
+			mb_strlen( $recorded ),
+			'The key has to fit the column, because wpdb will not shorten it on the way in.'
+		);
+		$this->assertNotSame( '', $recorded, 'And the run log has to hold it, or deduplication loses this article.' );
+		$this->assertNotSame(
+			'',
+			(string) $row['title'],
+			'The refused write took the title with it, so the title proves the write went through.'
+		);
+		$this->assertSame(
+			$recorded,
+			(string) get_post_meta( (int) $row['post_id'], Step_Assemble_Post::TOPIC_KEY_META, true ),
+			'The post meta and the run row must agree about what this article was about.'
+		);
+	}
+
+	/**
 	 * Runs a prompt the way the queue does and returns its run row.
 	 *
 	 * @since 1.2.0
 	 *
-	 * @param int $prompt_id Prompt to run.
+	 * @param int                  $prompt_id Prompt to run.
+	 * @param array<string, mixed> $article   Article the model returns, or empty for the default.
 	 * @return array<string, mixed>
 	 */
-	private function run_prompt( int $prompt_id ): array {
-		$this->mock_provider_success();
+	private function run_prompt( int $prompt_id, array $article = array() ): array {
+		$this->mock_provider_success( $article );
 
 		$handler = new Queued_Run_Handler(
 			new Generator( new Provider_Registry() ),

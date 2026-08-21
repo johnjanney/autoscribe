@@ -87,6 +87,30 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A topic key too wide for its column failed the run at the last step.** The
+  runs table stores `topic_key` as `varchar(191)`, and nothing on the way in held
+  the key to that. `sanitize_title()` caps its output at 200 characters, so a
+  verbose model could return a slug of 192 to 200 — above the column and below
+  any check. `wpdb` refuses an over-long value outright rather than storing a
+  shortened one, and it refuses the whole write rather than the offending field,
+  so the run log lost the article's title along with its topic.
+
+  `Step_Assemble_Post` reads that refusal and stops the run rather than finishing
+  with a log entry that does not say what it produced, which is the right
+  behaviour and made the failure expensive: it arrived after the article and the
+  image had both been paid for, left a draft whose post meta held the full key
+  while the run row held neither it nor the title, and failed identically on all
+  three retries, because nothing about it was intermittent.
+
+  `Content_Sanitizer::sanitize_topic_key()` now truncates to a `TOPIC_KEY_MAX` of
+  191 — the column width, named as such so the two move together — and trims a
+  trailing hyphen so a key cut mid-word does not end on one. It was the only
+  sanitiser in that class not passing through the truncator. Deduplication is
+  unaffected: the shortened key is what both the run row and the post meta hold,
+  so they agree, and `similar_text()` compares them as before.
+
 ## [1.15.0] - 2026-08-21
 
 ### Changed

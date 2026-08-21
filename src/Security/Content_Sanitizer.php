@@ -58,6 +58,26 @@ final class Content_Sanitizer {
 	public const IMAGE_ALT_MAX = 125;
 
 	/**
+	 * Maximum topic key length.
+	 *
+	 * This one is not from section 5.1. It is the width of the topic_key column
+	 * in the runs table, which Activation declares as varchar(191), and the two
+	 * have to move together: wpdb refuses an over-long value outright rather than
+	 * storing a shortened one, and it refuses the whole write, not the one field.
+	 *
+	 * Nothing upstream limited the key. The model is asked for a slug and usually
+	 * returns a short one, but a verbose answer produced a key the run log could
+	 * not record, and the run then failed at its final step — after the article
+	 * and the image had both been paid for — leaving a draft whose post meta held
+	 * the full key while the run row held neither it nor the title. Every retry
+	 * failed the same way, because nothing about it was intermittent.
+	 *
+	 * @since 1.15.1
+	 * @var int
+	 */
+	public const TOPIC_KEY_MAX = 191;
+
+	/**
 	 * Sanitises body HTML.
 	 *
 	 * @since 0.3.0
@@ -199,7 +219,7 @@ final class Content_Sanitizer {
 	}
 
 	/**
-	 * Sanitises a topic key into a slug.
+	 * Sanitises a topic key into a slug the run log can hold.
 	 *
 	 * @since 0.3.0
 	 *
@@ -207,7 +227,9 @@ final class Content_Sanitizer {
 	 * @return string
 	 */
 	public function sanitize_topic_key( string $value ): string {
-		return sanitize_title( $value );
+		// rtrim after truncating, so a key cut mid-word does not end on the
+		// hyphen that was joining it to the rest.
+		return rtrim( $this->truncate( sanitize_title( $value ), self::TOPIC_KEY_MAX ), '-' );
 	}
 
 	/**
