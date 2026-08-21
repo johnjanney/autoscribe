@@ -3,7 +3,7 @@
  * Plugin Name:       AutoScribe
  * Plugin URI:        https://github.com/johnjanney/autoscribe
  * Description:       Generates and publishes posts from scheduled AI prompts.
- * Version:           1.15.0
+ * Version:           1.15.1
  * Requires at least: 6.4
  * Requires PHP:      8.1
  * Author:            John Janney
@@ -23,7 +23,7 @@ defined( 'ABSPATH' ) || exit;
 /**
  * Plugin version. Single source of truth, per section 12 of the brief.
  */
-const VERSION = '1.15.0';
+const VERSION = '1.15.1';
 
 /**
  * Lowest PHP version the plugin supports.

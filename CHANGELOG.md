@@ -87,6 +87,8 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.15.1] - 2026-08-21
+
 ### Fixed
 
 - **A topic key too wide for its column failed the run at the last step.** The
