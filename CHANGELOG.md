@@ -87,6 +87,8 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-08-21
+
 ### Changed
 
 - **The prompt's fallback image is chosen from the media library.** It was a

@@ -2,14 +2,14 @@
 # This file is distributed under the GPL-2.0-or-later.
 msgid ""
 msgstr ""
-"Project-Id-Version: AutoScribe 1.13.4\n"
+"Project-Id-Version: AutoScribe 1.15.0\n"
 "Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/autoscribe\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-20T19:44:06+00:00\n"
+"POT-Creation-Date: 2026-08-21T14:37:13-05:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: autoscribe\n"
@@ -87,7 +87,7 @@ msgstr ""
 msgid "You are not allowed to run AutoScribe prompts."
 msgstr ""
 
-#: src/Admin/Assets.php:112
+#: src/Admin/Assets.php:121
 msgid "This provider has no web search, so grounding cannot be used with it."
 msgstr ""
 
@@ -150,6 +150,11 @@ msgstr ""
 msgid "Prompt configuration"
 msgstr ""
 
+#: src/Admin/Prompt_Meta_Box.php:336
+#: src/Prompts/Prompt_Fields.php:288
+msgid "Fallback image"
+msgstr ""
+
 #: src/Admin/Prompt_Meta_Box.php:337
 msgid "Use this image"
 msgstr ""
@@ -169,39 +174,39 @@ msgid "Remove fallback image"
 msgstr ""
 
 #. translators: %s: UTC offset, such as +00:00.
-#: src/Admin/Prompt_Meta_Box.php:321
+#: src/Admin/Prompt_Meta_Box.php:387
 #, php-format
 msgid "UTC%s — the site timezone, set in Settings → General"
 msgstr ""
 
 #. translators: %s: timezone name, such as America/Chicago.
-#: src/Admin/Prompt_Meta_Box.php:328
+#: src/Admin/Prompt_Meta_Box.php:394
 #, php-format
 msgid "%s — the site timezone, set in Settings → General"
 msgstr ""
 
-#: src/Admin/Prompt_Meta_Box.php:381
+#: src/Admin/Prompt_Meta_Box.php:447
 msgid "No categories exist yet."
 msgstr ""
 
-#: src/Admin/Prompt_Meta_Box.php:454
+#: src/Admin/Prompt_Meta_Box.php:520
 msgid "Next run:"
 msgstr ""
 
-#: src/Admin/Prompt_Meta_Box.php:465
+#: src/Admin/Prompt_Meta_Box.php:531
 msgid "Run now"
 msgstr ""
 
-#: src/Admin/Prompt_Meta_Box.php:467
-#: src/Admin/Prompt_Meta_Box.php:510
+#: src/Admin/Prompt_Meta_Box.php:533
+#: src/Admin/Prompt_Meta_Box.php:576
 msgid "Preview"
 msgstr ""
 
-#: src/Admin/Prompt_Meta_Box.php:472
+#: src/Admin/Prompt_Meta_Box.php:538
 msgid "Run now queues an immediate run and creates a post. Preview generates the article and shows it without creating one. Both are charged against the budget and appear in the run log."
 msgstr ""
 
-#: src/Admin/Prompt_Meta_Box.php:531
+#: src/Admin/Prompt_Meta_Box.php:597
 msgid "No post was created. This preview is not saved and disappears when you leave the page."
 msgstr ""
 
@@ -237,7 +242,7 @@ msgid "Title"
 msgstr ""
 
 #: src/Admin/Runs_List_Table.php:79
-#: src/Prompts/Prompt_Fields.php:819
+#: src/Prompts/Prompt_Fields.php:844
 msgid "Post"
 msgstr ""
 
@@ -1058,12 +1063,12 @@ msgid "Which week"
 msgstr ""
 
 #: src/Prompts/Prompt_Fields.php:228
-#: src/Prompts/Prompt_Fields.php:723
+#: src/Prompts/Prompt_Fields.php:748
 msgid "Every N hours"
 msgstr ""
 
 #: src/Prompts/Prompt_Fields.php:238
-#: src/Prompts/Prompt_Fields.php:724
+#: src/Prompts/Prompt_Fields.php:749
 msgid "Cron expression"
 msgstr ""
 
@@ -1095,168 +1100,163 @@ msgstr ""
 msgid "Appended to every image prompt, so every article shares a look without editing each prompt."
 msgstr ""
 
-#: src/Admin/Prompt_Meta_Box.php:336
-#: src/Prompts/Prompt_Fields.php:288
-msgid "Fallback image"
-msgstr ""
-
 #: src/Prompts/Prompt_Fields.php:291
 msgid "Attached when the mode is \"fallback\" and generation fails. Chosen from the media library."
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:308
+#: src/Prompts/Prompt_Fields.php:307
 msgid "On completion"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:315
+#: src/Prompts/Prompt_Fields.php:314
 msgid "Create as"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:322
+#: src/Prompts/Prompt_Fields.php:321
 msgid "Categories"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:328
+#: src/Prompts/Prompt_Fields.php:327
 msgid "Tags"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:335
+#: src/Prompts/Prompt_Fields.php:334
 msgid "Fixed tags"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:338
+#: src/Prompts/Prompt_Fields.php:337
 msgid "Comma separated. Used when the tag mode is \"fixed\"."
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:342
+#: src/Prompts/Prompt_Fields.php:341
 msgid "Author"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:345
+#: src/Prompts/Prompt_Fields.php:344
 msgid "Who the generated post is credited to. With nobody chosen the post is created with no author, because a scheduled run has no logged-in user to fall back to."
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:361
+#: src/Prompts/Prompt_Fields.php:360
 msgid "Monthly cap (cents)"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:365
+#: src/Prompts/Prompt_Fields.php:364
 msgid "Zero means no per-prompt cap. The global cap still applies and always wins."
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:369
+#: src/Prompts/Prompt_Fields.php:368
 msgid "Duplicate look-back"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:374
+#: src/Prompts/Prompt_Fields.php:373
 msgid "How many recent posts a proposed topic is compared against."
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:499
+#: src/Prompts/Prompt_Fields.php:524
 msgid "— Nobody —"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:719
+#: src/Prompts/Prompt_Fields.php:744
 msgid "Every day"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:720
+#: src/Prompts/Prompt_Fields.php:745
 msgid "Every week"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:721
+#: src/Prompts/Prompt_Fields.php:746
 msgid "Monthly, on a date"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:722
+#: src/Prompts/Prompt_Fields.php:747
 msgid "Monthly, on a weekday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:737
+#: src/Prompts/Prompt_Fields.php:762
 msgid "Monday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:738
+#: src/Prompts/Prompt_Fields.php:763
 msgid "Tuesday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:739
+#: src/Prompts/Prompt_Fields.php:764
 msgid "Wednesday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:740
+#: src/Prompts/Prompt_Fields.php:765
 msgid "Thursday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:741
+#: src/Prompts/Prompt_Fields.php:766
 msgid "Friday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:742
+#: src/Prompts/Prompt_Fields.php:767
 msgid "Saturday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:743
+#: src/Prompts/Prompt_Fields.php:768
 msgid "Sunday"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:764
+#: src/Prompts/Prompt_Fields.php:789
 msgid "First"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:765
+#: src/Prompts/Prompt_Fields.php:790
 msgid "Second"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:766
+#: src/Prompts/Prompt_Fields.php:791
 msgid "Third"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:767
+#: src/Prompts/Prompt_Fields.php:792
 msgid "Fourth"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:768
+#: src/Prompts/Prompt_Fields.php:793
 msgid "Last"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:789
+#: src/Prompts/Prompt_Fields.php:814
 msgid "Required — never publish without it"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:790
+#: src/Prompts/Prompt_Fields.php:815
 msgid "Fallback — use the fallback image"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:791
+#: src/Prompts/Prompt_Fields.php:816
 msgid "Optional — publish without one"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:792
+#: src/Prompts/Prompt_Fields.php:817
 msgid "None — skip image generation"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:805
+#: src/Prompts/Prompt_Fields.php:830
 msgid "Hold as a draft for review"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:806
+#: src/Prompts/Prompt_Fields.php:831
 msgid "Publish immediately"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:820
+#: src/Prompts/Prompt_Fields.php:845
 msgid "Page"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:833
+#: src/Prompts/Prompt_Fields.php:858
 msgid "No tags"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:834
+#: src/Prompts/Prompt_Fields.php:859
 msgid "Fixed list"
 msgstr ""
 
-#: src/Prompts/Prompt_Fields.php:835
+#: src/Prompts/Prompt_Fields.php:860
 msgid "Suggested by the model"
 msgstr ""
 
