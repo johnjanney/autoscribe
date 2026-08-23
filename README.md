@@ -13,7 +13,7 @@ everything, and inserts the post as a draft or publishes it.
 
 | | |
 |---|---|
-| **Version** | 1.16.0 |
+| **Version** | 1.17.0 |
 | **Requires WordPress** | 6.4 |
 | **Requires PHP** | 8.1 |
 | **License** | GPL-2.0-or-later |
@@ -231,9 +231,9 @@ reinstall does not propose every topic again.
 
 ## Status and known limitations
 
-Version 1.16.0. Thirteen external audits have been run against this plugin, and
+Version 1.17.0. Thirteen external audits have been run against this plugin, and
 all thirteen found real defects; the findings, the fixes, and the findings rejected
-with evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 459 tests
+with evidence are in `CODEX-REVIEW.md` and `CODEX-REVIEW-RESPONSE.md`. 470 tests
 run against PHP 8.1, 8.2, and 8.3 on every push.
 
 Five things this plugin does not do the way the brief describes, all of them

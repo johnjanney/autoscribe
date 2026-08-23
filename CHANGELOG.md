@@ -87,6 +87,8 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-08-23
+
 ### Fixed
 
 - **An article that was cut off was reported as an empty response.** A site
