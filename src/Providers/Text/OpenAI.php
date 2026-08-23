@@ -237,6 +237,37 @@ final class OpenAI implements Text_Provider_Interface {
 			}
 		}
 
+		$usage = new Usage(
+			(int) ( $decoded['usage']['input_tokens'] ?? 0 ),
+			(int) ( $decoded['usage']['output_tokens'] ?? 0 )
+		);
+
+		/*
+		 * The Responses API reports a run that ran out of room as HTTP 200 with
+		 * status "incomplete", and names the cause in incomplete_details.reason —
+		 * max_output_tokens for the ceiling, content_filter for a refusal part way
+		 * through. Either way the text is a fragment, so it goes back with the
+		 * reason attached rather than to a validator that can only call it
+		 * malformed. Reasoning tokens are inside output_tokens here, and they
+		 * count against the same ceiling, which is how a reasoning model reaches
+		 * it with little or nothing said.
+		 */
+		$status = isset( $decoded['status'] ) ? (string) $decoded['status'] : '';
+
+		if ( 'incomplete' === $status ) {
+			$reason = isset( $decoded['incomplete_details']['reason'] )
+				? (string) $decoded['incomplete_details']['reason']
+				: 'incomplete';
+
+			return new Generation_Result(
+				$text,
+				$usage,
+				isset( $decoded['model'] ) ? (string) $decoded['model'] : $model,
+				Source_Extractor::from( $decoded ),
+				$reason
+			);
+		}
+
 		if ( '' === $text ) {
 			return new WP_Error(
 				'autoscribe_empty_response',
@@ -246,10 +277,7 @@ final class OpenAI implements Text_Provider_Interface {
 
 		return new Generation_Result(
 			$text,
-			new Usage(
-				(int) ( $decoded['usage']['input_tokens'] ?? 0 ),
-				(int) ( $decoded['usage']['output_tokens'] ?? 0 )
-			),
+			$usage,
 			isset( $decoded['model'] ) ? (string) $decoded['model'] : $model,
 			Source_Extractor::from( $decoded )
 		);

@@ -9,6 +9,7 @@ namespace AutoScribe\Cost;
 
 use AutoScribe\Pipeline\Pipeline;
 use AutoScribe\Pipeline\Run;
+use AutoScribe\Pipeline\Step_Generate_Body;
 use AutoScribe\Prompts\Prompt;
 
 defined( 'ABSPATH' ) || exit;
@@ -87,7 +88,7 @@ final class Step_Allowance {
 				return $pricing->cost_cents(
 					$text,
 					Budget_Guard::BODY_INPUT_ALLOWANCE,
-					max( 1024, $prompt->target_word_count() * 3 ),
+					Step_Generate_Body::output_ceiling( $prompt ),
 					'',
 					0,
 					$prompt->grounding_enabled() ? 1 : 0

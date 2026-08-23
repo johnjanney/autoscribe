@@ -87,6 +87,75 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **An article that was cut off was reported as an empty response.** A site
+  generating peptide research articles on Gemini failed every scheduled run for a
+  day. The Run Log said "The response was empty. Return one JSON object and
+  nothing else." The response was not empty. It was ten kilobytes of finished
+  article that stopped mid-word, three quarters of the way through
+  `content_html`, because the model had reached the output ceiling the step asked
+  for.
+
+  All four providers say so when this happens, each in a field of its own —
+  Google's `status`, which it documents as "completed, but contains incomplete
+  results (e.g. hitting max_tokens)"; Anthropic's `stop_reason`; OpenAI's
+  `status` with `incomplete_details.reason`; DeepSeek's `finish_reason`. None of
+  the four adapters read that field. They read the text, and a truncated answer
+  is text, so the fragment travelled two layers down to the JSON validator, which
+  is the first place anything could object and the last place that knows why. It
+  could only describe the wreckage. Everything above it had been discarded.
+
+  The reason now travels with the result, and the step that made the call is the
+  one that reports it: which ceiling was hit, how much was spent reaching it, and
+  that a word target is not a guarantee of fit. It also stops there. Section
+  5.1's repair attempt exists for a model that answered in the wrong shape, and a
+  model that ran out of room will run out of room again in the same place, so the
+  old behaviour bought a second full-length article to fail identically. That was
+  half the cost of the failure and all of the second one.
+
+- **The ceiling on a body call did not allow for the model thinking first.** It
+  was three times the target word count — 2,400 tokens for the 800-word default —
+  and a ceiling does not bound the article, it bounds everything the model spends
+  answering. On the current generation that includes reasoning. The two failures
+  that provoked this ended at 1,177 + 1,208 and 158 + 2,228 tokens: the same
+  total, one token apart, which is what a limit looks like from underneath. The
+  run that spent half its allowance thinking had half an article's worth left.
+
+  Version 1.13.1 learned this on the topic proposal, where a ceiling sized for a
+  title and a slug was being reached before either appeared, and raised it to
+  2,048 to leave room to think. The body call was left on the old arithmetic. It
+  now asks for reasoning headroom, an allowance for the nine metadata fields that
+  share the response with the article, and four tokens per requested word rather
+  than three, because what comes back is not prose but semantic HTML,
+  JSON-escaped, inside a string field.
+
+  A ceiling is a limit rather than a purchase — an unused token is not billed —
+  but the budget guard reserves against it while a run is open, so a run now
+  holds more of the monthly cap than it did. That is the price of a bound that
+  bounds. The figure had also been written out separately in three files and had
+  already drifted apart once, so all three now read it from the step.
+
+- **Thinking tokens were not counted as spend on Google.** Gemini reports
+  `total_output_tokens` and `total_thought_tokens` separately and bills their
+  sum — its own documentation puts it as "pricing is the sum of output tokens and
+  thinking tokens" — and the adapter recorded only the first. On the observed
+  call that was 1,208 tokens booked against 2,385 spent. Every Gemini run since
+  the adapter shipped has understated itself in the Run Log, in the month-to-date
+  total, and against the monthly cap. Both figures are now recorded as output,
+  which is also what the ceiling bounds.
+
+### Added
+
+- **A filter for the body call's output ceiling,
+  `autoscribe_body_output_ceiling`.** How many tokens an article costs depends on
+  what the prompt asks for, and the plugin can only see the word count. A system
+  prompt that also wants references, an FAQ, internal link suggestions, and a
+  research summary inside the body produces a far larger response than its word
+  target suggests, and the site that wrote that prompt is the only party that
+  knows. The budget reservation is built from the same figure, so raising it
+  raises what a run holds against the cap while it is open.
+
 ## [1.16.0] - 2026-08-23
 
 ### Added

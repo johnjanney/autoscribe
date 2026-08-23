@@ -109,4 +109,40 @@ final class DeepSeekTest extends Provider_Test_Case {
 		$this->assertNotContains( 'deepseek-reasoner', $suggested );
 		$this->assertContains( 'deepseek-v4-flash', $suggested );
 	}
+
+	/**
+	 * A completion stopped at max_tokens is reported as cut off.
+	 *
+	 * @since 1.17.0
+	 *
+	 * @return void
+	 */
+	public function test_a_length_finish_reason_is_reported_as_incomplete(): void {
+		$this->mock_json(
+			200,
+			array(
+				'model'   => 'deepseek-v4-flash',
+				'choices' => array(
+					array(
+						'finish_reason' => 'length',
+						'message'       => array( 'content' => '{"title":"Half an art' ),
+					),
+				),
+				'usage'   => array(
+					'prompt_tokens'     => 100,
+					'completion_tokens' => 512,
+				),
+			)
+		);
+
+		$result = ( new DeepSeek() )->generate(
+			'ds-test',
+			'deepseek-v4-flash',
+			new Generation_Request( 'system', 'user', 512 )
+		);
+
+		$this->assertNotWPError( $result );
+		$this->assertTrue( $result->is_incomplete() );
+		$this->assertSame( 'length', $result->incomplete_reason() );
+	}
 }

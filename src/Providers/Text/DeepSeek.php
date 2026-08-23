@@ -234,6 +234,27 @@ final class DeepSeek implements Text_Provider_Interface {
 			$text = (string) $decoded['choices'][0]['message']['content'];
 		}
 
+		$usage = new Usage(
+			(int) ( $decoded['usage']['prompt_tokens'] ?? 0 ),
+			(int) ( $decoded['usage']['completion_tokens'] ?? 0 )
+		);
+
+		/*
+		 * finish_reason "length" means the completion stopped at max_tokens. The
+		 * text is a fragment and comes back with the reason attached, so the
+		 * caller records what it cost and stops rather than paying for a repair
+		 * of something that was never finished.
+		 */
+		if ( isset( $decoded['choices'][0]['finish_reason'] ) && 'length' === $decoded['choices'][0]['finish_reason'] ) {
+			return new Generation_Result(
+				$text,
+				$usage,
+				isset( $decoded['model'] ) ? (string) $decoded['model'] : $model,
+				array(),
+				'length'
+			);
+		}
+
 		if ( '' === $text ) {
 			return new WP_Error(
 				'autoscribe_empty_response',
@@ -243,10 +264,7 @@ final class DeepSeek implements Text_Provider_Interface {
 
 		return new Generation_Result(
 			$text,
-			new Usage(
-				(int) ( $decoded['usage']['prompt_tokens'] ?? 0 ),
-				(int) ( $decoded['usage']['completion_tokens'] ?? 0 )
-			),
+			$usage,
 			isset( $decoded['model'] ) ? (string) $decoded['model'] : $model
 		);
 	}

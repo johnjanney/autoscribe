@@ -50,8 +50,8 @@ final class Step_Propose_Topic {
 	 *
 	 * Public because the test suite tells a proposal call from a body call by
 	 * what it asks for, and a literal repeated across a dozen files is a literal
-	 * that goes stale. No body call can collide with it: a body asks for 1024, or
-	 * for three times a word count.
+	 * that goes stale. No body call can collide with it: the smallest ceiling
+	 * Step_Generate_Body::output_ceiling() returns is larger than this.
 	 *
 	 * @since 1.13.1
 	 * @var int
@@ -187,6 +187,10 @@ final class Step_Propose_Topic {
 				return $this->usage_not_recorded();
 			}
 
+			if ( $result->is_incomplete() ) {
+				return $this->truncated( $result->incomplete_reason(), $result->usage()->output_tokens() );
+			}
+
 			$proposal = $this->decode( $result->text() );
 
 			/*
@@ -305,6 +309,10 @@ final class Step_Propose_Topic {
 			return $this->usage_not_recorded();
 		}
 
+		if ( $second->is_incomplete() ) {
+			return $this->truncated( $second->incomplete_reason(), $second->usage()->output_tokens() );
+		}
+
 		return $this->decode( $second->text() );
 	}
 
@@ -354,6 +362,33 @@ final class Step_Propose_Topic {
 			),
 			'required'             => array( 'title', 'topic_key' ),
 			'additionalProperties' => false,
+		);
+	}
+
+	/**
+	 * Returns the error for a provider that stopped part way through.
+	 *
+	 * A proposal is a title and a slug, so a ceiling of PROPOSAL_TOKENS is
+	 * reached only when the model spends the whole of it thinking. Repeating the
+	 * call would spend it again the same way, so the run stops and says which
+	 * ceiling was hit.
+	 *
+	 * @since 1.17.0
+	 *
+	 * @param string $reason The provider's own word for stopping.
+	 * @param int    $spent  Output tokens the call reported spending.
+	 * @return WP_Error
+	 */
+	private function truncated( string $reason, int $spent ): WP_Error {
+		return new WP_Error(
+			'autoscribe_response_truncated',
+			sprintf(
+				/* translators: 1: provider's stop reason, 2: output tokens spent, 3: the output token ceiling. */
+				__( 'The model stopped before it had proposed a topic (%1$s). It spent %2$d of the %3$d output tokens this step allows, and a title and a slug need very few of them, so the ceiling went on the model\'s own reasoning. Try a model that reasons less, or one with a larger allowance.', 'autoscribe' ),
+				$reason,
+				$spent,
+				self::PROPOSAL_TOKENS
+			)
 		);
 	}
 

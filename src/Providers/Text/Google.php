@@ -266,6 +266,46 @@ final class Google implements Text_Provider_Interface {
 			}
 		}
 
+		/*
+		 * Google prices thinking as output — its own documentation puts it as
+		 * "pricing is the sum of output tokens and thinking tokens" — but reports
+		 * the two separately, and total_output_tokens holds only the second half
+		 * of that sum. Reading it alone billed the site for what the model said
+		 * and not for what it thought first, which on a reasoning model is a
+		 * charge of the same order as the answer: one observed body call spent
+		 * 1,177 thinking tokens against 1,208 spoken ones, and half of it was
+		 * invisible to the run log and to the monthly cap.
+		 *
+		 * The same sum is also what max_output_tokens bounds, which is the other
+		 * reason to keep the two together here.
+		 */
+		$usage = new Usage(
+			(int) ( $decoded['usage']['total_input_tokens'] ?? 0 ),
+			(int) ( $decoded['usage']['total_output_tokens'] ?? 0 ) + (int) ( $decoded['usage']['total_thought_tokens'] ?? 0 )
+		);
+
+		$status = isset( $decoded['status'] ) ? (string) $decoded['status'] : '';
+
+		/*
+		 * The Interactions API answers HTTP 200 for an answer it could not
+		 * finish and says so in status, which Google documents as "completed, but
+		 * contains incomplete results (e.g. hitting max_tokens)". Whatever text
+		 * came back is a fragment, so it is returned with the reason attached
+		 * rather than passed on as though the model had chosen to stop there: the
+		 * caller records what the fragment cost and then stops, instead of
+		 * reporting the truncation as an empty or malformed response and buying a
+		 * repair that would be cut off in the same place.
+		 */
+		if ( '' !== $status && 'completed' !== $status ) {
+			return new Generation_Result(
+				$text,
+				$usage,
+				isset( $decoded['model'] ) ? (string) $decoded['model'] : $model,
+				Source_Extractor::from( $decoded ),
+				$status
+			);
+		}
+
 		if ( '' === $text ) {
 			return new WP_Error(
 				'autoscribe_empty_response',
@@ -275,10 +315,7 @@ final class Google implements Text_Provider_Interface {
 
 		return new Generation_Result(
 			$text,
-			new Usage(
-				(int) ( $decoded['usage']['total_input_tokens'] ?? 0 ),
-				(int) ( $decoded['usage']['total_output_tokens'] ?? 0 )
-			),
+			$usage,
 			isset( $decoded['model'] ) ? (string) $decoded['model'] : $model,
 			Source_Extractor::from( $decoded )
 		);

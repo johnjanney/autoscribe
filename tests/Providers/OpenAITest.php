@@ -137,4 +137,46 @@ final class OpenAITest extends Provider_Test_Case {
 		$this->assertSame( $schema, $body['text']['format']['schema'] );
 		$this->assertSame( 'web_search', $body['tools'][0]['type'] );
 	}
+
+	/**
+	 * An incomplete response names the reason the Responses API gave.
+	 *
+	 * @since 1.17.0
+	 *
+	 * @return void
+	 */
+	public function test_an_incomplete_response_is_reported_as_incomplete(): void {
+		$this->mock_json(
+			200,
+			array(
+				'model'              => 'gpt-5.6-terra',
+				'status'             => 'incomplete',
+				'incomplete_details' => array( 'reason' => 'max_output_tokens' ),
+				'output'             => array(
+					array(
+						'content' => array(
+							array(
+								'type' => 'output_text',
+								'text' => '{"title":"Half an art',
+							),
+						),
+					),
+				),
+				'usage'              => array(
+					'input_tokens'  => 100,
+					'output_tokens' => 2048,
+				),
+			)
+		);
+
+		$result = ( new OpenAI() )->generate(
+			'sk-test',
+			'gpt-5.6-terra',
+			new Generation_Request( 'system', 'user', 2048 )
+		);
+
+		$this->assertNotWPError( $result );
+		$this->assertTrue( $result->is_incomplete() );
+		$this->assertSame( 'max_output_tokens', $result->incomplete_reason() );
+	}
 }

@@ -31,6 +31,57 @@ defined( 'ABSPATH' ) || exit;
 final class Step_Generate_Body {
 
 	/**
+	 * Output tokens set aside for the model's own reasoning, per body call.
+	 *
+	 * The ceiling a request carries is not a budget for the article; it bounds
+	 * everything the model spends answering, and on the current generation of
+	 * models that includes the thinking it does before it writes a word. Google
+	 * bills the two together and bounds them together. Section 1.13.1 learned
+	 * this on the proposal call, where a ceiling sized for a title and a slug was
+	 * reached before either appeared; the body call was left on a figure derived
+	 * from the word count alone, so an article of the requested length could not
+	 * fit underneath it once the model had thought. Two observed failures ended
+	 * 1,177 + 1,208 and 158 + 2,228 tokens in — the same total, one token apart,
+	 * which is what a ceiling looks like from below.
+	 *
+	 * A ceiling is a limit rather than a purchase: an unused token is not billed.
+	 * What it does cost is the reservation the budget guard holds against the
+	 * monthly cap while the run is open, which is the honest price of a bound
+	 * that actually bounds.
+	 *
+	 * @since 1.17.0
+	 * @var int
+	 */
+	public const REASONING_HEADROOM = 2048;
+
+	/**
+	 * Output tokens set aside for the nine fields around the article.
+	 *
+	 * Section 5.1 asks for the title, topic key, excerpt, SEO title, meta
+	 * description, focus keyword, tags, image prompt, and alt text in the same
+	 * response as the body. They are small, they are not free, and a ceiling
+	 * derived from the word count alone did not account for them at all.
+	 *
+	 * @since 1.17.0
+	 * @var int
+	 */
+	public const METADATA_TOKENS = 512;
+
+	/**
+	 * Output tokens allowed per word of the requested article.
+	 *
+	 * English prose runs about 1.3 tokens to the word. This asks for three times
+	 * that, because what the model returns is not prose: it is semantic HTML,
+	 * JSON-escaped, inside a string field. Tags, entities, and the escaping of
+	 * every quotation mark and non-ASCII character all cost tokens that the word
+	 * count does not see.
+	 *
+	 * @since 1.17.0
+	 * @var int
+	 */
+	public const TOKENS_PER_WORD = 4;
+
+	/**
 	 * Provider registry.
 	 *
 	 * @since 0.3.0
@@ -145,7 +196,7 @@ final class Step_Generate_Body {
 		$request = new Generation_Request(
 			$this->system_prompt( $prompt, null === $schema ),
 			$this->user_prompt( $prompt, $topic ),
-			$this->max_output_tokens( $prompt ),
+			self::output_ceiling( $prompt ),
 			$schema,
 			$grounding
 		);
@@ -180,6 +231,21 @@ final class Step_Generate_Body {
 				'autoscribe_state_not_recorded',
 				__( 'The run log could not record that this article used web search, so the run was stopped rather than finishing with a cost that understates what it spent.', 'autoscribe' )
 			);
+		}
+
+		/*
+		 * Checked after the usage is recorded and before anything reads the text,
+		 * because a truncated answer is still a paid one: the tokens are spent
+		 * whether or not the sentence finished.
+		 *
+		 * The run stops here rather than sending the fragment to the validator.
+		 * The validator can only say what the fragment is not — empty, or not
+		 * valid JSON — and section 5.1's repair attempt would then buy a second
+		 * full-length answer that reaches the same ceiling at the same place. The
+		 * error names the ceiling instead, because that is the thing to change.
+		 */
+		if ( $result->is_incomplete() ) {
+			return $this->truncated( $prompt, $result->incomplete_reason(), $result->usage()->output_tokens() );
 		}
 
 		/*
@@ -218,7 +284,7 @@ final class Step_Generate_Body {
 		$repair = new Generation_Request(
 			$this->system_prompt( $prompt, true ),
 			$this->repair_prompt( $prompt, $result->text(), $article->get_error_message() ),
-			$this->max_output_tokens( $prompt ),
+			self::output_ceiling( $prompt ),
 			$schema,
 			false
 		);
@@ -233,6 +299,10 @@ final class Step_Generate_Body {
 		// returned, and record_text_usage accumulates.
 		if ( ! $run->record_text_usage( $second->model(), $second->usage()->input_tokens(), $second->usage()->output_tokens() ) ) {
 			return $this->usage_not_recorded();
+		}
+
+		if ( $second->is_incomplete() ) {
+			return $this->truncated( $prompt, $second->incomplete_reason(), $second->usage()->output_tokens() );
 		}
 
 		$repaired = $this->validator->validate( $second->text() );
@@ -443,14 +513,70 @@ final class Step_Generate_Body {
 	}
 
 	/**
+	 * Returns the error for a provider that stopped part way through.
+	 *
+	 * @since 1.17.0
+	 *
+	 * @param Prompt $prompt Prompt being run.
+	 * @param string $reason The provider's own word for stopping.
+	 * @param int    $spent  Output tokens the call reported spending.
+	 * @return WP_Error
+	 */
+	private function truncated( Prompt $prompt, string $reason, int $spent ): WP_Error {
+		return new WP_Error(
+			'autoscribe_response_truncated',
+			sprintf(
+				/* translators: 1: provider's stop reason, 2: output tokens spent, 3: the output token ceiling, 4: target word count. */
+				__( 'The model stopped before it finished the article (%1$s). It spent %2$d of the %3$d output tokens this step allows, so what came back was a fragment rather than a whole response. The ceiling covers the model\'s own reasoning as well as the article, so a %4$d-word target does not guarantee it fits: lower the target word count, ask the prompt for a shorter article, or raise the ceiling with the autoscribe_body_output_ceiling filter.', 'autoscribe' ),
+				$reason,
+				$spent,
+				self::output_ceiling( $prompt ),
+				$prompt->target_word_count()
+			)
+		);
+	}
+
+	/**
 	 * Converts the prompt's target word count into a token ceiling.
+	 *
+	 * Public and static because the figure is checked against the monthly cap
+	 * before the call and priced again if the call is interrupted, and until
+	 * 1.17.0 the same expression was written out in three files. It went stale in
+	 * exactly the way that invites: the step raised what it asked for and the two
+	 * copies elsewhere would have gone on reserving against the old bound.
 	 *
 	 * @since 0.3.0
 	 *
 	 * @param Prompt $prompt Prompt being run.
 	 * @return int
 	 */
-	private function max_output_tokens( Prompt $prompt ): int {
-		return max( 1024, $prompt->target_word_count() * 3 );
+	public static function output_ceiling( Prompt $prompt ): int {
+		$ceiling = self::REASONING_HEADROOM
+			+ self::METADATA_TOKENS
+			+ max( 1024, $prompt->target_word_count() * self::TOKENS_PER_WORD );
+
+		/**
+		 * Filters the output token ceiling asked of the provider for one article.
+		 *
+		 * Filterable because how many tokens an article costs depends on what the
+		 * prompt asks for, and the plugin can only see the word count. A system
+		 * prompt that also wants references, an FAQ, and a research summary
+		 * inside the body produces a much larger response than its word target
+		 * suggests, and the site that wrote that prompt is the only party that
+		 * knows.
+		 *
+		 * The budget reservation is built from the same figure, so raising it
+		 * raises what a run holds against the monthly cap while it is open.
+		 *
+		 * @since 1.17.0
+		 *
+		 * @param int    $ceiling Output token ceiling for the body call.
+		 * @param Prompt $prompt  Prompt being run.
+		 */
+		$ceiling = (int) apply_filters( 'autoscribe_body_output_ceiling', $ceiling, $prompt );
+
+		// A ceiling below the reasoning headroom cannot produce an article at
+		// all, so a filter is not allowed to take it there.
+		return max( self::REASONING_HEADROOM, $ceiling );
 	}
 }

@@ -9,6 +9,7 @@ namespace AutoScribe\Cost;
 
 use AutoScribe\Activation;
 use AutoScribe\Pipeline\Run;
+use AutoScribe\Pipeline\Step_Generate_Body;
 use AutoScribe\Pipeline\Step_Propose_Topic;
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Providers\Model_Resolver;
@@ -475,7 +476,10 @@ final class Budget_Guard {
 	 * @return int
 	 */
 	public function estimate_cents( Prompt $prompt, ?Run $run = null ): int {
-		$body_output = max( 1024, $prompt->target_word_count() * 3 );
+		// Read from the step for the same reason PROPOSAL_OUTPUT_ALLOWANCE is:
+		// a reservation built on a bound the call is free to exceed is not a
+		// reservation. 1.17.0 raised what the body call asks for.
+		$body_output = Step_Generate_Body::output_ceiling( $prompt );
 
 		// Two proposals, the body, and one repair. The repair prompt quotes the
 		// failed response back, so its input allowance is the larger one.

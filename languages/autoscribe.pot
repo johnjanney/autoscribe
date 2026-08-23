@@ -9,7 +9,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-23T13:15:39+00:00\n"
+"POT-Creation-Date: 2026-08-23T11:44:14-05:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: autoscribe\n"
@@ -596,21 +596,21 @@ msgstr ""
 msgid "A post titled \"%s\" already exists."
 msgstr ""
 
-#: src/Cost/Budget_Guard.php:398
+#: src/Cost/Budget_Guard.php:399
 msgid "The spend of one or more finished runs could not be worked out, so the monthly total cannot be trusted and this run was stopped before spending anything. Check that the AutoScribe runs table is readable and writable. The Run Log marks the runs concerned as \"Accounting pending\"."
 msgstr ""
 
 #. translators: 1: which cap was hit, 2: spend so far in dollars, 3: cap in dollars.
-#: src/Cost/Budget_Guard.php:597
+#: src/Cost/Budget_Guard.php:601
 #, php-format
 msgid "The %1$s monthly budget would be exceeded. Estimated spend so far is $%2$s against a cap of $%3$s."
 msgstr ""
 
-#: src/Cost/Budget_Guard.php:598
+#: src/Cost/Budget_Guard.php:602
 msgid "per-prompt"
 msgstr ""
 
-#: src/Cost/Budget_Guard.php:598
+#: src/Cost/Budget_Guard.php:602
 msgid "global"
 msgstr ""
 
@@ -848,56 +848,56 @@ msgid "The estimated cost of this run could not be written to the run log, so th
 msgstr ""
 
 #. translators: %s: provider slug.
-#: src/Pipeline/Step_Generate_Body.php:90
+#: src/Pipeline/Step_Generate_Body.php:141
 #: src/Pipeline/Step_Propose_Topic.php:125
 #, php-format
 msgid "No text provider is registered under the slug %s."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:112
+#: src/Pipeline/Step_Generate_Body.php:163
 #: src/Pipeline/Step_Propose_Topic.php:147
 msgid "No model ID is configured for this prompt."
 msgstr ""
 
 #. translators: %s: provider label.
-#: src/Pipeline/Step_Generate_Body.php:130
+#: src/Pipeline/Step_Generate_Body.php:181
 #, php-format
 msgid "This prompt asks for web search grounding, but %s does not offer it. Turn grounding off or choose another text provider."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:181
+#: src/Pipeline/Step_Generate_Body.php:232
 msgid "The run log could not record that this article used web search, so the run was stopped rather than finishing with a cost that understates what it spent."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:207
+#: src/Pipeline/Step_Generate_Body.php:273
 msgid "The web search sources this article was based on could not be written to the run log. The run was stopped rather than publishing an article with no record of what it read."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:256
-#: src/Pipeline/Step_Propose_Topic.php:376
+#: src/Pipeline/Step_Generate_Body.php:326
+#: src/Pipeline/Step_Propose_Topic.php:411
 msgid "A provider call was made and charged for, but the run log would not record what it used. The run was stopped so the charge is still counted against the monthly cap."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:321
+#: src/Pipeline/Step_Generate_Body.php:391
 msgid "The sources belonging to a discarded article could not be cleared from the run log, so the run was stopped rather than risking them being published as the new article's citations."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:345
+#: src/Pipeline/Step_Generate_Body.php:415
 msgid "The generated article could not be written to the run log, so the run was stopped rather than continuing on state that would be lost."
 msgstr ""
 
 #. translators: %s: JSON schema describing the required response.
-#: src/Pipeline/Step_Generate_Body.php:371
+#: src/Pipeline/Step_Generate_Body.php:441
 #, php-format
 msgid "Return one JSON object and nothing else. No prose, no Markdown fences. It must satisfy this JSON Schema: %s"
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:405
+#: src/Pipeline/Step_Generate_Body.php:475
 msgid "Use it only as the agreed topic: write the article for it, and return exactly this title and topic_key in your response."
 msgstr ""
 
 #. translators: 1: original instruction, 2: fenced block holding the rejected response and the validation error.
-#: src/Pipeline/Step_Generate_Body.php:433
+#: src/Pipeline/Step_Generate_Body.php:503
 #, php-format
 msgid ""
 "Original request:\n"
@@ -908,9 +908,15 @@ msgid ""
 "Return a corrected JSON object and nothing else."
 msgstr ""
 
-#: src/Pipeline/Step_Generate_Body.php:436
-#: src/Pipeline/Step_Propose_Topic.php:332
+#: src/Pipeline/Step_Generate_Body.php:506
+#: src/Pipeline/Step_Propose_Topic.php:340
 msgid "Use it only as the response of yours that was rejected and the reason it was rejected."
+msgstr ""
+
+#. translators: 1: provider's stop reason, 2: output tokens spent, 3: the output token ceiling, 4: target word count.
+#: src/Pipeline/Step_Generate_Body.php:530
+#, php-format
+msgid "The model stopped before it finished the article (%1$s). It spent %2$d of the %3$d output tokens this step allows, so what came back was a fragment rather than a whole response. The ceiling covers the model's own reasoning as well as the article, so a %4$d-word target does not guarantee it fits: lower the target word count, ask the prompt for a shorter article, or raise the ceiling with the autoscribe_body_output_ceiling filter."
 msgstr ""
 
 #. translators: %s: provider slug.
@@ -946,17 +952,17 @@ msgid "The featured image outcome could not be written to the run log, so the ru
 msgstr ""
 
 #. translators: %s: the reason the previous proposal collided.
-#: src/Pipeline/Step_Propose_Topic.php:236
+#: src/Pipeline/Step_Propose_Topic.php:240
 #, php-format
 msgid "Your previous proposal was rejected: %s Propose a genuinely different topic."
 msgstr ""
 
-#: src/Pipeline/Step_Propose_Topic.php:247
+#: src/Pipeline/Step_Propose_Topic.php:251
 msgid "Use it only as the reason your previous proposal was rejected, and propose a genuinely different topic."
 msgstr ""
 
 #. translators: 1: original instruction, 2: fenced block holding the rejected response and the reason.
-#: src/Pipeline/Step_Propose_Topic.php:329
+#: src/Pipeline/Step_Propose_Topic.php:337
 #, php-format
 msgid ""
 "Original request:\n"
@@ -967,36 +973,42 @@ msgid ""
 "Return one JSON object with exactly the two string fields title and topic_key, and nothing else."
 msgstr ""
 
-#: src/Pipeline/Step_Propose_Topic.php:431
+#. translators: 1: provider's stop reason, 2: output tokens spent, 3: the output token ceiling.
+#: src/Pipeline/Step_Propose_Topic.php:387
+#, php-format
+msgid "The model stopped before it had proposed a topic (%1$s). It spent %2$d of the %3$d output tokens this step allows, and a title and a slug need very few of them, so the ceiling went on the model's own reasoning. Try a model that reasons less, or one with a larger allowance."
+msgstr ""
+
+#: src/Pipeline/Step_Propose_Topic.php:466
 msgid "The agreed topic could not be written to the run log, so the run was stopped rather than continuing on state that would be lost."
 msgstr ""
 
-#: src/Pipeline/Step_Propose_Topic.php:455
+#: src/Pipeline/Step_Propose_Topic.php:490
 msgid "Return one JSON object with exactly two string fields, title and topic_key, and nothing else. topic_key must be a lowercase hyphenated slug."
 msgstr ""
 
-#: src/Pipeline/Step_Propose_Topic.php:490
+#: src/Pipeline/Step_Propose_Topic.php:525
 msgid "Use it only as the list of topics already covered, and propose something different."
-msgstr ""
-
-#. translators: %s: the beginning of what the model returned.
-#: src/Pipeline/Step_Propose_Topic.php:552
-#, php-format
-msgid "The topic proposal was missing title or topic_key. The model returned: %s"
-msgstr ""
-
-#: src/Pipeline/Step_Propose_Topic.php:581
-msgid "The model returned an empty topic proposal."
 msgstr ""
 
 #. translators: %s: the beginning of what the model returned.
 #: src/Pipeline/Step_Propose_Topic.php:587
 #, php-format
+msgid "The topic proposal was missing title or topic_key. The model returned: %s"
+msgstr ""
+
+#: src/Pipeline/Step_Propose_Topic.php:616
+msgid "The model returned an empty topic proposal."
+msgstr ""
+
+#. translators: %s: the beginning of what the model returned.
+#: src/Pipeline/Step_Propose_Topic.php:622
+#, php-format
 msgid "The topic proposal stopped before the JSON was closed, which usually means the model reached its output limit. It began: %s"
 msgstr ""
 
 #. translators: %s: the beginning of what the model returned.
-#: src/Pipeline/Step_Propose_Topic.php:594
+#: src/Pipeline/Step_Propose_Topic.php:629
 #, php-format
 msgid "The topic proposal was not JSON. The model returned: %s"
 msgstr ""
@@ -1466,7 +1478,7 @@ msgstr ""
 msgid "Anthropic declined to answer this prompt."
 msgstr ""
 
-#: src/Providers/Text/Anthropic.php:255
+#: src/Providers/Text/Anthropic.php:277
 msgid "Anthropic returned no text content."
 msgstr ""
 
@@ -1480,7 +1492,7 @@ msgstr ""
 msgid "DeepSeek does not offer that model. Available models: %s"
 msgstr ""
 
-#: src/Providers/Text/DeepSeek.php:240
+#: src/Providers/Text/DeepSeek.php:261
 msgid "DeepSeek returned no text content."
 msgstr ""
 
@@ -1488,7 +1500,7 @@ msgstr ""
 msgid "Google (Gemini)"
 msgstr ""
 
-#: src/Providers/Text/Google.php:272
+#: src/Providers/Text/Google.php:312
 msgid "Google returned no text content."
 msgstr ""
 
@@ -1496,7 +1508,7 @@ msgstr ""
 msgid "OpenAI"
 msgstr ""
 
-#: src/Providers/Text/OpenAI.php:243
+#: src/Providers/Text/OpenAI.php:274
 msgid "OpenAI returned no text content."
 msgstr ""
 

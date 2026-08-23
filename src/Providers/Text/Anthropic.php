@@ -249,6 +249,28 @@ final class Anthropic implements Text_Provider_Interface {
 			}
 		}
 
+		$usage = new Usage(
+			(int) ( $decoded['usage']['input_tokens'] ?? 0 ),
+			(int) ( $decoded['usage']['output_tokens'] ?? 0 )
+		);
+
+		/*
+		 * A response that reached max_tokens is a fragment, not an answer, and it
+		 * arrives with the same HTTP 200 as a finished one. Returned with the
+		 * reason attached so the caller can record what the fragment cost and
+		 * stop, rather than sending the truncated text to a validator that can
+		 * only report it as malformed.
+		 */
+		if ( isset( $decoded['stop_reason'] ) && 'max_tokens' === $decoded['stop_reason'] ) {
+			return new Generation_Result(
+				$text,
+				$usage,
+				isset( $decoded['model'] ) ? (string) $decoded['model'] : $model,
+				Source_Extractor::from( $decoded ),
+				'max_tokens'
+			);
+		}
+
 		if ( '' === $text ) {
 			return new WP_Error(
 				'autoscribe_empty_response',
@@ -258,10 +280,7 @@ final class Anthropic implements Text_Provider_Interface {
 
 		return new Generation_Result(
 			$text,
-			new Usage(
-				(int) ( $decoded['usage']['input_tokens'] ?? 0 ),
-				(int) ( $decoded['usage']['output_tokens'] ?? 0 )
-			),
+			$usage,
 			isset( $decoded['model'] ) ? (string) $decoded['model'] : $model,
 			Source_Extractor::from( $decoded )
 		);

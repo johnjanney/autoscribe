@@ -209,4 +209,105 @@ final class GoogleTest extends Provider_Test_Case {
 			'The previous stable release stays reachable for a site that pins it.'
 		);
 	}
+
+	/**
+	 * An answer cut off at the ceiling is reported as cut off, not as empty.
+	 *
+	 * The Interactions API answers HTTP 200 with status "incomplete" for this,
+	 * and the adapter used to read only the text. A half-written JSON object then
+	 * failed decoding two layers away, where the only words available for it were
+	 * "the response was empty" — which sent a live site looking for a provider
+	 * outage when what it had was a token ceiling.
+	 *
+	 * @since 1.17.0
+	 *
+	 * @return void
+	 */
+	public function test_an_incomplete_interaction_is_reported_as_incomplete(): void {
+		$this->mock_json(
+			200,
+			array(
+				'model'  => 'gemini-3.7-flash',
+				'status' => 'incomplete',
+				'steps'  => array(
+					array(
+						'type'    => 'model_output',
+						'content' => array(
+							array(
+								'type' => 'text',
+								'text' => '{"title":"Half an art',
+							),
+						),
+					),
+				),
+				'usage'  => array(
+					'total_input_tokens'   => 3487,
+					'total_output_tokens'  => 2228,
+					'total_thought_tokens' => 158,
+				),
+			)
+		);
+
+		$result = ( new Google() )->generate(
+			'goog-test',
+			'gemini-3.7-flash',
+			new Generation_Request( 'system', 'user', 2385 )
+		);
+
+		$this->assertNotWPError( $result );
+		$this->assertTrue( $result->is_incomplete() );
+		$this->assertSame( 'incomplete', $result->incomplete_reason() );
+		$this->assertSame(
+			'{"title":"Half an art',
+			$result->text(),
+			'The fragment is kept, because the debug log is the place it is worth reading.'
+		);
+	}
+
+	/**
+	 * Thinking tokens are billed as output, so they are counted as output.
+	 *
+	 * Google reports the two separately and charges for their sum. Reading
+	 * total_output_tokens alone understated a reasoning model's cost by roughly
+	 * half on the call that provoked this.
+	 *
+	 * @since 1.17.0
+	 *
+	 * @return void
+	 */
+	public function test_thinking_tokens_are_counted_as_output(): void {
+		$this->mock_json(
+			200,
+			array(
+				'model'  => 'gemini-3.7-flash',
+				'status' => 'completed',
+				'steps'  => array(
+					array(
+						'type'    => 'model_output',
+						'content' => array(
+							array(
+								'type' => 'text',
+								'text' => '{"title":"A"}',
+							),
+						),
+					),
+				),
+				'usage'  => array(
+					'total_input_tokens'   => 2877,
+					'total_output_tokens'  => 55,
+					'total_thought_tokens' => 426,
+				),
+			)
+		);
+
+		$result = ( new Google() )->generate(
+			'goog-test',
+			'gemini-3.7-flash',
+			new Generation_Request( 'system', 'user', 2048 )
+		);
+
+		$this->assertNotWPError( $result );
+		$this->assertSame( 2877, $result->usage()->input_tokens() );
+		$this->assertSame( 481, $result->usage()->output_tokens() );
+	}
 }

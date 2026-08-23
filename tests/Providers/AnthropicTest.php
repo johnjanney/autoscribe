@@ -134,4 +134,42 @@ final class AnthropicTest extends Provider_Test_Case {
 		$this->assertSame( $schema, $body['output_config']['format']['schema'] );
 		$this->assertSame( 'web_search_20260209', $body['tools'][0]['type'] );
 	}
+
+	/**
+	 * A response that reached max_tokens is reported as cut off.
+	 *
+	 * @since 1.17.0
+	 *
+	 * @return void
+	 */
+	public function test_a_response_that_hit_max_tokens_is_reported_as_incomplete(): void {
+		$this->mock_json(
+			200,
+			array(
+				'model'       => 'claude-opus-5',
+				'stop_reason' => 'max_tokens',
+				'content'     => array(
+					array(
+						'type' => 'text',
+						'text' => '{"title":"Half an art',
+					),
+				),
+				'usage'       => array(
+					'input_tokens'  => 100,
+					'output_tokens' => 4096,
+				),
+			)
+		);
+
+		$result = ( new Anthropic() )->generate(
+			'test-key',
+			'claude-opus-5',
+			new Generation_Request( 'system', 'user', 4096 )
+		);
+
+		$this->assertNotWPError( $result );
+		$this->assertTrue( $result->is_incomplete() );
+		$this->assertSame( 'max_tokens', $result->incomplete_reason() );
+		$this->assertSame( 4096, $result->usage()->output_tokens() );
+	}
 }
