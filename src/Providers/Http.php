@@ -7,6 +7,7 @@
 
 namespace AutoScribe\Providers;
 
+use AutoScribe\Diagnostics\Debug_Log;
 use WP_Error;
 
 use const AutoScribe\VERSION;
@@ -70,16 +71,21 @@ final class Http {
 	public static function post_json( string $url, array $headers, array $body, int $timeout ): array|WP_Error {
 		$headers['content-type'] = 'application/json';
 
+		$encoded = wp_json_encode( $body );
+		$started = microtime( true );
+
 		$response = wp_remote_post(
 			$url,
 			array(
 				'headers'             => $headers,
-				'body'                => wp_json_encode( $body ),
+				'body'                => $encoded,
 				'timeout'             => $timeout,
 				'user-agent'          => self::user_agent(),
 				'limit_response_size' => self::MAX_RESPONSE_BYTES,
 			)
 		);
+
+		self::record( 'POST', $url, $response, $started, is_string( $encoded ) ? $encoded : '' );
 
 		return self::interpret( $response );
 	}
@@ -95,6 +101,8 @@ final class Http {
 	 * @return array<string, mixed>|WP_Error Decoded body, or an error.
 	 */
 	public static function get_json( string $url, array $headers, int $timeout ): array|WP_Error {
+		$started = microtime( true );
+
 		$response = wp_remote_get(
 			$url,
 			array(
@@ -105,7 +113,83 @@ final class Http {
 			)
 		);
 
+		self::record( 'GET', $url, $response, $started, '' );
+
 		return self::interpret( $response );
+	}
+
+	/**
+	 * Hands a completed exchange to the debug log, when capture is on.
+	 *
+	 * This sits beside interpret() rather than inside it because the two want
+	 * different things from the same response. interpret() reduces it to the one
+	 * sentence a run log entry can hold, which is the right size for somebody
+	 * reading a list of runs and the wrong size for somebody working out why one
+	 * of them keeps failing. The provider's own words survive here instead of
+	 * being read once and discarded.
+	 *
+	 * Headers are not passed in, and are the only part of a request that carries
+	 * the key: all four providers authenticate in a header, and none of them puts
+	 * the key in the URL. The request body is kept only where the exchange failed,
+	 * because a rejected request is the case where the question matters as much as
+	 * the answer, and a successful one would only be the prompt written back.
+	 *
+	 * @since 1.16.0
+	 *
+	 * @param string                        $method       HTTP method.
+	 * @param string                        $url          Endpoint called.
+	 * @param array<string, mixed>|WP_Error $response     Raw transport result.
+	 * @param float                         $started      microtime() when the call began.
+	 * @param string                        $request_body Encoded request body, empty for a GET.
+	 * @return void
+	 */
+	private static function record( string $method, string $url, array|WP_Error $response, float $started, string $request_body ): void {
+		if ( ! Debug_Log::enabled() ) {
+			return;
+		}
+
+		$facts = array(
+			'method' => $method,
+			'ms'     => (int) round( ( microtime( true ) - $started ) * 1000 ),
+		);
+
+		if ( is_wp_error( $response ) ) {
+			Debug_Log::record(
+				Debug_Log::CHANNEL_TRANSPORT,
+				$url,
+				$response->get_error_code() . ': ' . $response->get_error_message() . self::sent( $request_body ),
+				$facts
+			);
+
+			return;
+		}
+
+		$status          = (int) wp_remote_retrieve_response_code( $response );
+		$facts['status'] = $status;
+
+		$body = (string) wp_remote_retrieve_body( $response );
+
+		if ( $status < 200 || $status > 299 ) {
+			$body .= self::sent( $request_body );
+		}
+
+		Debug_Log::record( Debug_Log::CHANNEL_HTTP, $url, $body, $facts );
+	}
+
+	/**
+	 * Formats the request body as a labelled block below a response.
+	 *
+	 * @since 1.16.0
+	 *
+	 * @param string $request_body Encoded request body.
+	 * @return string
+	 */
+	private static function sent( string $request_body ): string {
+		if ( '' === $request_body ) {
+			return '';
+		}
+
+		return "\n\n--- request sent (headers omitted) ---\n" . $request_body;
 	}
 
 	/**

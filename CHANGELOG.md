@@ -87,6 +87,52 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+### Added
+
+- **A debug mode that keeps what the providers actually returned.** The Run Log
+  says why a run stopped in the plugin's own words, which is the right size for a
+  list of runs and the wrong size for working out why one of them keeps failing.
+  "The provider returned HTTP 400" does not name the field the provider objected
+  to. "The response was not valid JSON" does not show what arrived instead. Both
+  answers were in the raw response, and the raw response was read once, turned
+  into a sentence, and dropped.
+
+  Keeping it needs somewhere to put it, and the usual answer assumes something
+  this plugin's hosting frequently does not have. `error_log()` writes to
+  `debug.log` and a good deal of managed WordPress hosting offers no shell to read
+  it with, while the runs that fail are the scheduled ones, happening inside an
+  Action Scheduler worker nobody is watching. So the capture goes to an option
+  and is read back on the Settings screen, where the person debugging already is.
+
+  Switched on, `Http` records every exchange with a provider — endpoint, status,
+  duration, and the response body — and `Article_Validator` records model output
+  that failed the schema together with the reason it failed. A rejected request
+  keeps what was sent as well, since that is the other half of the answer, and a
+  successful one does not, because it would only be the prompt written back.
+  `Pipeline::advance()` names the run, prompt, and step each entry belongs to,
+  which is what lets a log covering several runs be read apart; `Http` is static
+  and knows nothing about the pipeline by design, so the pipeline tells it.
+
+  Three properties were treated as more important than completeness, because this
+  holds provider traffic rather than the plugin's summary of it. It is off by
+  default and says so on screen while it is on. It never holds a credential: all
+  four providers authenticate in a header, headers are never passed to the
+  capture, and every recorded string is additionally run through a scrubber that
+  blanks key-shaped tokens, for the case of a provider quoting a request back
+  inside an error message. And it cannot grow without bound — the newest thirty
+  exchanges, bodies shortened, inline images dropped rather than stored, a ceiling
+  on the option as a whole, and no autoload, so a log left switched on costs
+  nothing on ordinary requests.
+
+  The scrubber fails closed. PCRE returns null rather than a string when it hits a
+  limit, and a scrubber that failed open would write the text it was asked to
+  clean, so a pattern that errors discards the body instead. It is also given at
+  most the first 64KB to work on, because an image response is eight megabytes of
+  one base64 field and that is how the limit gets hit in the first place.
+
+  Nothing about this changes what the plugin sends. It adds no request and no
+  recipient, and the option is removed on uninstall.
+
 ## [1.15.1] - 2026-08-21
 
 ### Fixed

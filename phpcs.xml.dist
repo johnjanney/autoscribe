@@ -163,6 +163,13 @@
 		-->
 		<exclude-pattern>*/tests/Admin/Queue_HealthTest.php</exclude-pattern>
 		<!--
+		The debug log test reads the options table's autoload column. That the
+		option does not autoload is the assertion — it is what keeps a log left
+		switched on off every ordinary page load — and the options API returns the
+		value without saying anything about how it is loaded.
+		-->
+		<exclude-pattern>*/tests/Diagnostics/Debug_LogTest.php</exclude-pattern>
+		<!--
 		The stale-worker test closes a run from inside the query filter, in the
 		gap between finalisation's claim and the ownership read it guards. There
 		is no API for "issue this statement at this point in another statement's

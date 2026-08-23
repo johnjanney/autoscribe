@@ -11,6 +11,7 @@ use AutoScribe\Content\Article;
 use AutoScribe\Content\Article_Validator;
 use AutoScribe\Content\Taxonomy_Applier;
 use AutoScribe\Content\Topic_Deduplicator;
+use AutoScribe\Diagnostics\Debug_Log;
 use AutoScribe\Prompts\Prompt;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\SEO\SEO_Adapter_Factory;
@@ -196,7 +197,21 @@ final class Pipeline {
 			return self::CLAIM_LOST;
 		}
 
-		$result = $this->perform( $step, $prompt, $run );
+		/*
+		 * Everything a step records from here belongs to this run and this
+		 * position in it. Http is static and knows nothing about the pipeline by
+		 * design, so a captured exchange would otherwise be a bare URL, and a log
+		 * covering several runs could not be read apart. Cleared afterwards so a
+		 * later capture on the same worker — a connection test, say — is not
+		 * filed under a run that has finished.
+		 */
+		Debug_Log::set_context( $run->id(), $run->prompt_id(), $step );
+
+		try {
+			$result = $this->perform( $step, $prompt, $run );
+		} finally {
+			Debug_Log::clear_context();
+		}
 
 		/*
 		 * A claim can be taken away mid-step. The stall sweeper releases one when

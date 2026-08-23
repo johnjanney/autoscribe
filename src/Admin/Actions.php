@@ -11,6 +11,7 @@ use AutoScribe\Activation;
 use AutoScribe\Content\Article;
 use AutoScribe\Content\Article_Validator;
 use AutoScribe\Content\Topic_Deduplicator;
+use AutoScribe\Diagnostics\Debug_Log;
 use AutoScribe\Pipeline\Close_Result;
 use AutoScribe\Pipeline\Generator;
 use AutoScribe\Pipeline\Run;
@@ -69,6 +70,14 @@ final class Actions {
 	public const ACTION_TEST = 'autoscribe_test_connection';
 
 	/**
+	 * Discards everything the debug log has captured.
+	 *
+	 * @since 1.16.0
+	 * @var string
+	 */
+	public const ACTION_CLEAR_DEBUG = 'autoscribe_clear_debug';
+
+	/**
 	 * Transient holding the most recent connection-test results, keyed by user.
 	 *
 	 * @since 1.0.1
@@ -125,6 +134,7 @@ final class Actions {
 		add_action( 'admin_post_' . self::ACTION_PREVIEW, array( $this, 'handle_preview' ) );
 		add_action( 'admin_post_' . self::ACTION_RETRY, array( $this, 'handle_retry' ) );
 		add_action( 'admin_post_' . self::ACTION_TEST, array( $this, 'handle_test_connection' ) );
+		add_action( 'admin_post_' . self::ACTION_CLEAR_DEBUG, array( $this, 'handle_clear_debug' ) );
 	}
 
 	/**
@@ -161,6 +171,53 @@ final class Actions {
 		wp_safe_redirect( admin_url( 'admin.php?page=' . Settings_Page::SLUG ) );
 
 		exit;
+	}
+
+	/**
+	 * Empties the debug log and returns to the settings screen.
+	 *
+	 * Its own handler rather than a field on the settings form, because the
+	 * settings form is a form and the control belongs beside the log it clears,
+	 * below that form. It is also the one control here that should work without
+	 * saving anything else on the page.
+	 *
+	 * @since 1.16.0
+	 *
+	 * @return void
+	 */
+	public function handle_clear_debug(): void {
+		check_admin_referer( self::ACTION_CLEAR_DEBUG );
+
+		if ( ! current_user_can( Activation::MANAGE_CAPABILITY ) ) {
+			wp_die(
+				esc_html__( 'You are not allowed to manage AutoScribe settings.', 'autoscribe' ),
+				'',
+				array( 'response' => 403 )
+			);
+		}
+
+		Debug_Log::clear();
+
+		wp_safe_redirect( admin_url( 'admin.php?page=' . Settings_Page::SLUG ) );
+
+		exit;
+	}
+
+	/**
+	 * Builds a nonce-protected URL for clearing the debug log.
+	 *
+	 * @since 1.16.0
+	 *
+	 * @return string
+	 */
+	public static function clear_debug_url(): string {
+		return wp_nonce_url(
+			add_query_arg(
+				array( 'action' => self::ACTION_CLEAR_DEBUG ),
+				admin_url( 'admin-post.php' )
+			),
+			self::ACTION_CLEAR_DEBUG
+		);
 	}
 
 	/**

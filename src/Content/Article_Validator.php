@@ -7,6 +7,7 @@
 
 namespace AutoScribe\Content;
 
+use AutoScribe\Diagnostics\Debug_Log;
 use WP_Error;
 
 defined( 'ABSPATH' ) || exit;
@@ -82,6 +83,40 @@ final class Article_Validator {
 	 * @return Article|WP_Error Article on success, error naming the fault otherwise.
 	 */
 	public function validate( string $raw ): Article|WP_Error {
+		$article = $this->parse( $raw );
+
+		/*
+		 * The message this returns is written for the repair request and for the
+		 * run log, so it names the fault and quotes at most a fragment of what
+		 * caused it. That is the right size for both and it is not enough to
+		 * diagnose a model that has started answering in the wrong shape, where
+		 * the question is what it actually said. Debug_Log keeps that text when an
+		 * administrator has asked for it, and keeps nothing otherwise.
+		 *
+		 * It is the extracted model text rather than the provider envelope Http
+		 * records, which is both shorter and the thing the schema was applied to.
+		 */
+		if ( is_wp_error( $article ) ) {
+			Debug_Log::record(
+				Debug_Log::CHANNEL_CONTENT,
+				$article->get_error_message(),
+				$raw,
+				array( 'code' => $article->get_error_code() )
+			);
+		}
+
+		return $article;
+	}
+
+	/**
+	 * Strips fences, decodes, and validates, without recording anything.
+	 *
+	 * @since 1.16.0
+	 *
+	 * @param string $raw Raw text returned by the provider.
+	 * @return Article|WP_Error Article on success, error naming the fault otherwise.
+	 */
+	private function parse( string $raw ): Article|WP_Error {
 		$json = $this->strip_fences( $raw );
 
 		if ( '' === $json ) {

@@ -87,6 +87,43 @@ is in **[INSTRUCTIONS.md](INSTRUCTIONS.md)**.
 
 ---
 
+## Troubleshooting a failed run
+
+The Run Log says why a run stopped, in the plugin's own words. Where that is not
+enough — "the provider returned HTTP 400" does not name the field the provider
+objected to, and "the response was not valid JSON" does not show what arrived
+instead — turn on **Debug mode**, under Diagnostics on the Settings screen.
+
+While it is on, the plugin keeps what the providers actually returned: the
+endpoint, the status, how long the call took, the response body, and the run and
+step it belonged to. A rejected request keeps what was sent as well, because that
+is the other half of the answer. Model output that fails the schema is kept with
+the reason it failed. Run the prompt that is failing, then read the log at the
+bottom of the same screen.
+
+This exists because the usual answer does not work here. `error_log()` writes to
+`debug.log`, and a good deal of managed WordPress hosting offers no shell to read
+it with; the runs that fail are the scheduled ones, which happen inside an Action
+Scheduler worker while nobody is watching. So the capture goes to the database
+and is read back in wp-admin, where you already are.
+
+**Turn it off when you have what you need.** API keys are never recorded — all
+four providers authenticate in a header, headers are never passed to the capture,
+and anything key-shaped that a provider quotes back inside an error message is
+blanked before storage. What is recorded is article text, and on a grounded run
+the material the model fetched from the web. That sits in the options table like
+any other option, and the options table is in every database backup.
+
+The log holds the most recent 30 exchanges and trims itself, response bodies are
+shortened, and inline images are dropped rather than stored, so leaving it on
+costs storage rather than unbounded storage. It does not autoload. There is a
+**Clear debug log** button beside it, and uninstalling removes it.
+
+Debug mode changes what the plugin *stores*, never what it *sends*. It adds no
+request and no recipient.
+
+---
+
 ## Third-party services
 
 **AutoScribe sends data to third-party AI providers.** It cannot do its job

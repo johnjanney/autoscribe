@@ -42,6 +42,7 @@ foreach (
 		'autoscribe_pricing',
 		'autoscribe_global_budget_cents',
 		'autoscribe_budget_notice_month',
+		'autoscribe_debug_log',
 		'autoscribe_sweep_cursor',
 		'autoscribe_schedule_cursor',
 		'autoscribe_grounded_migration_cursor',

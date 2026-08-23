@@ -10,6 +10,7 @@ namespace AutoScribe\Admin;
 use AutoScribe\Activation;
 use AutoScribe\Cost\Budget_Guard;
 use AutoScribe\Cost\Pricing_Table;
+use AutoScribe\Diagnostics\Debug_Log;
 use AutoScribe\Providers\Provider_Registry;
 use AutoScribe\Scheduling\Scheduler;
 use AutoScribe\Security\Key_Store;
@@ -113,12 +114,14 @@ final class Settings_Page {
 		$this->render_review_and_budget();
 		$this->render_pricing();
 		$this->render_housekeeping();
+		$this->render_diagnostics();
 
 		submit_button();
 
 		echo '</form>';
 
 		$this->render_health();
+		$this->render_debug_log();
 
 		echo '</div>';
 	}
@@ -176,6 +179,7 @@ final class Settings_Page {
 						? sanitize_email( wp_unslash( $_POST['autoscribe_notification_email'] ) )
 						: '',
 					'force_review'       => isset( $_POST['autoscribe_force_review'] ),
+					'debug_mode'         => isset( $_POST['autoscribe_debug_mode'] ),
 					'retention_days'     => isset( $_POST['autoscribe_retention_days'] )
 						? absint( wp_unslash( $_POST['autoscribe_retention_days'] ) )
 						: Settings::DEFAULT_RETENTION_DAYS,
@@ -405,6 +409,83 @@ final class Settings_Page {
 
 		echo '</tbody></table>';
 		echo '<input type="hidden" name="autoscribe_settings_submit" value="1" />';
+	}
+
+	/**
+	 * Renders the debug capture toggle.
+	 *
+	 * @since 1.16.0
+	 *
+	 * @return void
+	 */
+	private function render_diagnostics(): void {
+		echo '<h2>' . esc_html__( 'Diagnostics', 'autoscribe' ) . '</h2>';
+		echo '<table class="form-table" role="presentation"><tbody>';
+
+		printf(
+			'<tr><th scope="row">%1$s</th><td><label><input type="checkbox" name="autoscribe_debug_mode" value="1"%2$s /> %3$s</label><p class="description">%4$s</p><p class="description">%5$s</p></td></tr>',
+			esc_html__( 'Debug mode', 'autoscribe' ),
+			checked( Settings::debug_mode(), true, false ),
+			esc_html__( 'Keep what the providers actually returned', 'autoscribe' ),
+			esc_html__( 'The run log says why a run stopped. This keeps the response behind that answer, which is what names the field a provider objected to or shows what a model returned instead of the article. Turn it on, run the prompt that is failing, and read the log below.', 'autoscribe' ),
+			esc_html__( 'Turn it off once you have what you need. API keys are never recorded, but article text and anything a grounded run fetched from the web are, and this is stored in the database like any other option.', 'autoscribe' )
+		);
+
+		echo '</tbody></table>';
+	}
+
+	/**
+	 * Renders the captured exchanges, newest first.
+	 *
+	 * A textarea rather than a table, because the thing most often done with this
+	 * is not reading it on the screen — it is selecting all of it and pasting it
+	 * somewhere else to be read. A table makes that produce nonsense.
+	 *
+	 * @since 1.16.0
+	 *
+	 * @return void
+	 */
+	private function render_debug_log(): void {
+		$log     = Debug_Log::as_text();
+		$enabled = Settings::debug_mode();
+
+		if ( '' === $log && ! $enabled ) {
+			return;
+		}
+
+		echo '<h2>' . esc_html__( 'Debug log', 'autoscribe' ) . '</h2>';
+
+		if ( $enabled ) {
+			printf(
+				'<div class="notice notice-warning inline"><p>%s</p></div>',
+				esc_html__( 'Debug mode is on. Provider responses are being kept in the database until you turn it off.', 'autoscribe' )
+			);
+		}
+
+		if ( '' === $log ) {
+			printf(
+				'<p>%s</p>',
+				esc_html__( 'Nothing captured yet. Run a prompt, then reload this page.', 'autoscribe' )
+			);
+
+			return;
+		}
+
+		printf(
+			'<textarea readonly rows="20" style="width:100%%;font-family:monospace;white-space:pre;" onclick="this.select();">%s</textarea>',
+			esc_textarea( $log )
+		);
+
+		printf(
+			'<p><a class="button button-secondary" href="%1$s">%2$s</a> <span class="description">%3$s</span></p>',
+			esc_url( Actions::clear_debug_url() ),
+			esc_html__( 'Clear debug log', 'autoscribe' ),
+			sprintf(
+				/* translators: %d: number of captured exchanges. */
+				esc_html__( 'Holding the last %d exchanges. Older ones are discarded as new ones arrive.', 'autoscribe' ),
+				(int) Debug_Log::MAX_ENTRIES
+			)
+		);
 	}
 
 	/**

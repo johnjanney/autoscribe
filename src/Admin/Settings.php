@@ -67,6 +67,7 @@ final class Settings {
 		return array(
 			'notification_email' => (string) get_option( 'admin_email' ),
 			'force_review'       => false,
+			'debug_mode'         => false,
 			'retention_days'     => self::DEFAULT_RETENTION_DAYS,
 			'default_models'     => array(),
 		);
@@ -99,6 +100,23 @@ final class Settings {
 	 */
 	public static function force_review(): bool {
 		return (bool) ( self::all()['force_review'] ?? false );
+	}
+
+	/**
+	 * Whether provider exchanges are captured for diagnosis.
+	 *
+	 * Off by default, and meant to be turned off again. What it captures is the
+	 * provider's own response rather than the plugin's summary of it, which is
+	 * the whole point and also the reason it is not left running: a response body
+	 * holds the article, and on a grounded run it holds text fetched from the
+	 * open web. See Debug_Log for what is and is not kept.
+	 *
+	 * @since 1.16.0
+	 *
+	 * @return bool
+	 */
+	public static function debug_mode(): bool {
+		return (bool) ( self::all()['debug_mode'] ?? false );
 	}
 
 	/**
@@ -166,6 +184,7 @@ final class Settings {
 		return array(
 			'notification_email' => is_email( $email ) ? $email : (string) get_option( 'admin_email' ),
 			'force_review'       => ! empty( $raw['force_review'] ),
+			'debug_mode'         => ! empty( $raw['debug_mode'] ),
 			'retention_days'     => max( 0, min( 3650, (int) ( $raw['retention_days'] ?? self::DEFAULT_RETENTION_DAYS ) ) ),
 			'default_models'     => $models,
 		);

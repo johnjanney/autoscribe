@@ -9,7 +9,7 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"POT-Creation-Date: 2026-08-21T15:16:37-05:00\n"
+"POT-Creation-Date: 2026-08-23T13:14:41+00:00\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "X-Generator: WP-CLI 2.12.0\n"
 "X-Domain: autoscribe\n"
@@ -46,44 +46,45 @@ msgstr ""
 msgid "AutoScribe needs PHP %1$s or newer, WordPress %2$s or newer, and its Composer dependencies installed. The plugin has not been loaded."
 msgstr ""
 
-#: src/Admin/Actions.php:149
-#: src/Admin/Settings_Page.php:89
+#: src/Admin/Actions.php:159
+#: src/Admin/Actions.php:193
+#: src/Admin/Settings_Page.php:90
 msgid "You are not allowed to manage AutoScribe settings."
 msgstr ""
 
-#: src/Admin/Actions.php:234
+#: src/Admin/Actions.php:291
 msgid "Run queued. The run log will show the result once the queue processes it."
 msgstr ""
 
-#: src/Admin/Actions.php:263
+#: src/Admin/Actions.php:320
 msgid "Preview generated. It is shown below and was charged against the budget."
 msgstr ""
 
-#: src/Admin/Actions.php:288
+#: src/Admin/Actions.php:345
 msgid "That prompt no longer exists."
 msgstr ""
 
-#: src/Admin/Actions.php:345
+#: src/Admin/Actions.php:402
 msgid "A preview finished and its run row could not be closed."
 msgstr ""
 
-#: src/Admin/Actions.php:372
+#: src/Admin/Actions.php:429
 msgid "Retry queued as a new run."
 msgstr ""
 
-#: src/Admin/Actions.php:388
+#: src/Admin/Actions.php:445
 msgid "Unknown provider."
 msgstr ""
 
-#: src/Admin/Actions.php:392
+#: src/Admin/Actions.php:449
 msgid "Set a default model for this provider first — the connection test asks the provider about a specific model."
 msgstr ""
 
-#: src/Admin/Actions.php:407
+#: src/Admin/Actions.php:464
 msgid "Connection succeeded."
 msgstr ""
 
-#: src/Admin/Actions.php:427
+#: src/Admin/Actions.php:484
 msgid "You are not allowed to run AutoScribe prompts."
 msgstr ""
 
@@ -97,7 +98,7 @@ msgid "Run Log"
 msgstr ""
 
 #: src/Admin/Menu.php:100
-#: src/Admin/Settings_Page.php:98
+#: src/Admin/Settings_Page.php:99
 msgid "AutoScribe Settings"
 msgstr ""
 
@@ -247,7 +248,7 @@ msgid "Post"
 msgstr ""
 
 #: src/Admin/Runs_List_Table.php:80
-#: src/Admin/Settings_Page.php:357
+#: src/Admin/Settings_Page.php:361
 msgid "Model"
 msgstr ""
 
@@ -307,217 +308,259 @@ msgstr ""
 msgid "Accounting pending"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:101
+#: src/Admin/Settings_Page.php:102
 msgid "Settings saved."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:239
+#: src/Admin/Settings_Page.php:243
 msgid "Providers"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:240
+#: src/Admin/Settings_Page.php:244
 msgid "A key set in wp-config.php is used in preference to a stored one, never enters the database, and cannot be overwritten here."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:241
+#: src/Admin/Settings_Page.php:245
 msgid "The default model is used by any prompt that leaves its own model field blank. Test connection probes that model, so set it before testing."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:259
+#: src/Admin/Settings_Page.php:263
 msgid "Default model"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:275
+#: src/Admin/Settings_Page.php:279
 msgid "Test connection"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:317
+#: src/Admin/Settings_Page.php:321
 msgid "Publishing and budget"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:322
+#: src/Admin/Settings_Page.php:326
 msgid "Force human review"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:324
+#: src/Admin/Settings_Page.php:328
 msgid "Hold every generated post as a draft"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:325
+#: src/Admin/Settings_Page.php:329
 msgid "Overrides the per-prompt setting on every prompt, and cannot be bypassed by a manual run."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:330
+#: src/Admin/Settings_Page.php:334
 msgid "Global monthly cap (cents)"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:332
+#: src/Admin/Settings_Page.php:336
 msgid "Zero means no global cap."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:337
+#: src/Admin/Settings_Page.php:341
 msgid "Spent this month"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:339
+#: src/Admin/Settings_Page.php:343
 msgid "An estimate computed from reported token usage and the rates below. Your provider billing is the authority."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:353
+#: src/Admin/Settings_Page.php:357
 msgid "Pricing"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:354
+#: src/Admin/Settings_Page.php:358
 msgid "Prices change without notice and the plugin never fetches them. Verify these against your provider before relying on any total."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:358
+#: src/Admin/Settings_Page.php:362
 msgid "Input $/M"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:359
+#: src/Admin/Settings_Page.php:363
 msgid "Output $/M"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:360
+#: src/Admin/Settings_Page.php:364
 msgid "Per image $"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:361
+#: src/Admin/Settings_Page.php:365
 msgid "Per grounded request $"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:390
+#: src/Admin/Settings_Page.php:394
 msgid "Housekeeping"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:395
+#: src/Admin/Settings_Page.php:399
 msgid "Notification email"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:401
+#: src/Admin/Settings_Page.php:405
 msgid "Keep run history for (days)"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:403
+#: src/Admin/Settings_Page.php:407
 msgid "Zero keeps everything."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:418
-msgid "System health"
+#: src/Admin/Settings_Page.php:422
+msgid "Diagnostics"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:423
-msgid "Action Scheduler"
-msgstr ""
-
-#: src/Admin/Settings_Page.php:425
-msgid "Loaded."
-msgstr ""
-
-#: src/Admin/Settings_Page.php:426
-msgid "Not loaded. Nothing will run on a schedule."
+#: src/Admin/Settings_Page.php:427
+msgid "Debug mode"
 msgstr ""
 
 #: src/Admin/Settings_Page.php:429
+msgid "Keep what the providers actually returned"
+msgstr ""
+
+#: src/Admin/Settings_Page.php:430
+msgid "The run log says why a run stopped. This keeps the response behind that answer, which is what names the field a provider objected to or shows what a model returned instead of the article. Turn it on, run the prompt that is failing, and read the log below."
+msgstr ""
+
+#: src/Admin/Settings_Page.php:431
+msgid "Turn it off once you have what you need. API keys are never recorded, but article text and anything a grounded run fetched from the web are, and this is stored in the database like any other option."
+msgstr ""
+
+#: src/Admin/Settings_Page.php:456
+msgid "Debug log"
+msgstr ""
+
+#: src/Admin/Settings_Page.php:461
+msgid "Debug mode is on. Provider responses are being kept in the database until you turn it off."
+msgstr ""
+
+#: src/Admin/Settings_Page.php:468
+msgid "Nothing captured yet. Run a prompt, then reload this page."
+msgstr ""
+
+#: src/Admin/Settings_Page.php:482
+msgid "Clear debug log"
+msgstr ""
+
+#. translators: %d: number of captured exchanges.
+#: src/Admin/Settings_Page.php:485
+#, php-format
+msgid "Holding the last %d exchanges. Older ones are discarded as new ones arrive."
+msgstr ""
+
+#: src/Admin/Settings_Page.php:499
+msgid "System health"
+msgstr ""
+
+#: src/Admin/Settings_Page.php:504
+msgid "Action Scheduler"
+msgstr ""
+
+#: src/Admin/Settings_Page.php:506
+msgid "Loaded."
+msgstr ""
+
+#: src/Admin/Settings_Page.php:507
+msgid "Not loaded. Nothing will run on a schedule."
+msgstr ""
+
+#: src/Admin/Settings_Page.php:510
 msgid "Queue last processed"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:433
+#: src/Admin/Settings_Page.php:514
 msgid "DISABLE_WP_CRON"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:435
+#: src/Admin/Settings_Page.php:516
 msgid "Set. Make sure a system cron entry hits wp-cron.php every minute."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:436
+#: src/Admin/Settings_Page.php:517
 msgid "Not set. On a low-traffic site schedules will drift, because WP-Cron only fires on page loads."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:439
+#: src/Admin/Settings_Page.php:520
 msgid "libsodium"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:441
+#: src/Admin/Settings_Page.php:522
 msgid "Available. Keys stored in the database are encrypted."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:442
+#: src/Admin/Settings_Page.php:523
 msgid "Missing. Keys cannot be stored in the database; use wp-config.php constants."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:445
+#: src/Admin/Settings_Page.php:526
 msgid "Security salts"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:447
+#: src/Admin/Settings_Page.php:528
 msgid "AUTH_KEY and SECURE_AUTH_KEY are set. The stored-key encryption has a site-specific key."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:448
+#: src/Admin/Settings_Page.php:529
 msgid "AUTH_KEY or SECURE_AUTH_KEY is missing or still a placeholder. Keys cannot be stored in the database until that is fixed; use wp-config.php constants."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:474
+#: src/Admin/Settings_Page.php:555
 msgid "Nothing has completed yet. If prompts are enabled and their next run has passed, the queue is not running."
 msgstr ""
 
 #. translators: 1: formatted date and time, 2: human-readable interval.
-#: src/Admin/Settings_Page.php:479
+#: src/Admin/Settings_Page.php:560
 #, php-format
 msgid "%1$s (%2$s ago)"
 msgstr ""
 
-#: src/Admin/Settings_Page.php:530
+#: src/Admin/Settings_Page.php:611
 msgid "Not set"
 msgstr ""
 
 #. translators: %s: PHP constant name.
-#: src/Admin/Settings_Page.php:546
+#: src/Admin/Settings_Page.php:627
 #, php-format
 msgid "Set by the %s constant in wp-config.php. Anything entered here is ignored."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:549
+#: src/Admin/Settings_Page.php:630
 msgid "Stored in the database, encrypted. Enter a new key to replace it."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:552
+#: src/Admin/Settings_Page.php:633
 msgid "A key is stored but can no longer be decrypted, which happens when the site salts are rotated. Enter it again."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:555
+#: src/Admin/Settings_Page.php:636
 msgid "A key is stored, but this site has no usable AUTH_KEY and SECURE_AUTH_KEY, so it was encrypted with a key anyone could derive. It will not be used. Generate fresh WordPress salts, then enter the key again — or set it as a wp-config.php constant instead."
 msgstr ""
 
-#: src/Admin/Settings_Page.php:558
+#: src/Admin/Settings_Page.php:639
 msgid "No key set."
 msgstr ""
 
-#: src/Content/Article_Validator.php:90
+#: src/Content/Article_Validator.php:125
 msgid "The response was empty. Return one JSON object and nothing else."
 msgstr ""
 
 #. translators: %s: JSON decoding error message.
-#: src/Content/Article_Validator.php:101
+#: src/Content/Article_Validator.php:136
 #, php-format
 msgid "The response was not valid JSON (%s). Return one JSON object and nothing else, with no Markdown fences."
 msgstr ""
 
 #. translators: %s: comma-separated list of field names.
-#: src/Content/Article_Validator.php:151
+#: src/Content/Article_Validator.php:186
 #, php-format
 msgid "These required fields were missing: %s. Return the complete object."
 msgstr ""
 
 #. translators: %s: comma-separated list of field names.
-#: src/Content/Article_Validator.php:162
+#: src/Content/Article_Validator.php:197
 #, php-format
 msgid "These fields had the wrong type: %s. suggested_tags must be an array of strings; every other field must be a string."
 msgstr ""
 
-#: src/Content/Article_Validator.php:171
+#: src/Content/Article_Validator.php:206
 msgid "title and content_html must not be empty."
 msgstr ""
 
@@ -711,18 +754,18 @@ msgid "Estimated AutoScribe spend for this month has passed 80 percent of the co
 msgstr ""
 
 #. translators: %s: step name.
-#: src/Pipeline/Pipeline.php:236
+#: src/Pipeline/Pipeline.php:251
 #, php-format
 msgid "The run log could not record that the %s step finished, so the run was stopped rather than repeating it."
 msgstr ""
 
 #. translators: %s: step name.
-#: src/Pipeline/Pipeline.php:297
+#: src/Pipeline/Pipeline.php:312
 #, php-format
 msgid "The run asked for a step called %s, which does not exist."
 msgstr ""
 
-#: src/Pipeline/Pipeline.php:346
+#: src/Pipeline/Pipeline.php:361
 msgid "This run has no generated article to work from, so it cannot continue."
 msgstr ""
 
@@ -1340,46 +1383,46 @@ msgid "The featured image mode was changed from \"fallback\" to \"required\", be
 msgstr ""
 
 #. translators: %s: underlying transport error message.
-#: src/Providers/Http.php:136
+#: src/Providers/Http.php:220
 #, php-format
 msgid "Could not reach the provider: %s"
 msgstr ""
 
-#: src/Providers/Http.php:153
+#: src/Providers/Http.php:237
 msgid "The provider returned a response that was not valid JSON."
 msgstr ""
 
 #. translators: %s: message returned by the provider.
-#: src/Providers/Http.php:180
+#: src/Providers/Http.php:264
 #, php-format
 msgid "The provider rejected the API key. Check the key and try again. Provider said: %s"
 msgstr ""
 
 #. translators: %s: message returned by the provider.
-#: src/Providers/Http.php:192
+#: src/Providers/Http.php:276
 #, php-format
 msgid "The provider does not recognise that model ID. Check the model field. Provider said: %s"
 msgstr ""
 
 #. translators: %s: message returned by the provider.
-#: src/Providers/Http.php:204
+#: src/Providers/Http.php:288
 #, php-format
 msgid "The provider rate-limited this request. Provider said: %s"
 msgstr ""
 
 #. translators: %s: message returned by the provider.
-#: src/Providers/Http.php:216
+#: src/Providers/Http.php:300
 #, php-format
 msgid "The provider is temporarily unavailable. Provider said: %s"
 msgstr ""
 
 #. translators: 1: HTTP status code, 2: message returned by the provider.
-#: src/Providers/Http.php:227
+#: src/Providers/Http.php:311
 #, php-format
 msgid "The provider returned HTTP %1$d. Provider said: %2$s"
 msgstr ""
 
-#: src/Providers/Http.php:259
+#: src/Providers/Http.php:343
 msgid "no further detail supplied."
 msgstr ""
 
