@@ -87,6 +87,8 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-08-23
+
 ### Added
 
 - **A debug mode that keeps what the providers actually returned.** The Run Log
