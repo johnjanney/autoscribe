@@ -213,6 +213,14 @@
 	-->
 	<rule ref="WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound">
 		<exclude-pattern>*/tests/Pipeline/Queued_RunTest.php</exclude-pattern>
+		<!--
+		The columns tests fire display_post_states the way the list table does,
+		which is the point: calling the callback directly would pass just as
+		happily with the hook wired to a name nothing invokes, and the failure
+		that hides is a list table that renders without complaint and is simply
+		missing the marker. Same core-hook reason, same one-file scope.
+		-->
+		<exclude-pattern>*/tests/Admin/Prompt_ColumnsTest.php</exclude-pattern>
 	</rule>
 
 	<!--
