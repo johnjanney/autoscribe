@@ -87,6 +87,8 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+## [1.18.0] - 2026-08-23
+
 ### Added
 
 - **The Prompts screen shows Repeat, Time of day, and Category.** The list table
