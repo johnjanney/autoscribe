@@ -10,6 +10,7 @@ do when something goes wrong.
 - [Write your first prompt](#write-your-first-prompt)
 - [Test it before you schedule it](#test-it-before-you-schedule-it)
 - [The prompt editor, tab by tab](#the-prompt-editor-tab-by-tab)
+- [The prompts list](#the-prompts-list)
 - [The run log](#the-run-log)
 - [Settings](#settings)
 - [WP-CLI](#wp-cli)
@@ -295,6 +296,41 @@ delete them later.
   global cap still applies and always wins.
 - **Duplicate look-back** — how many recent posts a proposed topic is compared
   against. 50 is a sensible default.
+
+---
+
+## The prompts list
+
+**AutoScribe → Prompts** shows three columns beside the title, so you can see
+what every prompt is set to without opening any of them.
+
+- **Repeat** — the schedule with its settings filled in: *Every Tuesday*,
+  *Second Tuesday each month*, *Every 72 hours*. A cron schedule shows the
+  expression itself. If it says **Not valid — nothing is queued**, the Schedule
+  tab has something the plugin cannot read, and that prompt is not in the queue
+  at all.
+- **Time of day** — the local time it fires, in the timezone named in the
+  column header. Two schedule types have no time of day, and say so rather than
+  leaving the cell empty:
+  - **Every N hours** shows *Varies — counts from the last run*. The gap is
+    measured from the previous run, so the clock time drifts by however long
+    each run takes.
+  - **Cron expression** shows the time when the expression names one — `0 6 * * *`
+    reads as 6:00 am, and `0 6,18 * * *` as 6:00 am, 6:00 pm. Anything with a
+    step or a range, such as `*/15 * * * *`, shows *Varies — no single fixed
+    hour*; the expression itself is in the Repeat column.
+- **Category** — where the posts go, linked to the posts already filed there.
+  A prompt with no category chosen shows the site's default category, because
+  that is where WordPress files a post that arrives without one. A prompt set
+  to write pages shows a dash: pages have no categories.
+
+A prompt you have switched off is labelled **Disabled** next to its title, the
+way WordPress labels a draft, and its Repeat column reads **Disabled — nothing
+is queued.** under the schedule. The schedule is still shown, because it is
+still what the prompt is set to; it is simply not going to fire until you turn
+**Enabled** back on. That note wins over **Not valid — nothing is queued**, so
+a prompt that is both switched off and misconfigured tells you about the switch
+first — it is the one that has to change before anything else matters.
 
 ---
 

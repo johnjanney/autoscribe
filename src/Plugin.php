@@ -10,6 +10,7 @@ namespace AutoScribe;
 use AutoScribe\Admin\Actions;
 use AutoScribe\Admin\Assets;
 use AutoScribe\Admin\Menu;
+use AutoScribe\Admin\Prompt_Columns;
 use AutoScribe\Admin\Prompt_Meta_Box;
 use AutoScribe\Cli\Command;
 use AutoScribe\Pipeline\Generator;
@@ -179,6 +180,7 @@ final class Plugin {
 	 */
 	private function boot_admin(): void {
 		( new Prompt_Meta_Box( $this->providers ) )->register();
+		( new Prompt_Columns() )->register();
 		( new Menu( $this->providers, $this->scheduler ) )->register();
 		( new Actions( $this->providers, $this->scheduler ) )->register();
 		( new Assets( $this->providers ) )->register();

@@ -87,6 +87,43 @@ version being built, and lists what is on disk when it finishes.
 
 ## [Unreleased]
 
+### Added
+
+- **The Prompts screen shows Repeat, Time of day, and Category.** The list table
+  arrived with a title and a date, which answers neither question anybody opens
+  it to ask: when does this run, and where do its posts land. Both answers were
+  one click away in the editor, one prompt at a time, which is the wrong shape
+  for a question about all of them at once.
+
+  Repeat reads the schedule back with its parameters filled in — "Every
+  Tuesday", "Second Tuesday each month", "Every 72 hours" — rather than the
+  bare type. A cron expression is printed as itself. A schedule that will not
+  validate says so and says that nothing is queued, because nothing is: the
+  re-arm gives up on the same error, and a prompt that has never run is usually
+  a prompt whose schedule never parsed.
+
+  Time of day carries the site timezone in its header, and two of the six
+  schedule types have no time of day to put under it. An empty cell there would
+  read as an unfinished prompt, so each says what governs it instead: an
+  interval "Varies — counts from the last run", which is what an interval does.
+  A cron expression is asked first whether it names a fixed hour, and `0 6 * * *`
+  is answered with 6:00 am. The user asked for six in the morning either way,
+  and the column should not go quiet over how they spelled it.
+
+  Category links to the posts filed under it, since the question the column
+  raises is what this prompt has been publishing. A prompt with no category
+  chosen shows the site default rather than a dash, because that is where
+  WordPress will actually file the post.
+
+  A switched-off prompt is marked **Disabled** beside its title, as a post
+  state rather than in a column of its own. WordPress already marks a draft and
+  a sticky post that way, in the place a reader looks first, and a column
+  repeating "Enabled" down every row would spend a column's width on the case
+  that needs no comment. Repeat says "Disabled — nothing is queued." under the
+  schedule, and that note outranks the one about a schedule that will not
+  parse: fixing the expression on a prompt that is switched off queues nothing,
+  so the older note sent people to the wrong control.
+
 ## [1.17.0] - 2026-08-23
 
 ### Fixed
