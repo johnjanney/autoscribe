@@ -1,6 +1,6 @@
 # The other three fields, revised
 
-Companion to [PEPTIDE-SYSTEM-PROMPT.md](PEPTIDE-SYSTEM-PROMPT.md), which holds
+Companion to [EXAMPLE-SYSTEM-PROMPT.md](EXAMPLE-SYSTEM-PROMPT.md), which holds
 the system prompt itself. Together they are a worked example of an AutoScribe
 prompt written against the plugin's actual contract — the ten response fields,
 the allowed HTML, and the output ceiling — rather than against a chat interface.
