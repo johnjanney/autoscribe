@@ -9,13 +9,13 @@ Neither file ships in the zip; `docs` is excluded by `.distignore`.
 ## Topic instruction
 
 ```
-The compound for this article is Thymosin Alpha-1.
+The topic for this article is ____________.
 
-Write about Thymosin Alpha-1 and no other compound. If Thymosin Alpha-1 already
+Write about the topic and no other topic. If the topic already
 appears in the already-covered list, choose a different angle, search intent,
-title, and section structure for Thymosin Alpha-1 — never a different compound.
-A comparative article may name a related compound only in contrast to Thymosin
-Alpha-1, which remains the subject of the title and the majority of the article.
+title, and section structure for the topic — never a different topic.
+A comparative article may name a related topic only in contrast to the topic,
+which remains the subject of the title and the majority of the article.
 
 Target length: about 1,200 words including the References and FAQ sections.
 ```
